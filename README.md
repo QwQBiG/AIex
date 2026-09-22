@@ -2,17 +2,21 @@
 
 一个 Windows 优先、以 Rust 为核心的本地数字伙伴工作室。人格、记忆和表现相互独立：同一个角色可以使用原生人物立绘、自定义图片，也可以隐藏外形或连接 VTube Studio。
 
-当前版本：**0.7.0-alpha.1 · 一号人物与素材工作室**。[版本说明](docs/releases/0.7.0-alpha.1.md)记录交付能力及限制；[演进路线](docs/DIGITAL_HUMAN_ROADMAP.md)记录后续设计。
+当前版本：**0.7.1-alpha.1 · 架构与维护整理**。[版本说明](docs/releases/0.7.1-alpha.1.md)记录本次维护变化及验证；[演进路线](docs/DIGITAL_HUMAN_ROADMAP.md)记录后续设计。
 
 **首次体验只需完整解压程序包，双击 `AIex.exe`。** 无需安装 Rust、Python 或 VTube Studio。[整体验收流程](docs/MANUAL_TEST_PLAN.md)从界面操作开始。
 
-[下载 Windows 便携包](https://github.com/QwQBiG/AIA/releases/download/v0.7.0-alpha.1/AIex-Windows-x64-0.7.0-alpha.1.zip) · [查看发布与校验文件](https://github.com/QwQBiG/AIA/releases/tag/v0.7.0-alpha.1)
+[下载 Windows 便携包](https://github.com/QwQBiG/AIA/releases/download/v0.7.1-alpha.1/AIex-Windows-x64-0.7.1-alpha.1.zip) · [查看发布与校验文件](https://github.com/QwQBiG/AIA/releases/tag/v0.7.1-alpha.1)
 
-## 这一版：自己的 OC，放在第一位
+## 这次维护更新
+
+0.7.1 整理了各页面共用的界面模块，强化包名、路径与依赖方向检查，并补齐[项目目录](docs/PROJECT_LAYOUT.md)和维护入口。人物、对话、场景与记忆流程保持一致，现有数据格式继续沿用。
+
+## 自己的 OC，放在第一位
 
 项目作者的 OC 成为默认的“一号人物”：银灰短发、灰紫眼睛与淡紫领结，支持半身和全身展示。主立绘直接内置在 `AIex.exe` 中，无需下载或导入。原来的“初始伙伴”、自定义 PNG/JPEG 图片角色和隐藏外形仍可选择；换外形不会改动人格或记忆。
 
-离线预览新增 OC 素材册，可翻看正式立绘、六表情参考，以及欢迎、专注、完成庆祝和温柔鼓励四张动作图。素材册是独立的静态参考，不会替换正在使用的外形。人物选择和构图可随场景保存，并恢复为启动组合；旧场景继续使用原来的初始伙伴。
+离线预览的 OC 素材册可翻看正式立绘、六表情参考，以及欢迎、专注、完成庆祝和温柔鼓励四张动作图。素材册是独立的静态参考，不会替换正在使用的外形。人物选择和构图可随场景保存，并恢复为启动组合；旧场景继续使用原来的初始伙伴。
 
 一号人物使用独立校准的眨眼、说话局部贴层和轻微呼吸；其他情绪以状态文字提示，六表情参考图不会自动切换。这是插画展示，不是 Live2D 或骨骼动画。暖白与淡紫工作区、固定输入区、[记忆工作台](docs/MEMORY_WORKSPACE.md)和角色收藏继续沿用。先按[五分钟外形体验](docs/MANUAL_TEST_PLAN.md)查看效果，再接入自己的模型。
 
@@ -37,7 +41,7 @@
 
 ## 快速开始
 
-1. 将 `AIex-Windows-x64-0.7.0-alpha.1.zip` 完整解压到可写入的文件夹。
+1. 将 `AIex-Windows-x64-0.7.1-alpha.1.zip` 完整解压到可写入的文件夹。
 2. 双击其中的 **`AIex.exe`**，点击 **“先体验外形”**。先看一号人物，切换半身/全身，展开 **“OC 素材册”** 翻看原画。无需账号或模型；也可选择初始伙伴或导入自己的图片外形。
 3. 直接在预览底部点击 **“开始对话”**，按界面填写模型连接信息并保存。预览中的外形会沿用，后台服务已随包提供，会自动启动。
 
@@ -128,7 +132,7 @@ flowchart LR
 
 服务持有会话状态；桌面通过协议提交意图、读取快照并绘制外形。生成进度和实际播放进度分别管理。角色、外形和场景清单共用配置校验，不绑定某个模型或渲染引擎。
 
-完整模块职责、依赖方向、数据流、取消边界及扩展方式见 **[架构说明](docs/ARCHITECTURE.md)**。架构检查同时覆盖 30 个 workspace 包与独立桌面包。
+完整模块职责、依赖方向、数据流、取消边界及扩展方式见 **[架构说明](docs/ARCHITECTURE.md)**；源码、资源与历史内容的归属见 **[项目目录](docs/PROJECT_LAYOUT.md)**。架构检查同时覆盖 30 个 workspace 包与独立桌面包。
 
 ## 数据与配置
 
@@ -144,7 +148,7 @@ flowchart LR
 
 ## 验证与文档
 
-[整体验收流程](docs/MANUAL_TEST_PLAN.md)提供简短体验清单，以及可展开的深度检查和故障记录方法。自动验证范围见[本版说明](docs/releases/0.7.0-alpha.1.md)；真实窗口操作和音频设备仍需整机验收。
+[整体验收流程](docs/MANUAL_TEST_PLAN.md)提供简短体验清单，以及可展开的深度检查和故障记录方法。自动验证范围见[本版说明](docs/releases/0.7.1-alpha.1.md)；真实窗口操作和音频设备仍需整机验收。
 
 - [角色收藏](docs/CHARACTER_LIBRARY.md) · [角色包](docs/CHARACTER_PACKS.md) · [图片外形](docs/APPEARANCE_PACKS.md) · [场景组合](docs/SCENE_PACKS.md)
 - [记忆工作台](docs/MEMORY_WORKSPACE.md) · [人格与记忆](docs/PERSONA_MEMORY.md) · [控制协议](docs/CONTROL_PROTOCOL.md) · [插件协议](docs/PLUGIN_PROTOCOL.md)

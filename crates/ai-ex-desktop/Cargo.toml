@@ -1,6 +1,6 @@
 [package]
 name = "ai-ex-desktop"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"

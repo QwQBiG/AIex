@@ -5,6 +5,7 @@ use ai_ex_ui_model::{ApplyOutcome, ConnectionState, UiState};
 use eframe::egui;
 
 use crate::appearance::AppearancePanel;
+use crate::ui::theme::{self, configure_appearance};
 use crate::worker::{WorkerCommand, WorkerEvent, WorkerHandle};
 
 #[path = "app_chat.rs"]
@@ -13,9 +14,6 @@ mod chat;
 mod layout;
 #[path = "app_navigation.rs"]
 mod navigation;
-#[path = "app_theme.rs"]
-pub(crate) mod theme;
-pub(crate) use theme::configure_appearance;
 
 #[cfg(test)]
 #[path = "app_ui_tests.rs"]

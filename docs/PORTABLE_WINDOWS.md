@@ -1,6 +1,6 @@
 # Windows 便携版
 
-完整解压 `AIex-Windows-x64-0.7.0-alpha.1.zip`，双击文件夹内的 **`AIex.exe`**。无需 Rust、Python 或 VTube Studio；请放在有写入权限的普通文件夹中。
+完整解压 `AIex-Windows-x64-0.7.1-alpha.1.zip`，双击文件夹内的 **`AIex.exe`**。无需 Rust、Python 或 VTube Studio；请放在有写入权限的普通文件夹中。
 
 ## 第一次打开
 
@@ -25,7 +25,7 @@
 ## 程序与数据
 
 ```text
-AIex-Windows-x64-0.7.0-alpha.1/
+AIex-Windows-x64-0.7.1-alpha.1/
 ├── AIex.exe
 ├── ai-ex-service.exe
 ├── AIex.portable

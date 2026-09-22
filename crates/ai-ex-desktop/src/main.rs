@@ -22,6 +22,7 @@ mod setup;
 mod setup_storage;
 mod speech_panel;
 mod startup;
+mod ui;
 mod welcome;
 mod worker;
 

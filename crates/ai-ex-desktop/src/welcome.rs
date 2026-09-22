@@ -3,12 +3,12 @@ use std::sync::{Arc, Mutex};
 use ai_ex_domain::AppError;
 use eframe::egui;
 
-use crate::app::theme;
 use crate::appearance::AppearancePanel;
+use crate::ui::theme;
 
 #[cfg(test)]
 #[path = "onboarding_ui_tests.rs"]
-pub(crate) mod review;
+mod review;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
@@ -36,7 +36,7 @@ fn window(configured: bool, error: Option<String>) -> Result<Option<Choice>, App
         "AIex 数字伙伴",
         crate::navigation::companion_window([860.0, 580.0], [520.0, 380.0]),
         Box::new(move |context| {
-            crate::app::configure_appearance(&context.egui_ctx);
+            theme::configure_appearance(&context.egui_ctx);
             Ok(Box::new(Welcome {
                 configured,
                 error,

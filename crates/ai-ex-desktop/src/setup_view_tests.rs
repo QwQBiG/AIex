@@ -1,10 +1,10 @@
 use super::*;
-use crate::welcome::review;
+use crate::ui::test_support as review;
 
 #[test]
 fn setup_keeps_save_and_errors_visible_without_discarding_fields() {
     let context = egui::Context::default();
-    crate::app::configure_appearance(&context);
+    crate::ui::theme::configure_appearance(&context);
     let mut app = SetupApp::new(
         PathBuf::from("unused-config.toml"),
         Arc::new(Mutex::new(None)),

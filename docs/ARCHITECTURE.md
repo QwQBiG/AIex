@@ -1,6 +1,6 @@
 # 当前架构与扩展边界
 
-本文描述 0.7.0-alpha.1 的数字伙伴工作室架构。当前增量集中在内置人物目录、独立渲染与素材册，以及场景 v2 的人物/构图记录；运行时、记忆管理和控制协议继续保持独立。未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，验收入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
+本文描述 0.7.1-alpha.1 的数字伙伴工作室架构；本次维护变化与验证见[0.7.1 版本说明](releases/0.7.1-alpha.1.md)。源码、资源与历史内容的归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，验收入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
 
 ## 1. 运行结构与状态归属
 
@@ -30,7 +30,9 @@ flowchart TB
 | 模块 | 职责 |
 | --- | --- |
 | `main` / `session` / `navigation` | 参数、页面切换、配置与本次进程凭据、服务和客户端装配 |
-| `app` / `app_layout` / `app_chat` / `app_theme` | 事件归并、页面布局、输入和消息显示、字体与配色 |
+| `app` / `app_layout` / `app_chat` | 事件归并、页面布局、输入和消息显示 |
+| `ui/theme` | 欢迎、设置、预览、聊天和记忆共用的字体与配色，不依赖聊天状态 |
+| `ui/test_support` | 仅供测试复用的离屏绘制与输入辅助，不进入发布程序 |
 | `worker` | 独立读轮询与命令发送、优先控制、事件补齐与恢复 |
 | `memory_panel` / `memory_panel_ui` | 当前角色的记忆列表、笔记草稿、修改确认与异步应答归并 |
 | `appearance` / `builtin_character` | 外形偏好、稳定人物 ID、选择与构图，不修改角色身份 |
@@ -89,14 +91,15 @@ flowchart LR
 
 网络、音频设备、窗口和具体后端不进入领域层。适配器按自身需要依赖契约，不要求全部依赖 core。桌面允许复用配置、客户端和投影类型，但不能直接依赖 core、service 或具体适配器。
 
-[架构检查脚本](../tools/check_architecture.ps1)读取两个 Cargo 清单的真实元数据，与逐包允许列表比较。新增包需登记允许依赖；本轮已将独立桌面纳入检查，并使脚本可从其他工作目录执行。
+[架构检查脚本](../tools/check_architecture.ps1)读取两个 Cargo 清单的真实元数据，与逐包允许列表比较。所有本地路径依赖都必须对应已登记的包名和实际 Cargo 清单路径；同名包指向其他目录或注册表依赖也会被拒绝。检查器还扫描 `crates/` 直接子目录，拒绝未登记的 Cargo 包，不递归扫描构建目录或嵌套测试资料。脚本路径相对于自身位置解析，可从其他工作目录执行。
 
 ```powershell
 pwsh -NoProfile -File tools/check_architecture.ps1
 pwsh -NoProfile -File tools/check_architecture.ps1 -ProbeViolation
+pwsh -NoProfile -File tools/test_architecture.ps1
 ```
 
-第一条应成功并报告 31 个包；第二条在内存中的元数据注入领域层/桌面反向依赖，**应退出 1**。探针不修改 Cargo 文件。该检查约束内部包依赖，不能替代运行时测试、代码评审或进程隔离。
+第一条应成功并报告 31 个包；第二条在内存中的元数据注入领域层/桌面反向依赖，**应退出 1**。第三条执行检查器自身的正反例回归，**应退出 0**；回归使用隔离测试目录和元数据，不修改真实 Cargo 清单。CI 同时执行门禁与回归。该检查约束包登记、路径和内部依赖方向，不检查第三方依赖是否含 I/O，也不能替代运行时测试、代码评审或进程隔离。
 
 ## 4. 一轮对话的完整流转
 

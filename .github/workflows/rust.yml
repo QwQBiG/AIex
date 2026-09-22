@@ -36,6 +36,17 @@ jobs:
         shell: pwsh
         run: ./tools/check_architecture.ps1
 
+      - name: Test architecture gate regressions
+        shell: pwsh
+        run: ./tools/test_architecture.ps1
+
+      - name: Confirm forbidden dependencies are rejected
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File ./tools/check_architecture.ps1 -ProbeViolation
+          if ($LASTEXITCODE -ne 1) { throw 'Architecture probe must exit 1' }
+          exit 0
+
   desktop:
     name: Native desktop
     runs-on: windows-latest

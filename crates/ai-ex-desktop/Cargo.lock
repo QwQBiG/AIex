@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-config"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "serde",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-control"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-observability",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-core"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-protocol",
@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-desktop"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-config",
  "ai-ex-control",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-domain"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-observability"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-core",
  "ai-ex-domain",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-protocol"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "async-trait",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-stage"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "async-trait",
@@ -234,14 +234,14 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-text"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
 ]
 
 [[package]]
 name = "ai-ex-ui-model"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-observability",

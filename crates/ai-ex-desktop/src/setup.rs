@@ -54,7 +54,7 @@ pub fn run(
         "AIex 连接设置",
         options,
         Box::new(move |context| {
-            crate::app::configure_appearance(&context.egui_ctx);
+            crate::ui::theme::configure_appearance(&context.egui_ctx);
             let mut app = SetupApp::new(default_path, shared, original);
             app.navigation = navigation;
             Ok(Box::new(app))

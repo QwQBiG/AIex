@@ -1,10 +1,10 @@
 # 整体验收流程
 
-适用版本：0.7.0-alpha.1。先检查默认 OC、人物切换与素材册，随后连接自己的模型；记忆检查和深度检查按需继续。桌面与服务需一起更新；没有准备对应外部服务的项目记为“未测”。
+适用版本：0.7.1-alpha.1。本次为架构与维护更新，沿用 0.7 的功能流程。先检查默认 OC、人物切换与素材册，随后连接自己的模型；记忆检查和深度检查按需继续。桌面与服务需一起更新；没有准备对应外部服务的项目记为“未测”。
 
 ## 先用起来：无需命令行
 
-完整解压 `AIex-Windows-x64-0.7.0-alpha.1.zip`，双击 `AIex.exe`。不要在压缩包里直接运行，也不要只取出一个 EXE。欢迎页显示版本号。
+完整解压 `AIex-Windows-x64-0.7.1-alpha.1.zip`，双击 `AIex.exe`。不要在压缩包里直接运行，也不要只取出一个 EXE。欢迎页显示版本号。
 
 **前五分钟先看外形。** 点击“先体验外形”，展开“外形与自定义图片”，在“内置立绘”中切换“01 · 一号人物”和“02 · 初始伙伴”。选择一号人物，试试“半身近景”和“全身立绘”，再向下展开“OC 素材册”查看六种素材。最后缩小窗口并滚动，确认人物设置、素材册与底部“开始对话”仍能找到。这个过程无需模型或密钥。
 
@@ -250,6 +250,7 @@ language = "zh"
 cargo fmt --all -- --check
 cargo fmt --manifest-path crates/ai-ex-desktop/Cargo.toml -- --check
 pwsh -NoProfile -File tools/check_architecture.ps1
+pwsh -NoProfile -File tools/test_architecture.ps1
 cargo test --workspace --all-features --locked
 cargo test --manifest-path crates/ai-ex-desktop/Cargo.toml --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings

@@ -189,7 +189,7 @@ impl MemoryPanel {
         for entry in &page.entries {
             let truncated = page.truncated_ids.contains(&entry.id);
             ui.push_id(entry.id, |ui| {
-                crate::app::theme::card().inner_margin(14).show(ui, |ui| {
+                crate::ui::theme::card().inner_margin(14).show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     ui.horizontal_wrapped(|ui| {
                         ui.strong(source_name(entry.source));

@@ -159,7 +159,7 @@ fn memory_switch_is_visible_and_can_be_toggled_without_a_native_window() {
         let files = Files::new();
         let mut app = files.app(None);
         let context = egui::Context::default();
-        crate::app::configure_appearance(&context);
+        crate::ui::theme::configure_appearance(&context);
         let mut frame = eframe::Frame::_new_kittest();
         let mut render = |events| {
             context.run_ui(

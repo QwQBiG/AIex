@@ -1,6 +1,6 @@
 # 人格与记忆
 
-本文适用于 0.7.0-alpha.1，说明角色身份、分类记忆与确认笔记的行为。界面使用见[记忆工作台](MEMORY_WORKSPACE.md)。
+本文适用于 0.7.1-alpha.1，说明角色身份、分类记忆与确认笔记的行为。界面使用见[记忆工作台](MEMORY_WORKSPACE.md)。
 
 人格位于 `[persona]`，与 `[model]` 分离。更换 DeepSeek、KoboldCpp 或 Ollama 不会改变角色名、语气、禁忌和直播模式；服务会把人格配置编译成会话系统提示词。
 

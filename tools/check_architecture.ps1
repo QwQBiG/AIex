@@ -50,6 +50,7 @@ $allowed = @{
 }
 
 $workspaceRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'architecture/validation.ps1')
 $metadata = cargo metadata --manifest-path (Join-Path $workspaceRoot 'Cargo.toml') --no-deps --locked --offline --format-version 1
 if ($LASTEXITCODE -ne 0)
 {
@@ -66,52 +67,21 @@ $packages = @($metadata.packages) + @($desktopMetadata.packages)
 $workspaceIds = [Collections.Generic.HashSet[string]]::new(
     [string[]](@($metadata.workspace_members) + @($desktopMetadata.workspace_members))
 )
-$workspaceNames = [Collections.Generic.HashSet[string]]::new()
-foreach ($package in $packages)
-{
-    if ($workspaceIds.Contains([string]$package.id))
-    {
-        [void]$workspaceNames.Add([string]$package.name)
-    }
-}
-
-$violations = [Collections.Generic.List[object]]::new()
 if ($ProbeViolation)
 {
+    $service = $packages | Where-Object name -EQ 'ai-ex-service' | Select-Object -First 1
     foreach ($package in $packages)
     {
         if ($package.name -in @('ai-ex-domain', 'ai-ex-desktop'))
         {
-            $package.dependencies = @($package.dependencies) + @([pscustomobject]@{ name = 'ai-ex-service' })
-        }
-    }
-}
-foreach ($package in $packages)
-{
-    if (!$workspaceIds.Contains([string]$package.id))
-    {
-        continue
-    }
-    if (!$allowed.ContainsKey([string]$package.name))
-    {
-        $violations.Add([pscustomobject]@{
-            package = $package.name
-            dependency = '<missing architecture policy>'
-        })
-        continue
-    }
-    foreach ($dependency in $package.dependencies)
-    {
-        if ($workspaceNames.Contains([string]$dependency.name) -and
-            $dependency.name -notin $allowed[$package.name])
-        {
-            $violations.Add([pscustomobject]@{
-                package = $package.name
-                dependency = $dependency.name
+            $package.dependencies = @($package.dependencies) + @([pscustomobject]@{
+                name = 'ai-ex-service'; path = Split-Path -Parent $service.manifest_path
             })
         }
     }
 }
+$violations = @(Get-ArchitectureViolations -WorkspaceRoot $workspaceRoot `
+    -Metadata @($metadata, $desktopMetadata) -Allowed $allowed)
 
 if ($violations.Count -gt 0)
 {

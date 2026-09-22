@@ -2,9 +2,9 @@ use ai_ex_domain::{AppError, ConversationState, Emotion};
 use ai_ex_ui_model::PresentationState;
 use eframe::egui;
 
-use crate::app::theme;
 use crate::appearance::AppearancePanel;
 use crate::navigation::{Destination, Navigation};
+use crate::ui::theme;
 
 #[path = "oc_gallery.rs"]
 mod gallery;
@@ -21,7 +21,7 @@ pub fn run(package: Option<std::path::PathBuf>) -> Result<Option<Destination>, A
         "AIex 外形工作室",
         options,
         Box::new(move |context| {
-            crate::app::configure_appearance(&context.egui_ctx);
+            theme::configure_appearance(&context.egui_ctx);
             let mut appearance = AppearancePanel::load(context.storage);
             if let Some(decoded) = decoded {
                 appearance.use_images(&context.egui_ctx, decoded);
@@ -203,7 +203,7 @@ impl eframe::App for PreviewApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::welcome::review;
+    use crate::ui::test_support as review;
 
     fn app() -> PreviewApp {
         PreviewApp {
@@ -225,7 +225,7 @@ mod tests {
     fn studio_controls_change_preview_and_navigation_survives_narrow_layout() {
         use eframe::App;
         let context = egui::Context::default();
-        crate::app::configure_appearance(&context);
+        theme::configure_appearance(&context);
         let mut app = app();
         let mut frame = eframe::Frame::_new_kittest();
         let size = [980, 720];
@@ -272,7 +272,7 @@ mod tests {
 
         for size in [[640, 520], [480, 520]] {
             let context = egui::Context::default();
-            crate::app::configure_appearance(&context);
+            theme::configure_appearance(&context);
             context.global_style_mut(|style| style.animation_time = 0.0);
             let mut app = app();
             app.appearance.builtin = crate::builtin_character::BuiltinCharacter::Oc01;
@@ -354,7 +354,7 @@ mod tests {
         use eframe::App;
         for size in [[640, 520], [980, 720]] {
             let context = egui::Context::default();
-            crate::app::configure_appearance(&context);
+            theme::configure_appearance(&context);
             context.global_style_mut(|style| style.animation_time = 0.0);
             let mut app = app();
             app.appearance.builtin = crate::builtin_character::BuiltinCharacter::Oc01;

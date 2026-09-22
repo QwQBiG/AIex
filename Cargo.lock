@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-asr"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-duplex",
@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-audio"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-core",
  "ai-ex-domain",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-audit"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-automation",
  "ai-ex-domain",
@@ -57,7 +57,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-automation"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-safety",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-bilibili"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-event-bus",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-capture"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-duplex",
@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-config"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "serde",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-control"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-observability",
@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-core"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-protocol",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-deepseek"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-core",
  "ai-ex-domain",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-domain"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-duplex"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "async-trait",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-event-bus"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-protocol",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-koboldcpp"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-core",
  "ai-ex-domain",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-memory"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-core",
  "ai-ex-domain",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-migrate"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-config",
  "ai-ex-domain",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-observability"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-core",
  "ai-ex-domain",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-ollama"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-core",
  "ai-ex-domain",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-plugin"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "serde",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-protocol"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "async-trait",
@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-safety"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "serde",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-service"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-asr",
  "ai-ex-audio",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-simulator"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-event-bus",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-stage"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "async-trait",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-stage-obs"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-stage",
@@ -347,14 +347,14 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-text"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
 ]
 
 [[package]]
 name = "ai-ex-tts"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "reqwest",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-ui-model"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "ai-ex-observability",
@@ -373,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-vision"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-domain",
  "async-trait",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "ai-ex-vts"
-version = "0.7.0-alpha.1"
+version = "0.7.1-alpha.1"
 dependencies = [
  "ai-ex-core",
  "ai-ex-domain",

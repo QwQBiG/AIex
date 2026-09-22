@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::theme;
+use crate::ui::theme;
 
 impl SetupApp {
     pub(super) fn show_window(&mut self, ui: &mut egui::Ui) {

@@ -1,6 +1,6 @@
 # 声音与数字人表达
 
-本文描述 0.7.0-alpha.1 的语句播放时间线与插画表现。
+本文描述 0.7.1-alpha.1 的语句播放时间线与插画表现。
 
 ## 两条独立时间线
 
@@ -49,6 +49,6 @@ cargo run -p ai-ex-service --features native-playback -- --config config/ai-ex.l
 cargo test -p ai-ex-audio --all-features native_silent_playback_reports_progress_completion_and_interruption -- --ignored --nocapture
 ```
 
-表现层确定性检查包括状态切换、不同刷新率、静音与停止条件、长时间运行，插画检查包括资源解码、状态选择和离屏绘制。当前版本的通过范围见[版本说明](releases/0.7.0-alpha.1.md)；这些检查不证明真实窗口观感或扬声器延迟，仍需按[验收流程](MANUAL_TEST_PLAN.md)体验。
+表现层确定性检查包括状态切换、不同刷新率、静音与停止条件、长时间运行，插画检查包括资源解码、状态选择和离屏绘制。当前版本的通过范围见[版本说明](releases/0.7.1-alpha.1.md)；这些检查不证明真实窗口观感或扬声器延迟，仍需按[验收流程](MANUAL_TEST_PLAN.md)体验。
 
 当前是振幅驱动，不是音素/口形识别；设备缓冲与控制轮询仍会引入延迟。原生外形与桌面字幕已有语句级同步，默认插画消费同一播放状态。VTS 仍使用原有舞台口型命令，OBS 字幕仍按生成时的舞台动作调度；两者接入播放时间线和词级字幕继续留待后续。桌面和服务应一起更新，旧客户端不识别新增的进度与取消事件。
