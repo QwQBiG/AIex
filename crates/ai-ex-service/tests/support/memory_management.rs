@@ -375,3 +375,204 @@ async fn disabled_memory_reports_unavailable_without_creating_a_store() {
     drop(service.child.stdin.take());
     service.exited().await;
 }
+
+#[tokio::test]
+async fn knowledge_and_media_control_requests_survive_restart_and_remain_profile_scoped() {
+    use ai_ex_domain::{MemoryEntityKind, MemoryMedia, MemoryModality};
+    use serde_json::json;
+
+    let mut model = ModelServer::start().await;
+    let mut service = ServiceProcess::with_memory("--managed", true, &model.url, true);
+    service.ready().await;
+    assert_eq!(
+        manage(&service, remember("My name is Quinn."))
+            .await
+            .unwrap(),
+        MemoryResponse::Changed,
+    );
+    let entities = |profile: &str| MemoryRequest::Entities {
+        profile_id: profile.to_owned(),
+        query: String::new(),
+        offset: 0,
+        limit: 20,
+    };
+    let MemoryResponse::Entities(names) = manage(&service, entities("default")).await.unwrap()
+    else {
+        panic!("entity response expected over the control channel");
+    };
+    let name = names
+        .entities
+        .iter()
+        .find(|entity| entity.kind == MemoryEntityKind::Name)
+        .unwrap();
+    assert_eq!(name.current_value, "Quinn");
+    assert_eq!(name.total_mentions, 1);
+    let evidence = |profile: &str| MemoryRequest::Evidence {
+        profile_id: profile.to_owned(),
+        key: name.key.clone(),
+        offset: 0,
+        limit: 20,
+    };
+    let MemoryResponse::Page(proof) = manage(&service, evidence("default")).await.unwrap() else {
+        panic!("evidence record page expected");
+    };
+    assert_eq!(proof.total, 1);
+    assert_eq!(proof.entries[0].id, name.evidence[0].memory_id);
+    assert_eq!(proof.entries[0].revision, name.evidence[0].revision);
+    assert_eq!(proof.entries[0].source, MemorySource::UserNote);
+    assert_eq!(proof.entries[0].user_text, "My name is Quinn.");
+
+    let original_media = MemoryMedia {
+        modality: MemoryModality::Visual,
+        tags: vec!["stage".to_owned(), "blue".to_owned()],
+        visual_features: Some(
+            json!({
+                "description":"blue lights", "objects":[{"label":"synthetic stage","score":0.9}],
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        ),
+        metadata: json!({"source":"synthetic control test","nested":{"retain":[1,2,3]}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        importance: 850,
+        ..MemoryMedia::default()
+    };
+    assert_eq!(
+        manage(
+            &service,
+            MemoryRequest::RememberMedia {
+                profile_id: "default".to_owned(),
+                text: "A synthetic stage with blue lights.".to_owned(),
+                media: original_media.clone(),
+            }
+        )
+        .await
+        .unwrap(),
+        MemoryResponse::Changed,
+    );
+    let media_query = |profile: &str, tag: &str| MemoryRequest::QueryMedia {
+        profile_id: profile.to_owned(),
+        query: String::new(),
+        modality: Some(MemoryModality::Visual),
+        tags: vec!["not-present".to_owned(), tag.to_owned()],
+        min_importance: 800,
+        offset: 0,
+        limit: 20,
+    };
+    let MemoryResponse::Page(created) = manage(&service, media_query("default", "stage"))
+        .await
+        .unwrap()
+    else {
+        panic!("media page expected");
+    };
+    assert_eq!(
+        created.total, 1,
+        "control queries preserve tag OR semantics"
+    );
+    let original = &created.entries[0];
+    assert_eq!(
+        created.knowledge[&original.id].media.as_ref(),
+        Some(&original_media)
+    );
+    let mut corrected_media = original_media.clone();
+    corrected_media.tags = vec!["stage".to_owned(), "green".to_owned()];
+    corrected_media.importance = 950;
+    corrected_media
+        .visual_features
+        .as_mut()
+        .unwrap()
+        .insert("description".to_owned(), json!("green lights"));
+    assert_eq!(
+        manage(
+            &service,
+            MemoryRequest::CorrectMedia {
+                profile_id: "default".to_owned(),
+                id: original.id,
+                expected_revision: original.revision,
+                text: "A synthetic stage with green lights.".to_owned(),
+                media: corrected_media.clone(),
+            }
+        )
+        .await
+        .unwrap(),
+        MemoryResponse::Changed,
+    );
+    let MemoryResponse::Page(old_filter) = manage(&service, media_query("default", "blue"))
+        .await
+        .unwrap()
+    else {
+        panic!("media page expected");
+    };
+    assert_eq!(old_filter.total, 0);
+
+    restart(&mut service).await;
+    let MemoryResponse::Page(reopened) = manage(&service, media_query("default", "green"))
+        .await
+        .unwrap()
+    else {
+        panic!("persisted media page expected");
+    };
+    assert_eq!(reopened.total, 1);
+    assert_eq!(reopened.entries[0].id, original.id);
+    assert_eq!(reopened.entries[0].revision, original.revision + 1);
+    assert_eq!(reopened.entries[0].source, MemorySource::UserCorrection);
+    assert_eq!(
+        reopened.entries[0].user_text,
+        "A synthetic stage with green lights."
+    );
+    assert_eq!(
+        reopened.knowledge[&original.id].media.as_ref(),
+        Some(&corrected_media)
+    );
+    assert_eq!(
+        manage(&service, entities("default")).await.unwrap(),
+        MemoryResponse::Entities(names.clone())
+    );
+    assert_eq!(
+        manage(&service, evidence("default")).await.unwrap(),
+        MemoryResponse::Page(proof)
+    );
+
+    service
+        .client
+        .send(ControlCommand::SetPersona {
+            profile: PersonaSnapshot {
+                profile_id: "other".to_owned(),
+                name: "Other".to_owned(),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+    let MemoryResponse::Entities(other_names) = manage(&service, entities("other")).await.unwrap()
+    else {
+        panic!("other character entity response expected");
+    };
+    assert_eq!(other_names.total, 0);
+    for request in [evidence("other"), media_query("other", "stage")] {
+        let MemoryResponse::Page(other) = manage(&service, request).await.unwrap() else {
+            panic!("other character page expected");
+        };
+        assert_eq!(other.total, 0);
+        assert!(other.knowledge.is_empty());
+    }
+    assert_eq!(
+        manage(&service, media_query("default", "stage"))
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::InvalidTransition
+    );
+    assert!(
+        matches!(
+            model.captured.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ),
+        "knowledge management must not invoke chat generation"
+    );
+    drop(service.child.stdin.take());
+    service.exited().await;
+}

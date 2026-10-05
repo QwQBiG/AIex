@@ -57,44 +57,64 @@ max_message_bytes = 65536
 
 `stage` 返回最近的舞台动作摘要，包含遥测 schema、单调序号、动作类型和受限 detail；它只读，不会触发 OBS 或桌面副作用。
 
-## 记忆管理（0.5）
+## 记忆管理
 
-`memory` 命令包装领域层的 `MemoryRequest`，仍使用相同请求 UUID 和令牌。四种请求形式如下，每行都是独立命令：
+`memory` 命令包装领域层的 `MemoryRequest`，仍使用相同请求 UUID 和令牌。以下契约对应当前源码；实体及媒体请求尚未包含在已发布的 0.7.1-alpha.1 程序中，桌面与服务需同步构建。
+
+每行都是独立命令，发送时仍需放入前述请求信封：
 
 ```json
 {"type":"memory","request":{"type":"list","profile_id":"default","query":"偏好","kind":"persona","offset":0,"limit":12}}
+{"type":"memory","request":{"type":"entities","profile_id":"default","query":"coffee","offset":0,"limit":12}}
+{"type":"memory","request":{"type":"evidence","profile_id":"default","key":"preference:coffee","offset":0,"limit":12}}
+{"type":"memory","request":{"type":"query_media","profile_id":"default","query":"","modality":"visual","tags":["旅行","风景"],"min_importance":500,"offset":0,"limit":12}}
 {"type":"memory","request":{"type":"remember","profile_id":"default","text":"请叫我小林。"}}
 {"type":"memory","request":{"type":"correct","profile_id":"default","id":"00000000-0000-0000-0000-000000000002","expected_revision":1,"text":"请叫我小禾。"}}
+{"type":"memory","request":{"type":"remember_media","profile_id":"default","text":"旅行照片的说明。","media":{"modality":"visual","tags":["旅行"],"visual_features":{"description":"山边的湖泊","objects":[{"name":"湖泊"}]},"metadata":{"source":"manual-note"},"importance":700}}}
+{"type":"memory","request":{"type":"correct_media","profile_id":"default","id":"00000000-0000-0000-0000-000000000003","expected_revision":1,"text":"秋天旅行照片的说明。","media":{"modality":"visual","tags":["旅行"],"visual_features":{"description":"山边的湖泊","objects":[{"name":"湖泊"}]},"metadata":{"source":"manual-note"},"importance":700}}}
 {"type":"memory","request":{"type":"forget","profile_id":"default","id":"00000000-0000-0000-0000-000000000002","expected_revision":2}}
 ```
 
 | 字段与操作 | 契约 |
 | --- | --- |
 | `profile_id` | 必须与服务当前角色精确匹配；非空且最多 128 个字符 |
-| `list` | `query` 最多 512 个字符，内容子串查找；`kind` 可为空或指定分类，`offset` 与 `limit` 指定分页，`limit` 为 1–100 |
-| `remember` / `correct` | `text` 非空、最多 4096 个字符；新建与更正均进入 `persona` 分类，分别标记 `user_note` / `user_correction` |
-| `correct` / `forget` | 校验记录 ID 与正整数 `expected_revision`；记录不属于当前角色、已删除或版本冲突时拒绝 |
+| 只读分页 | `list`、`entities`、`evidence`、`query_media` 均使用 `offset` 与 1–100 的 `limit`；查找词或实体键最多 512 个字符 |
+| `list` | 正文子串查找；`kind` 可为空或指定分类 |
+| `entities` | 查找实体键、名称或候选值，按稳定键聚合来源，返回 `entities` 响应 |
+| `evidence` | `key` 非空且精确匹配实体稳定键，返回来源记录的 `page`；不把候选概览当作完整来源列表 |
+| `query_media` | 正文子串查找；`modality` 为空表示所有类型，否则精确匹配；多个 `tags` 为 OR，忽略首尾空白和大小写；`min_importance` 为 0–1000 |
+| `remember` / `correct` / `remember_media` / `correct_media` | `text` 非空、最多 4096 个字符；新建与更正均进入 `persona` 分类，分别标记 `user_note` / `user_correction` |
+| `correct` / `correct_media` / `forget` | 校验记录 ID 与正整数 `expected_revision`；记录不属于当前角色、已删除或版本冲突时拒绝 |
 
-记忆记录版本与角色设定版本分别维护。活动回合期间拒绝记忆管理；桌面另外等待播放结束。成功修改在持久写入后清空当前短期上下文并停止旧输出；更正替换该条输入并移除旧回复，遗忘仅删除所选记录。它不会自动处理其他记录、角色设定或派生信息中的重复内容。
+媒体对象包含 `modality`（`text` / `audio` / `visual` / `multimodal`）、`tags`、`importance`、可选 `audio_features` / `visual_features` 和 `metadata`。特征与元数据均为可嵌套的 JSON 对象；没有原始附件上传或自动媒体理解约定。省略字段时，媒体类型默认 `text`，重要程度为 0，标签与元数据为空。
+
+`text` 不带音画特征；`audio` 必须提供音频对象且不带视觉对象；`visual` 必须提供视觉对象且不带音频对象。`multimodal` 兼容旧模块允许的任意特征缺省组合，两种特征都可省略或为 `null`；空对象 `{}` 表示已提供特征对象。媒体序列化整体最多 8192 字节，最多 16 个非空标签，每个最多 64 个字符，重要程度为 0–1000。查询的标签遵循相同限制。普通无媒体记录按 `text`、重要程度 0 参与媒体查询，结果先按重要程度再按更新时间降序排列；正文查询不搜索特征或元数据内部字段。
+
+`correct_media` 接收完整媒体对象，并非字段补丁；客户端应读取该条 `knowledge.media`、复制完整对象，仅修改用户指定的字段后再提交。普通 `correct` 会移除该条原媒体信息。桌面编辑器使用前一种方式，未修改描述和类型时也保留原有缺省特征，不会把 `null` 自动补成空对象；主动换类型会移除不再适用的特征。
+
+记忆记录版本与角色设定版本分别维护。活动回合期间拒绝记忆管理；桌面另外等待播放结束。成功修改在持久写入后清空当前短期上下文并停止旧输出；更正替换该条输入并移除旧回复，遗忘仅删除所选记录。实体候选随正文重新提取，删除记录后不再贡献来源；其他记录、角色设定或派生信息中的重复内容不会自动删除。
 
 成功 payload 的 `type` 为 `memory`，其 `data` 对应 `MemoryReply`，包含两个字段：
 
-- `response`：`{"type":"changed"}`，或 `{"type":"page","data":{...}}`。
+- `response`：`{"type":"changed"}`、`{"type":"page","data":{...}}` 或 `{"type":"entities","data":{...}}`。
 - `snapshot`：操作完成后取得的完整 `RuntimeSnapshot` 结构，含 `instance_id` 与 `last_sequence`；文字字段受下述预算限制。
 
-Rust 内部使用 `Box<MemoryReply>`，JSON 不增加额外包装层。`page.data` 包含 `profile_id`、`enabled`、`total`、`offset`、`entries`、`truncated_ids`。记录携带 ID、角色 ID、回合 ID、分类、输入/回复、来源、记录版本及创建/更新时间；缺少来源和版本的旧记录默认 `automatic` / `1`。毫秒时间戳通常是 JSON 整数，超出 `u64` 范围时使用十进制字符串。
+Rust 内部使用 `Box<MemoryReply>`，JSON 不增加额外包装层。`page.data` 包含 `profile_id`、`enabled`、`total`、`offset`、`entries`、`truncated_ids`，以及非空时才输出的 `knowledge`。记录携带 ID、角色 ID、回合 ID、分类、输入/回复、来源、记录版本及创建/更新时间；缺少来源和版本的旧记录默认 `automatic` / `1`。毫秒时间戳通常是 JSON 整数，超出 `u64` 范围时使用十进制字符串。
 
+`knowledge` 是以记录 UUID 字符串为键的对象；每项含 `entities` 数组和可选 `media`。单个候选为 `{kind,key,name,value,confidence}`，`kind` 为 `name` / `preference` / `fact`，`confidence` 是 0–1000 的规则评分。候选从用户正文提取，不从助手回复或自动媒体描述推断用户身份；旧导入文本需要明确的 `user_input`。原始导入元数据和向量不通过这个控制页输出。
+
+`entities.data` 包含 `profile_id`、`enabled`、`total`、`offset` 与 `entities` 数组。每组包含 `key`、`kind`、`name`、`current_value`、`first_mentioned_ms`、`last_updated_ms`、`total_mentions` 和 `evidence`；每条来源为 `{memory_id,revision,source,value,confidence}`。稳定键示例为 `user.name`、`preference:coffee`、`fact:location`。当前值优先取用户笔记或更正，再按更新顺序选择；来源中的矛盾值保留，当前值不等于经核验的事实。每组概览最多 32 条来源，响应预算还可能进一步减少；完整来源记录通过 `evidence` 分页获取。
 ### 确认修改与聊天游标
 
 客户端应先匹配请求与当前角色，并确认应答来自当前服务实例。只有确认修改成功的 `changed` 应答才用于清空聊天显示；随附快照的序号给出旧对话清理边界，边界以内迟到的文字事件不得重新构造已清空的聊天，较早的快照也不得倒退当前事件序号。服务实例已变化的应答需要重新刷新核对。
 
-**`list` 的快照不得推进聊天游标或替代尚未收到的正文事件。** 列表只读，不能因为附带的快照序号较新就跳过聊天。常规快照同步仍先补齐事件，缺口按既有恢复规则处理。
+**`list`、`entities`、`evidence` 和 `query_media` 的快照不得推进聊天游标或替代尚未收到的正文事件。** 查询只读，不能因为附带的快照序号较新就跳过聊天。常规快照同步仍先补齐事件，缺口按既有恢复规则处理。
 
 超时或结果不明不代表未写入；客户端保留草稿、要求成功刷新后核对，不自动重发修改。明确版本冲突时也应刷新重新选择记录，不能覆盖较新版本。
 
 ### 响应大小
 
-记忆页使用 **48 KiB 序列化 JSON 预算**，因此实际返回条数可能少于请求的 `limit`。下一页应从 `offset + entries.len()` 请求，不能固定跳过 `limit` 条；`total` 表示全部匹配记录数。
+记录页和实体页分别使用 **48 KiB 序列化 JSON 预算**，因此实际返回条数可能少于请求的 `limit`。记录页下一页从 `offset + entries.len()` 请求，实体页从 `offset + entities.len()` 请求，不能固定跳过 `limit` 条；`total` 表示全部匹配记录或实体组数。
 
 单条记录过长且无法完整放进空页时，返回片段并将 ID 加入 `truncated_ids`。客户端必须标明“查看片段 / 复制片段”，不能把片段当作完整原文；更正应重新输入完整事实。分页和查看不会截断原始存储。
 

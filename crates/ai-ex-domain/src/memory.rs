@@ -1,4 +1,8 @@
-use crate::{AppError, conversation::TurnId};
+use std::collections::BTreeMap;
+
+use crate::{
+    AppError, MemoryEntityPage, MemoryKnowledge, MemoryMedia, MemoryModality, conversation::TurnId,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -86,6 +90,39 @@ pub enum MemoryRequest {
         offset: usize,
         limit: usize,
     },
+    Entities {
+        profile_id: String,
+        query: String,
+        offset: usize,
+        limit: usize,
+    },
+    Evidence {
+        profile_id: String,
+        key: String,
+        offset: usize,
+        limit: usize,
+    },
+    QueryMedia {
+        profile_id: String,
+        query: String,
+        modality: Option<MemoryModality>,
+        tags: Vec<String>,
+        min_importance: u16,
+        offset: usize,
+        limit: usize,
+    },
+    RememberMedia {
+        profile_id: String,
+        text: String,
+        media: MemoryMedia,
+    },
+    CorrectMedia {
+        profile_id: String,
+        id: Uuid,
+        expected_revision: u64,
+        text: String,
+        media: MemoryMedia,
+    },
     Remember {
         profile_id: String,
         text: String,
@@ -107,6 +144,11 @@ impl MemoryRequest {
     pub fn profile_id(&self) -> &str {
         match self {
             Self::List { profile_id, .. }
+            | Self::Entities { profile_id, .. }
+            | Self::Evidence { profile_id, .. }
+            | Self::QueryMedia { profile_id, .. }
+            | Self::RememberMedia { profile_id, .. }
+            | Self::CorrectMedia { profile_id, .. }
             | Self::Remember { profile_id, .. }
             | Self::Correct { profile_id, .. }
             | Self::Forget { profile_id, .. } => profile_id,
@@ -114,7 +156,13 @@ impl MemoryRequest {
     }
 
     pub fn is_mutation(&self) -> bool {
-        !matches!(self, Self::List { .. })
+        !matches!(
+            self,
+            Self::List { .. }
+                | Self::Entities { .. }
+                | Self::Evidence { .. }
+                | Self::QueryMedia { .. }
+        )
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
@@ -126,20 +174,36 @@ impl MemoryRequest {
         match self {
             Self::List {
                 query,
-                limit,
                 offset,
+                limit,
                 ..
+            }
+            | Self::Entities {
+                query,
+                offset,
+                limit,
+                ..
+            }
+            | Self::QueryMedia {
+                query,
+                offset,
+                limit,
+                ..
+            } => validate_page(query, *offset, *limit)?,
+            Self::Evidence {
+                key, offset, limit, ..
             } => {
-                if query.chars().count() > 512
-                    || !(1..=100).contains(limit)
-                    || offset.checked_add(*limit).is_none()
-                {
+                if key.trim().is_empty() {
                     return Err(AppError::configuration(
-                        "memory query or page is outside supported bounds",
+                        "memory entity key must not be empty",
                     ));
                 }
+                validate_page(key, *offset, *limit)?;
             }
-            Self::Remember { text, .. } | Self::Correct { text, .. } => {
+            Self::Remember { text, .. }
+            | Self::Correct { text, .. }
+            | Self::RememberMedia { text, .. }
+            | Self::CorrectMedia { text, .. } => {
                 if text.trim().is_empty() || text.chars().count() > 4096 {
                     return Err(AppError::configuration(
                         "memory text must contain between 1 and 4096 characters",
@@ -148,9 +212,28 @@ impl MemoryRequest {
             }
             Self::Forget { .. } => {}
         }
+        if let Self::RememberMedia { media, .. } | Self::CorrectMedia { media, .. } = self {
+            media.validate()?;
+        }
+        if let Self::QueryMedia {
+            tags,
+            min_importance,
+            ..
+        } = self
+        {
+            crate::memory_knowledge::validate_media_tags(tags)?;
+            if *min_importance > 1000 {
+                return Err(AppError::configuration(
+                    "memory importance must be in 0..=1000",
+                ));
+            }
+        }
         if matches!(
             self,
             Self::Correct {
+                expected_revision: 0,
+                ..
+            } | Self::CorrectMedia {
                 expected_revision: 0,
                 ..
             } | Self::Forget {
@@ -164,6 +247,17 @@ impl MemoryRequest {
     }
 }
 
+fn validate_page(query: &str, offset: usize, limit: usize) -> Result<(), AppError> {
+    if query.chars().count() > 512
+        || !(1..=100).contains(&limit)
+        || offset.checked_add(limit).is_none()
+    {
+        return Err(AppError::configuration(
+            "memory query or page is outside supported bounds",
+        ));
+    }
+    Ok(())
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryPage {
     pub profile_id: String,
@@ -173,11 +267,14 @@ pub struct MemoryPage {
     pub entries: Vec<MemoryEntry>,
     #[serde(default)]
     pub truncated_ids: Vec<Uuid>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub knowledge: BTreeMap<Uuid, MemoryKnowledge>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum MemoryResponse {
     Page(MemoryPage),
+    Entities(MemoryEntityPage),
     Changed,
 }

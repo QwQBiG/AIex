@@ -11,6 +11,9 @@ impl MemoryStore {
                 "memory profile changed; reload the current character's memories",
             ));
         }
+        if let Some(response) = self.knowledge_query(&request, &profile_id).await? {
+            return Ok(response);
+        }
         if let MemoryRequest::List {
             query,
             kind,
@@ -31,26 +34,13 @@ impl MemoryStore {
             matches.sort_by_key(|(index, entry)| {
                 std::cmp::Reverse((entry.updated_ms.unwrap_or(entry.created_ms), *index))
             });
-            let mut page = MemoryPage {
-                profile_id: profile_id.clone(),
-                enabled: self.inner.enabled,
-                total: matches.len(),
+            let page = page_for(
+                &profile_id,
+                self.inner.enabled,
                 offset,
-                entries: Vec::new(),
-                truncated_ids: Vec::new(),
-            };
-            for (_, entry) in matches.into_iter().skip(offset).take(limit) {
-                page.entries.push(entry.entry.clone());
-                if serialized_size(&page)? <= 48 * 1024 {
-                    continue;
-                }
-                page.entries.pop();
-                if page.entries.is_empty() {
-                    page.entries.push(preview_entry(entry));
-                    page.truncated_ids.push(entry.id);
-                }
-                break;
-            }
+                limit,
+                matches.into_iter().map(|(_, entry)| entry).collect(),
+            )?;
             return Ok(MemoryResponse::Page(page));
         }
         if !self.inner.enabled {
@@ -65,8 +55,13 @@ impl MemoryStore {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
+        let media = match &request {
+            MemoryRequest::RememberMedia { media, .. }
+            | MemoryRequest::CorrectMedia { media, .. } => Some(media.clone()),
+            _ => None,
+        };
         match request {
-            MemoryRequest::Remember { text, .. } => {
+            MemoryRequest::Remember { text, .. } | MemoryRequest::RememberMedia { text, .. } => {
                 let mut record = MemoryRecord::new(MemoryEntry {
                     id: Uuid::new_v4(),
                     profile_id: profile_id.clone(),
@@ -79,10 +74,17 @@ impl MemoryStore {
                     source: MemorySource::UserNote,
                     revision: 1,
                 });
+                record.knowledge.media = media;
                 self.enrich(&mut record).await?;
                 records.push(record);
             }
             MemoryRequest::Correct {
+                id,
+                expected_revision,
+                text,
+                ..
+            }
+            | MemoryRequest::CorrectMedia {
                 id,
                 expected_revision,
                 text,
@@ -100,6 +102,7 @@ impl MemoryStore {
                 entry.source = MemorySource::UserCorrection;
                 entry.updated_ms = Some(now.max(entry.updated_ms.unwrap_or(entry.created_ms)));
                 records[index].legacy_metadata = None;
+                records[index].knowledge.media = media;
                 self.enrich(&mut records[index]).await?;
             }
             MemoryRequest::Forget {
@@ -110,7 +113,7 @@ impl MemoryStore {
                 let index = find_record(&records, &profile_id, id, expected_revision)?;
                 records.remove(index);
             }
-            MemoryRequest::List { .. } => unreachable!("list handled before mutation"),
+            _ => unreachable!("read-only requests handled before mutation"),
         }
         self.replace_records(records).await?;
         Ok(MemoryResponse::Changed)
@@ -174,4 +177,47 @@ fn find_record(
         ));
     }
     Ok(index)
+}
+
+pub(super) fn page_for(
+    profile_id: &str,
+    enabled: bool,
+    offset: usize,
+    limit: usize,
+    records: Vec<&MemoryRecord>,
+) -> Result<MemoryPage, AppError> {
+    let mut page = MemoryPage {
+        profile_id: profile_id.to_owned(),
+        enabled,
+        total: records.len(),
+        offset,
+        entries: Vec::new(),
+        truncated_ids: Vec::new(),
+        knowledge: Default::default(),
+    };
+    for entry in records.into_iter().skip(offset).take(limit) {
+        page.entries.push(entry.entry.clone());
+        if !record::knowledge_empty(&entry.knowledge) {
+            page.knowledge.insert(entry.id, entry.knowledge.clone());
+        }
+        if serialized_size(&page)? <= 48 * 1024 {
+            continue;
+        }
+        page.entries.pop();
+        page.knowledge.remove(&entry.id);
+        if page.entries.is_empty() {
+            page.entries.push(preview_entry(entry));
+            if !record::knowledge_empty(&entry.knowledge) {
+                page.knowledge.insert(entry.id, entry.knowledge.clone());
+            }
+            page.truncated_ids.push(entry.id);
+            if serialized_size(&page)? > 48 * 1024 {
+                return Err(AppError::protocol(
+                    "memory preview exceeds transport budget",
+                ));
+            }
+        }
+        break;
+    }
+    Ok(page)
 }

@@ -4,6 +4,7 @@ mod conversation;
 mod error;
 mod event;
 mod memory;
+mod memory_knowledge;
 mod persona;
 mod playback;
 mod stage_telemetry;
@@ -14,6 +15,10 @@ pub use event::{ComponentHealth, LiveResponseMode, SystemEvent};
 pub use memory::{
     MemoryEntry, MemoryKind, MemoryPage, MemoryProjection, MemoryRequest, MemoryResponse,
     MemorySource,
+};
+pub use memory_knowledge::{
+    MemoryEntity, MemoryEntityEvidence, MemoryEntityGroup, MemoryEntityKind, MemoryEntityPage,
+    MemoryKnowledge, MemoryMedia, MemoryModality,
 };
 pub use persona::PersonaSnapshot;
 pub use playback::SpeechPlaybackSnapshot;

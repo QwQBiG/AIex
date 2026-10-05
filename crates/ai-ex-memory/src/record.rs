@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::ops::Deref;
 
-use ai_ex_domain::{AppError, MemoryEntry};
+use ai_ex_domain::{AppError, MemoryEntry, MemoryKnowledge};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,11 +40,13 @@ impl MemoryEmbedding {
     }
 }
 
-/// Persistence includes enrichment; control responses expose only `entry`.
+/// Persistence includes enrichment; control pages expose bounded knowledge alongside entry.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct MemoryRecord {
     #[serde(flatten)]
     pub entry: MemoryEntry,
+    #[serde(default, skip_serializing_if = "knowledge_empty")]
+    pub knowledge: MemoryKnowledge,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<MemoryEmbedding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,6 +71,7 @@ impl MemoryRecord {
     pub fn new(entry: MemoryEntry) -> Self {
         let mut record = Self {
             entry,
+            knowledge: MemoryKnowledge::default(),
             embedding: None,
             legacy_metadata: None,
             terms: BTreeSet::new(),
@@ -80,6 +83,27 @@ impl MemoryRecord {
     }
 
     pub fn rebuild(&mut self) -> Result<(), AppError> {
+        if let Some(media) = &self.knowledge.media {
+            media.validate()?;
+        }
+        // Historical summaries/events may contain generated or third-party text.
+        // Only the explicit legacy user_input is eligible for personal candidates.
+        let evidence_text = if self.knowledge.media.is_some()
+            && self.source == ai_ex_domain::MemorySource::Automatic
+        {
+            // Observed captions/transcripts do not establish who is speaking.
+            ""
+        } else {
+            match &self.legacy_metadata {
+                Some(metadata) => metadata
+                    .get("user_input")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(""),
+                None => &self.user_text,
+            }
+        };
+        self.knowledge.entities = crate::entities::extract_entities(evidence_text);
+        self.knowledge.validate()?;
         self.lowercase_text = searchable_text(self).to_lowercase();
         self.terms = terms(&self.lowercase_text);
         self.normalized = self
@@ -115,4 +139,8 @@ pub(crate) fn terms(text: &str) -> BTreeSet<String> {
         }
     }
     result
+}
+
+pub(crate) fn knowledge_empty(knowledge: &MemoryKnowledge) -> bool {
+    knowledge.entities.is_empty() && knowledge.media.is_none()
 }

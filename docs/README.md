@@ -9,7 +9,7 @@
 | [Windows 便携版](PORTABLE_WINDOWS.md) | 解压双击、首次体验、数据位置与更新 |
 | [整体验收流程](MANUAL_TEST_PLAN.md) | 独立测试配置、操作顺序、预期结果、故障记录 |
 | [桌面使用](DESKTOP_USER_GUIDE.md) | 首次设置、托管/独立服务、诊断与重连 |
-| [记忆工作台](MEMORY_WORKSPACE.md) | 查看来源、确认笔记、更正与单条遗忘，以及实际边界 |
+| [记忆工作台](MEMORY_WORKSPACE.md) | 确认笔记、实体候选与来源核对、媒体及标签筛选、更正与单条遗忘；注明当前源码与已发布版本的区别 |
 | [模型后端](MODEL_BACKENDS.md) | 模型地址、凭据、配置与健康检查 |
 | [声音与表达](SPEECH_PRESENTATION.md) | 语音、字幕、口型、取消与已知限制 |
 | [当前版本说明](releases/0.7.1-alpha.1.md) | 共享界面模块、依赖检查和目录索引的维护更新 |
@@ -20,7 +20,7 @@
 - [角色包](CHARACTER_PACKS.md)：人格清单、预览应用与分享。
 - [图片外形包](APPEARANCE_PACKS.md)：内置插画与自定义图片的区别、状态映射、素材校验与导入。
 - [场景组合](SCENE_PACKS.md)：角色与外形保存、资源携带和启动恢复。
-- [人格与记忆](PERSONA_MEMORY.md)：身份分区、分类记录与召回边界。
+- [人格与记忆](PERSONA_MEMORY.md)：身份分区、分类记录、实体来源、结构化媒体与召回边界。
 
 ## 架构与扩展
 
@@ -33,7 +33,8 @@
 
 ## 历史与迁移资料
 
-- [完全 Rust 化进展](RUST_ONLY_MIGRATION.md)：离线校验、旧备份与向量迁移、可选语义召回、原子重建、实测基准及逐功能迁移合同。
+- [迁移工具与显式多模态快照](../tools/README.md#显式多模态快照导入)：独立输出、dataclass JSON 数组格式与数据限制。
+- [完全 Rust 化进展](RUST_ONLY_MIGRATION.md)：离线校验、旧备份与向量迁移、可选语义召回、实体及多模态切片、原子重建、实测基准及剩余迁移合同。
 
 [技术基线](CORE_TECHNICAL_BASELINE.md)、[Python 退役计划](LEGACY_RETIREMENT.md)、[0.7 一号人物与素材工作室](releases/0.7.0-alpha.1.md)、[0.6 二次元工作室](releases/0.6.0-alpha.1.md)、[0.5 记忆工作台](releases/0.5.0-alpha.1.md)、[0.4 人物工作室](releases/0.4.0-alpha.1.md)和[早期工作室说明](releases/0.2.0-alpha.1.md)保留历史进展。
 

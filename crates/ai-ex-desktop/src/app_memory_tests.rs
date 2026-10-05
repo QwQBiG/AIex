@@ -141,6 +141,7 @@ fn show_sample_page(app: &mut DesktopApp, long_text: bool) {
             total: 1,
             offset: 0,
             truncated_ids: vec![],
+            knowledge: Default::default(),
             entries: vec![MemoryEntry {
                 id: uuid::Uuid::new_v4(),
                 profile_id: "default".to_owned(),
@@ -189,6 +190,7 @@ fn reading_memory_does_not_skip_conversation_events() {
                     offset: 0,
                     entries: vec![],
                     truncated_ids: vec![],
+                    knowledge: Default::default(),
                 }),
                 snapshot: RuntimeSnapshot {
                     last_sequence: 100,

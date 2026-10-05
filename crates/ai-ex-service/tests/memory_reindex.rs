@@ -72,6 +72,8 @@ async fn maintenance_reindexes_only_selected_profile_before_connecting_other_ser
                 Err(error) => panic!("mock accept failed: {error}"),
             }
         };
+        // Windows can inherit the listener's nonblocking mode on accepted sockets.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();

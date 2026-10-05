@@ -78,6 +78,7 @@ fn long_unicode_and_escaped_text_preserve_identity_and_fit_complete_control_repl
             revision: 1,
         }],
         truncated_ids: Vec::new(),
+        knowledge: Default::default(),
     };
     assert!(serde_json::to_vec(&page).unwrap().len() <= 48 * 1024);
     for response in [MemoryResponse::Page(page), MemoryResponse::Changed] {

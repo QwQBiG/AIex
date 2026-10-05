@@ -2,6 +2,7 @@
 
 mod legacy;
 mod legacy_memory;
+mod multimodal_memory;
 
 use std::path::{Path, PathBuf};
 
@@ -19,22 +20,34 @@ async fn main() {
 }
 
 async fn run() -> Result<(), AppError> {
-    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    let mut arguments: Vec<_> = std::env::args().skip(1).collect();
     if arguments == ["--version"] {
         println!("ai-ex-migrate {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     if arguments == ["--help"] || arguments == ["-h"] {
         println!(
-            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nOutputs must be new files. Sources and complete metadata are retained. Backups with vectors require an explicit embedding space."
+            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nMultimodal dataclass snapshot: ai-ex-migrate --multimodal-memory --input SNAPSHOT.json --output NEW.jsonl --profile ID\nThis mode accepts explicitly exported dataclass JSON arrays, not an existing legacy backup format.\nOutputs must be new files. Sources and complete metadata are retained. Backups with vectors require an explicit embedding space."
         );
         return Ok(());
     }
-    if arguments
-        .first()
-        .is_some_and(|argument| argument == "--memory-backup")
-    {
-        return migrate_memory(arguments.into_iter().skip(1)).await;
+    let memory_modes: Vec<_> = arguments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| match value.as_str() {
+            "--memory-backup" => Some((index, MemoryImportKind::Backup)),
+            "--multimodal-memory" => Some((index, MemoryImportKind::Multimodal)),
+            _ => None,
+        })
+        .collect();
+    if memory_modes.len() > 1 {
+        return Err(AppError::configuration(
+            "--memory-backup and --multimodal-memory are mutually exclusive and must not be repeated",
+        ));
+    }
+    if let Some((index, mode)) = memory_modes.first().copied() {
+        arguments.remove(index);
+        return migrate_memory(arguments.into_iter(), mode).await;
     }
     let (input, output) = parse_args(arguments.into_iter())?;
     if tokio::fs::try_exists(&output)
@@ -134,14 +147,32 @@ async fn write_new_atomic(path: &Path, content: &[u8]) -> Result<(), AppError> {
     if let Err(error) = result {
         let _ignored = tokio::fs::remove_file(&temporary).await;
         return Err(AppError::unavailable(format!(
-            "cannot commit migrated config: {error}"
+            "cannot commit migrated output: {error}"
         )));
     }
     let _ignored = tokio::fs::remove_file(&temporary).await;
     Ok(())
 }
 
-async fn migrate_memory(arguments: impl Iterator<Item = String>) -> Result<(), AppError> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MemoryImportKind {
+    Backup,
+    Multimodal,
+}
+
+impl MemoryImportKind {
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Backup => "--memory-backup",
+            Self::Multimodal => "--multimodal-memory",
+        }
+    }
+}
+
+async fn migrate_memory(
+    arguments: impl Iterator<Item = String>,
+    mode: MemoryImportKind,
+) -> Result<(), AppError> {
     let mut input = None;
     let mut output = None;
     let mut profile = None;
@@ -156,8 +187,10 @@ async fn migrate_memory(arguments: impl Iterator<Item = String>) -> Result<(), A
             "--input" => input = Some(PathBuf::from(value)),
             "--output" => output = Some(PathBuf::from(value)),
             "--profile" => profile = Some(value),
-            "--embedding-space" => embedding_space = Some(value),
-            "--utc-offset-minutes" => {
+            "--embedding-space" if mode == MemoryImportKind::Backup => {
+                embedding_space = Some(value)
+            }
+            "--utc-offset-minutes" if mode == MemoryImportKind::Backup => {
                 utc_offset = Some(
                     value
                         .parse::<i16>()
@@ -167,21 +200,31 @@ async fn migrate_memory(arguments: impl Iterator<Item = String>) -> Result<(), A
             _ => return Err(AppError::configuration("unknown memory migration option")),
         }
     }
-    let input = input.ok_or_else(|| AppError::configuration("--memory-backup requires --input"))?;
-    let output =
-        output.ok_or_else(|| AppError::configuration("--memory-backup requires --output"))?;
-    let profile =
-        profile.ok_or_else(|| AppError::configuration("--memory-backup requires --profile"))?;
-    let content = tokio::task::spawn_blocking(move || {
-        legacy_memory::import_backup(&input, &profile, utc_offset, embedding_space.as_deref())
+    let input = input
+        .ok_or_else(|| AppError::configuration(format!("{} requires --input", mode.flag())))?;
+    let output = output
+        .ok_or_else(|| AppError::configuration(format!("{} requires --output", mode.flag())))?;
+    let profile = profile
+        .ok_or_else(|| AppError::configuration(format!("{} requires --profile", mode.flag())))?;
+    let content = tokio::task::spawn_blocking(move || match mode {
+        MemoryImportKind::Backup => {
+            legacy_memory::import_backup(&input, &profile, utc_offset, embedding_space.as_deref())
+        }
+        MemoryImportKind::Multimodal => multimodal_memory::import_snapshot(&input, &profile),
     })
     .await
     .map_err(|_| AppError::unavailable("memory import worker failed"))??;
     write_new_atomic(&output, &content).await?;
-    println!(
-        "Migrated memories written to {} with legacy metadata and available embeddings. The source backup is unchanged. Imported records remain automatic, not confirmed facts.",
-        output.display()
-    );
+    match mode {
+        MemoryImportKind::Backup => println!(
+            "Migrated memories written to {} with legacy metadata and available embeddings. The source backup is unchanged. Imported records remain automatic, not confirmed facts.",
+            output.display()
+        ),
+        MemoryImportKind::Multimodal => println!(
+            "Multimodal snapshot written to {} with complete features and original snapshots. The source JSON is unchanged. Imported records remain automatic, not confirmed facts.",
+            output.display()
+        ),
+    }
     Ok(())
 }
 

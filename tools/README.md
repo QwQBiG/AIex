@@ -66,3 +66,52 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 ## Rust 离线迁移与检查
 
 新增 `ai-ex-service --validate-config` 离线验证和 `ai-ex-migrate --memory-backup` 旧备份文本/向量/元数据迁移与 `ai-ex-service --reindex-memory` 当前角色索引重建；使用步骤、格式与数据边界见[完全 Rust 化记录](../docs/RUST_ONLY_MIGRATION.md)。语句分块的 Release 对照基准在 `crates/ai-ex-text/benches/sentence_stream.rs`，记忆检索与启动缓存对照在 `crates/ai-ex-memory/benches/recall.rs`；均由 Cargo 执行，不需要 Python。
+
+### 显式多模态快照导入
+
+当前源码的 `ai-ex-migrate --multimodal-memory` 可将旧 `MultimodalMemory` dataclass 的显式 JSON 数组转换为独立 Rust JSONL。旧模块没有磁盘导出接口；此模式需要已经准备好的快照，不会连接 Python、读取 Chroma，也不能从旧主记忆 gzip 备份找回其中未保存的媒体对象。此功能尚未包含在已发布的 0.7.1-alpha.1 包中。
+
+以下为合成示例，可保存到独立测试目录的 `multimodal-snapshot.json`。输入是一个普通 UTF-8 JSON 数组，不是逐行 JSON 或 gzip：
+
+```json
+[
+  {
+    "memory_id": "mm_0123456789abcdef_1791200000",
+    "modality": "visual",
+    "text_content": "旅行照片的说明。",
+    "audio_features": null,
+    "visual_features": {
+      "description": "山边的湖泊",
+      "objects": [{"name": "湖泊", "details": {"season": "autumn"}}]
+    },
+    "timestamp": 1791200000.125,
+    "importance_score": 0.7,
+    "access_count": 3,
+    "tags": ["旅行"],
+    "metadata": {"source": "manual-fixture"}
+  }
+]
+```
+
+在仓库根目录构建过迁移程序后，使用独立输入和未存在的输出路径：
+
+```powershell
+.\target\debug\ai-ex-migrate.exe --multimodal-memory --input .\test-data\multimodal-snapshot.json --output .\test-data\multimodal-import.jsonl --profile memory-import-test
+```
+
+工具不改写输入、不覆盖已有输出，也不自动合并正在使用的记忆文件。可用独立测试配置指向生成的 JSONL，并选择相同 `profile_id` 核对；不要把示例直接写入日常记忆路径。该模式与 `--memory-backup` 互斥，不接受 `--utc-offset-minutes` 或 `--embedding-space`。
+
+| 输入字段 | 转换与校验 |
+| --- | --- |
+| `memory_id` | 必填；UUID 直接保留，旧 `mm_<16 位十六进制>_<整数秒>` ID 映射为稳定 UUID；重复 ID 拒绝 |
+| `modality` | 必填，`text` / `audio` / `visual` / `multimodal`；特征对象的组合规则见[控制协议](../docs/CONTROL_PROTOCOL.md#记忆管理) |
+| `text_content` | 最多 4096 个字符；文本类型须非空，其他类型缺少正文时使用对应观察占位描述 |
+| `audio_features` / `visual_features` / `metadata` | 保留嵌套 JSON 对象；两种特征可用 `null` 表示缺省，元数据默认空对象 |
+| `timestamp` | 必填，非负 epoch 秒数，可有小数；转换为毫秒，截去不足毫秒的部分，不接受本地日期字符串 |
+| `importance_score` | 0–1，默认 0.5；四舍五入映射到 `importance` 的 0–1000 |
+| `tags` | 默认空数组，最多 16 个非空标签，每个最多 64 个字符 |
+| `access_count` | 非负整数，默认 0；作为原始快照数据保留，不代表 Rust 已实现访问频次更新或衰减 |
+
+每条记录的 `knowledge.media` 保存可查询和编辑的媒体信息，完整原始快照另存到 `legacy_metadata`，包括原 ID、访问计数和时间；不会向原媒体 `metadata` 注入保留字段。导入来源统一为 `automatic`，不会因旧元数据而升级成确认笔记，也不从媒体描述提取用户姓名或偏好。
+
+输入和输出分别最多 32 MiB，输入最多 50,000 条记录；每条媒体对象序列化最多 8192 字节。无效字段、重复 JSON 键、过深嵌套和超限数据会拒绝整个导入。原始图像、音频文件及其识别模型不在此格式或工具范围内。

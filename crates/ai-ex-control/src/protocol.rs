@@ -104,6 +104,7 @@ mod memory_protocol_tests {
                 total: 20,
                 offset: 12,
                 truncated_ids: vec![id],
+                knowledge: Default::default(),
                 entries: vec![MemoryEntry {
                     id,
                     profile_id: "partner".to_owned(),

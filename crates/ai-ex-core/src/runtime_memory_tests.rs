@@ -32,6 +32,7 @@ impl MemoryPort for ManagedMemory {
                 offset: 0,
                 entries: Vec::new(),
                 truncated_ids: Vec::new(),
+                knowledge: Default::default(),
             })
         })
     }

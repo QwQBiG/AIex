@@ -164,7 +164,7 @@ fn main() {
         std::env::consts::ARCH
     );
     println!(
-        "Synthetic lexical retrieval only; warm filesystem cache; startup includes JSONL parsing and new term-cache construction, excludes destruction."
+        "Synthetic lexical retrieval only; warm filesystem cache; startup includes JSONL parsing, entity extraction and term-cache construction; rules are warm; excludes destruction."
     );
     println!(
         "records,old_open_median_us,cached_open_median_us,old_recall_median_us,cached_recall_median_us,recall_speedup"

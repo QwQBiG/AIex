@@ -281,7 +281,11 @@ fn timestamp_ms(value: &str, utc_offset: Option<i16>) -> Result<u128, AppError> 
         .map_err(|_| AppError::configuration("timestamps before the Unix epoch are unsupported"))?;
     Ok(nanos / 1_000_000)
 }
-fn canonical_json(value: &RawValue, output: &mut String, depth: usize) -> Result<(), AppError> {
+pub(super) fn canonical_json(
+    value: &RawValue,
+    output: &mut String,
+    depth: usize,
+) -> Result<(), AppError> {
     if depth > 64 {
         return Err(AppError::configuration(
             "memory backup nesting exceeds 64 levels",

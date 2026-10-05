@@ -119,6 +119,7 @@ impl Drop for ServiceProcess {
             "stdout.log",
             "stderr.log",
             "memory.jsonl",
+            "memory.jsonl.lock",
         ] {
             let _ignored = fs::remove_file(self.directory.join(name));
         }

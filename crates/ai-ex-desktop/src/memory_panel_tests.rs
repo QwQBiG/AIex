@@ -23,6 +23,7 @@ fn page(profile_id: &str) -> MemoryResponse {
         offset: 0,
         entries: vec![],
         truncated_ids: vec![],
+        knowledge: Default::default(),
     })
 }
 

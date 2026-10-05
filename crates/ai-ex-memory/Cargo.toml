@@ -11,6 +11,7 @@ ai-ex-domain = { path = "../ai-ex-domain" }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+regex = "=1.13.1"
 tokio.workspace = true
 uuid.workspace = true
 

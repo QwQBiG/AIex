@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod entities;
+mod knowledge;
 mod management;
+pub use knowledge::{MediaStats, observation_media};
 mod record;
 mod retrieval;
 mod writer;
@@ -185,6 +188,31 @@ impl MemoryStore {
         user_text: String,
         assistant_text: String,
     ) -> Result<(), AppError> {
+        self.remember_enriched(kind, turn_id, user_text, assistant_text, None)
+            .await
+    }
+
+    /// Record an observed caption/transcript and structured features without reading devices.
+    pub async fn remember_media(
+        &mut self,
+        kind: MemoryKind,
+        turn_id: TurnId,
+        text: String,
+        media: ai_ex_domain::MemoryMedia,
+    ) -> Result<(), AppError> {
+        media.validate()?;
+        self.remember_enriched(kind, turn_id, text, String::new(), Some(media))
+            .await
+    }
+
+    async fn remember_enriched(
+        &mut self,
+        kind: MemoryKind,
+        turn_id: TurnId,
+        user_text: String,
+        assistant_text: String,
+        media: Option<ai_ex_domain::MemoryMedia>,
+    ) -> Result<(), AppError> {
         if !self.inner.enabled {
             return Ok(());
         }
@@ -211,6 +239,7 @@ impl MemoryStore {
             source: MemorySource::Automatic,
             revision: 1,
         });
+        record.knowledge.media = media;
         self.enrich(&mut record).await?;
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
