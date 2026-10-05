@@ -8,6 +8,10 @@
 
 [下载 Windows 便携包](https://github.com/QwQBiG/AIA/releases/download/v0.7.1-alpha.1/AIex-Windows-x64-0.7.1-alpha.1.zip) · [查看发布与校验文件](https://github.com/QwQBiG/AIA/releases/tag/v0.7.1-alpha.1)
 
+## 完全 Rust 化进展
+
+当前运行与构建已使用 Rust，旧 Python 源码仍在逐功能迁移。新增离线配置校验、旧记忆备份转 Rust JSONL、语音清洗与分句基准见[迁移记录](docs/RUST_ONLY_MIGRATION.md)。这批本地改动尚未发布，也不代表已清除全部 Python。
+
 ## 这次维护更新
 
 0.7.1 整理了各页面共用的界面模块，强化包名、路径与依赖方向检查，并补齐[项目目录](docs/PROJECT_LAYOUT.md)和维护入口。人物、对话、场景与记忆流程保持一致，现有数据格式继续沿用。

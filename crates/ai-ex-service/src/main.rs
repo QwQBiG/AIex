@@ -125,6 +125,10 @@ async fn run() -> Result<(), AppError> {
     }
     let args = Args::parse(arguments)?;
     let config = AppConfig::load(&args.config).await?;
+    if args.validate_config {
+        println!("Configuration is valid (offline; no services or credentials accessed).");
+        return Ok(());
+    }
     if (args.serve || args.managed) && !config.control.enabled {
         return Err(AppError::configuration(
             "--serve and --managed require control.enabled = true",

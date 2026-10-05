@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
 
 mod legacy;
+mod legacy_memory;
 
 use std::path::{Path, PathBuf};
 
 use ai_ex_domain::AppError;
 use legacy::LegacyConfig;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 #[tokio::main]
@@ -18,7 +19,24 @@ async fn main() {
 }
 
 async fn run() -> Result<(), AppError> {
-    let (input, output) = parse_args(std::env::args().skip(1))?;
+    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments == ["--version"] {
+        println!("ai-ex-migrate {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if arguments == ["--help"] || arguments == ["-h"] {
+        println!(
+            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES]\nOutputs must be new files. Sources are retained; memory embeddings stay in the source backup."
+        );
+        return Ok(());
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "--memory-backup")
+    {
+        return migrate_memory(arguments.into_iter().skip(1)).await;
+    }
+    let (input, output) = parse_args(arguments.into_iter())?;
     if tokio::fs::try_exists(&output)
         .await
         .map_err(|error| AppError::unavailable(format!("cannot inspect output path: {error}")))?
@@ -28,11 +46,26 @@ async fn run() -> Result<(), AppError> {
             output.display(),
         )));
     }
-    let content = tokio::fs::read_to_string(&input).await.map_err(|error| {
-        AppError::configuration(format!("cannot read {}: {error}", input.display()))
+    let file = tokio::fs::File::open(&input)
+        .await
+        .map_err(|error| AppError::configuration(format!("cannot open input: {error}")))?;
+    let mut content = Vec::new();
+    file.take((ai_ex_config::MAX_CONFIG_BYTES + 1) as u64)
+        .read_to_end(&mut content)
+        .await
+        .map_err(|error| AppError::configuration(format!("cannot read input: {error}")))?;
+    if content.len() > ai_ex_config::MAX_CONFIG_BYTES {
+        return Err(AppError::configuration(
+            "legacy configuration exceeds 1 MiB",
+        ));
+    }
+    let legacy: LegacyConfig = serde_json::from_slice(&content).map_err(|error| {
+        AppError::configuration(format!(
+            "invalid legacy JSON at line {} column {}",
+            error.line(),
+            error.column()
+        ))
     })?;
-    let legacy: LegacyConfig = serde_json::from_str(&content)
-        .map_err(|error| AppError::configuration(format!("invalid legacy JSON: {error}")))?;
     let migration = legacy.migrate();
     migration.config.validate()?;
     let output_content = toml::to_string_pretty(&migration.config)
@@ -93,7 +126,9 @@ async fn write_new_atomic(path: &Path, content: &[u8]) -> Result<(), AppError> {
         file.flush().await?;
         file.sync_data().await?;
         drop(file);
-        tokio::fs::rename(&temporary, path).await
+        // Publish the fully synced file without replacing a concurrent destination.
+        // Both paths are siblings, so they are on the same filesystem.
+        tokio::fs::hard_link(&temporary, path).await
     }
     .await;
     if let Err(error) = result {
@@ -102,6 +137,49 @@ async fn write_new_atomic(path: &Path, content: &[u8]) -> Result<(), AppError> {
             "cannot commit migrated config: {error}"
         )));
     }
+    let _ignored = tokio::fs::remove_file(&temporary).await;
+    Ok(())
+}
+
+async fn migrate_memory(arguments: impl Iterator<Item = String>) -> Result<(), AppError> {
+    let mut input = None;
+    let mut output = None;
+    let mut profile = None;
+    let mut utc_offset = None;
+    let mut arguments = arguments;
+    while let Some(argument) = arguments.next() {
+        let value = arguments
+            .next()
+            .ok_or_else(|| AppError::configuration("memory migration option requires a value"))?;
+        match argument.as_str() {
+            "--input" => input = Some(PathBuf::from(value)),
+            "--output" => output = Some(PathBuf::from(value)),
+            "--profile" => profile = Some(value),
+            "--utc-offset-minutes" => {
+                utc_offset = Some(
+                    value
+                        .parse::<i16>()
+                        .map_err(|_| AppError::configuration("invalid UTC offset"))?,
+                )
+            }
+            _ => return Err(AppError::configuration("unknown memory migration option")),
+        }
+    }
+    let input = input.ok_or_else(|| AppError::configuration("--memory-backup requires --input"))?;
+    let output =
+        output.ok_or_else(|| AppError::configuration("--memory-backup requires --output"))?;
+    let profile =
+        profile.ok_or_else(|| AppError::configuration("--memory-backup requires --profile"))?;
+    let content = tokio::task::spawn_blocking(move || {
+        legacy_memory::import_backup(&input, &profile, utc_offset)
+    })
+    .await
+    .map_err(|_| AppError::unavailable("memory import worker failed"))??;
+    write_new_atomic(&output, &content).await?;
+    println!(
+        "Migrated memory projection written to {}. The source backup is unchanged; embeddings and auxiliary metadata stay in that backup. Imported records remain automatic, not confirmed facts.",
+        output.display()
+    );
     Ok(())
 }
 
@@ -125,5 +203,55 @@ mod tests {
     #[test]
     fn rejects_unknown_argument() {
         assert!(parse_args(["--force", "yes"].into_iter().map(str::to_owned)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn refuses_destinations_created_after_the_initial_check() {
+        let directory = std::env::temp_dir().join(format!("aiex-migrate-{}", Uuid::new_v4()));
+        tokio::fs::create_dir(&directory).await.unwrap();
+        let output = directory.join("existing.toml");
+        tokio::fs::write(&output, b"keep this concurrent file")
+            .await
+            .unwrap();
+        assert!(write_new_atomic(&output, b"replacement").await.is_err());
+        assert_eq!(
+            tokio::fs::read(&output).await.unwrap(),
+            b"keep this concurrent file"
+        );
+        let mut entries = tokio::fs::read_dir(&directory).await.unwrap();
+        assert!(entries.next_entry().await.unwrap().is_some());
+        assert!(entries.next_entry().await.unwrap().is_none());
+        tokio::fs::remove_file(&output).await.unwrap();
+        tokio::fs::remove_dir(&directory).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn exactly_one_concurrent_publication_wins() {
+        let directory = std::env::temp_dir().join(format!("aiex-migrate-{}", Uuid::new_v4()));
+        tokio::fs::create_dir(&directory).await.unwrap();
+        let output = directory.join("config.toml");
+        let (first, second) = tokio::join!(
+            write_new_atomic(&output, b"first"),
+            write_new_atomic(&output, b"second")
+        );
+        assert_ne!(first.is_ok(), second.is_ok());
+        assert_eq!(
+            tokio::fs::read(&output).await.unwrap(),
+            if first.is_ok() {
+                b"first".as_slice()
+            } else {
+                b"second".as_slice()
+            }
+        );
+        let mut entries = tokio::fs::read_dir(&directory).await.unwrap();
+        assert!(entries.next_entry().await.unwrap().is_some());
+        assert!(entries.next_entry().await.unwrap().is_none());
+        tokio::fs::remove_file(&output).await.unwrap();
+        tokio::fs::remove_dir(&directory).await.unwrap();
     }
 }

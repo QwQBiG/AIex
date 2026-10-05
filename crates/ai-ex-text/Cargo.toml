@@ -10,3 +10,7 @@ ai-ex-domain = { path = "../ai-ex-domain" }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "sentence_stream"
+harness = false

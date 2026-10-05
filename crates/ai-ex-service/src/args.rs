@@ -6,6 +6,7 @@ use ai_ex_domain::AppError;
 pub struct Args {
     pub config: PathBuf,
     pub check: bool,
+    pub validate_config: bool,
     pub serve: bool,
     pub managed: bool,
     pub prompt: Option<String>,
@@ -21,6 +22,7 @@ impl Args {
     pub fn parse(values: impl IntoIterator<Item = String>) -> Result<Self, AppError> {
         let mut config = PathBuf::from("config/ai-ex.example.toml");
         let mut check = false;
+        let mut validate_config = false;
         let mut serve = false;
         let mut managed = false;
         let mut prompt = None;
@@ -40,6 +42,7 @@ impl Args {
                     config = PathBuf::from(path);
                 }
                 "--check" => check = true,
+                "--validate-config" => validate_config = true,
                 "--serve" => serve = true,
                 "--managed" => managed = true,
                 "--replay-events" => {
@@ -87,7 +90,7 @@ impl Args {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::configuration(
-                        "usage: ai-ex-service [--config PATH] [--serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --prompt TEXT | \
+                        "usage: ai-ex-service [--config PATH] [--validate-config | --serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --prompt TEXT | \
                          --vision-image PATH --vision-prompt TEXT]",
                     ));
                 }
@@ -108,7 +111,8 @@ impl Args {
                 "--vision-image and --vision-prompt must be used together",
             ));
         }
-        let selected_modes = usize::from(check)
+        let selected_modes = usize::from(validate_config)
+            + usize::from(check)
             + usize::from(serve)
             + usize::from(managed)
             + usize::from(replay_events.is_some())
@@ -118,12 +122,13 @@ impl Args {
             + usize::from(vision_image.is_some());
         if selected_modes > 1 {
             return Err(AppError::configuration(
-                "--serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --prompt, and vision analysis modes are mutually exclusive",
+                "--validate-config, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --prompt, and vision analysis modes are mutually exclusive",
             ));
         }
         Ok(Self {
             config,
             check,
+            validate_config,
             serve,
             managed,
             prompt,
@@ -235,5 +240,34 @@ mod tests {
             ])
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod offline_validation_tests {
+    use super::*;
+
+    #[test]
+    fn offline_validation_is_an_exclusive_mode() {
+        assert!(
+            Args::parse(["--validate-config".to_owned()])
+                .unwrap()
+                .validate_config
+        );
+        for other in [
+            vec!["--check"],
+            vec!["--serve"],
+            vec!["--managed"],
+            vec!["--prompt", "hello"],
+            vec!["--replay-events", "events.jsonl"],
+            vec!["--replay-automation", "automation.jsonl"],
+            vec!["--replay-stage", "stage.jsonl"],
+            vec!["--vision-image", "image.png", "--vision-prompt", "describe"],
+        ] {
+            let values = std::iter::once("--validate-config")
+                .chain(other)
+                .map(str::to_owned);
+            assert!(Args::parse(values).is_err());
+        }
     }
 }

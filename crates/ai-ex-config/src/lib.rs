@@ -8,8 +8,13 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::Path;
 
+use tokio::io::AsyncReadExt;
+
 use ai_ex_domain::{AppError, Emotion, LiveResponseMode};
 use serde::{Deserialize, Serialize};
+
+/// Upper bound for startup configuration, including unknown extension fields.
+pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -43,8 +48,15 @@ impl AppConfig {
     }
 
     pub fn merge_toml(&self, source: &str) -> Result<String, AppError> {
-        let mut document: toml::Value = toml::from_str(source)
-            .map_err(|error| AppError::configuration(format!("invalid existing TOML: {error}")))?;
+        if source.len() > MAX_CONFIG_BYTES {
+            return Err(AppError::configuration("configuration exceeds 1 MiB"));
+        }
+        let mut document: toml::Value = toml::from_str(source).map_err(|error| {
+            AppError::configuration(format!(
+                "invalid existing TOML at byte range {:?}",
+                error.span()
+            ))
+        })?;
         let updated = toml::from_str(&self.to_toml()?)
             .map_err(|error| AppError::configuration(format!("cannot merge TOML: {error}")))?;
         let previous = toml::from_str(&Self::parse(source)?.to_toml()?).map_err(|error| {
@@ -56,15 +68,29 @@ impl AppConfig {
     }
     pub async fn load(path: impl AsRef<Path>) -> Result<Self, AppError> {
         let path = path.as_ref();
-        let content = tokio::fs::read_to_string(path).await.map_err(|error| {
-            AppError::configuration(format!("cannot read {}: {error}", path.display()))
-        })?;
-        Self::parse(&content)
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|error| AppError::configuration(format!("cannot open config: {error}")))?;
+        let mut content = Vec::new();
+        file.take((MAX_CONFIG_BYTES + 1) as u64)
+            .read_to_end(&mut content)
+            .await
+            .map_err(|error| AppError::configuration(format!("cannot read config: {error}")))?;
+        if content.len() > MAX_CONFIG_BYTES {
+            return Err(AppError::configuration("configuration exceeds 1 MiB"));
+        }
+        let content = std::str::from_utf8(&content)
+            .map_err(|_| AppError::configuration("configuration is not valid UTF-8"))?;
+        Self::parse(content)
     }
 
     pub fn parse(content: &str) -> Result<Self, AppError> {
-        let config: Self = toml::from_str(content)
-            .map_err(|error| AppError::configuration(format!("invalid TOML: {error}")))?;
+        if content.len() > MAX_CONFIG_BYTES {
+            return Err(AppError::configuration("configuration exceeds 1 MiB"));
+        }
+        let config: Self = toml::from_str(content).map_err(|error| {
+            AppError::configuration(format!("invalid TOML at byte range {:?}", error.span()))
+        })?;
         config.validate()?;
         Ok(config)
     }
@@ -843,5 +869,57 @@ mod tests {
             .expect("KoboldCpp configuration parses");
 
         assert_eq!(config.model.backend, ModelBackend::KoboldCpp);
+    }
+}
+
+#[cfg(test)]
+mod input_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn syntax_errors_do_not_echo_private_values() {
+        let sentinel = "synthetic-private-marker";
+        for input in [
+            format!("[model]\nbackend = '{sentinel}'"),
+            format!("unknown = '{sentinel}\n"),
+        ] {
+            let error = AppConfig::parse(&input).unwrap_err();
+            assert!(!error.to_string().contains(sentinel));
+            let error = AppConfig::default().merge_toml(&input).unwrap_err();
+            assert!(!error.to_string().contains(sentinel));
+        }
+    }
+
+    #[tokio::test]
+    async fn file_and_in_memory_inputs_enforce_the_same_limit() {
+        let oversized = " ".repeat(MAX_CONFIG_BYTES + 1);
+        assert!(AppConfig::parse(&oversized).is_err());
+        assert!(AppConfig::default().merge_toml(&oversized).is_err());
+        let path = std::env::temp_dir().join(format!(
+            "aiex-config-boundary-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        tokio::fs::write(&path, &oversized).await.unwrap();
+        assert!(
+            AppConfig::load(&path)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("1 MiB")
+        );
+        tokio::fs::write(&path, [0xff]).await.unwrap();
+        assert!(
+            AppConfig::load(&path)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("UTF-8")
+        );
+        tokio::fs::remove_file(path).await.unwrap();
+        assert!(AppConfig::parse(&" ".repeat(MAX_CONFIG_BYTES)).is_ok());
     }
 }

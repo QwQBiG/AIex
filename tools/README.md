@@ -62,3 +62,7 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 | [list_vts_hotkeys.py](list_vts_hotkeys.py) | 连接 VTube Studio，获取当前模型的热键信息。 |
 
 排查当前版本优先使用[整体验收流程](../docs/MANUAL_TEST_PLAN.md)及桌面设置与诊断。旧脚本依赖 [`src/`](../src/README.md) 与历史 Python 环境；运行前应先阅读对应源码，核对配置写入、服务连接和设备操作。
+
+## Rust 离线迁移与检查
+
+新增 `ai-ex-service --validate-config` 离线验证和 `ai-ex-migrate --memory-backup` 旧备份文本迁移；使用步骤、格式与数据边界见[完全 Rust 化记录](../docs/RUST_ONLY_MIGRATION.md)。语句分块的 Release 对照基准在 `crates/ai-ex-text/benches/sentence_stream.rs`，由 Cargo 执行，不需要 Python。
