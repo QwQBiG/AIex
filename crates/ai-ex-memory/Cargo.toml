@@ -16,3 +16,7 @@ uuid.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "recall"
+harness = false

@@ -54,7 +54,7 @@ live_mode = "controlled"
 
 旧版本没有 `kind` 的 JSONL 记录会自动视为 `conversation`，无需迁移文件。
 
-运行时上下文不会把所有分类无边界地塞给模型：默认上下文只检索 `conversation`、`persona` 和 `viewer`，排除 `live_event` 原始记录；每次仍受 `memory_recall_limit` 上限约束。这样可以保留观众关系，又避免直播事件日志无限扩大上下文。需要审计或回放时，再通过分类 API 单独检索 `live_event`。`MemoryPort::recall_for_context` 是核心的可替换边界，未来可接向量检索或远程记忆而不修改 Runtime。
+运行时上下文不会把所有分类无边界地塞给模型：默认上下文只检索 `conversation`、`persona` 和 `viewer`，排除 `live_event` 原始记录；每次仍受 `memory_recall_limit` 上限约束。这样可以保留观众关系，又避免直播事件日志无限扩大上下文。需要审计或回放时，再通过分类 API 单独检索 `live_event`。`MemoryPort::recall_for_context` 是核心的可替换边界，现已通过可选 Ollama embedding 接入语义召回，配置、向量空间、重建和回退规则见[迁移记录](RUST_ONLY_MIGRATION.md#4-可选语义召回与显式重建)。
 
 对话召回优先选择当前角色的确认笔记，即使新问题没有复用相同关键词；多条笔记按更新时间等顺序排列，仍共同占用 `memory_recall_limit`，不会无限注入上下文。自动记录继续按相关性召回。旧记录缺少来源与记录版本时，按 `automatic` 和版本 `1` 读取，不会自动升级成确认事实。
 
@@ -65,7 +65,7 @@ live_mode = "controlled"
 - `export_kind`：导出指定分类到新的独立 JSONL，写入后同步落盘；目标已存在时拒绝覆盖，包括原始记忆文件。再次导出请使用新的文件名。
 - `clear_kind`：清除指定分类，保留其他分类。先向同目录的唯一临时文件写入并同步，再直接替换原文件；替换失败时保留原文件和内存记录，可解除文件占用后重试。不会覆盖已有的 `.jsonl.tmp` 文件。
 
-上述行为已覆盖 Windows 文件占用、重复导出、清空最后一类和重新打开文件的回归测试。当前存储仍以单个服务进程为写入方；多个独立进程同时修改同一个 JSONL、突然断电和进程强杀恢复尚未验收。
+上述行为已覆盖 Windows 文件占用、重复导出、清空最后一类和重新打开文件的回归测试。同一 JSONL 同时只允许一个独立写入方，由文件级写入锁阻止竞争修改；只读实例保留打开时快照，首次取得写入权时重新加载磁盘内容。突然断电和进程强杀恢复尚未验收。
 
 平台无关事件总线提供 `project_memory` 投影：聊天/关注/订阅进入 `viewer`，礼物/付费支持同时产生观众关系和 `live_event` 记录，游戏观察和系统通知进入 `live_event`；审核事件和定时器默认不写入记忆。服务层可以把投影交给 `MemoryStore::remember_projection`，模型 Provider 不需要了解事件或存储格式。所有自动响应仍继续受权限、冷却和急停策略约束。
 

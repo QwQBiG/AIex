@@ -40,7 +40,7 @@ use ai_ex_event_bus::{EventBus, EventPolicy, PublishOutcome, load_jsonl, project
 use ai_ex_koboldcpp::{KoboldCppClient, KoboldCppSettings};
 use ai_ex_memory::MemoryStore;
 use ai_ex_observability::{EventHub, TeeEventSink};
-use ai_ex_ollama::OllamaClient;
+use ai_ex_ollama::{OllamaClient, OllamaEmbeddingClient};
 use ai_ex_plugin::{PluginHealth, PluginRegistry, StdioPlugin};
 use ai_ex_safety::{Capability, SafetyGate, SafetyPolicy};
 use ai_ex_stage::{StageExecutor, StageRouter};
@@ -129,6 +129,18 @@ async fn run() -> Result<(), AppError> {
         println!("Configuration is valid (offline; no services or credentials accessed).");
         return Ok(());
     }
+    if args.reindex_memory {
+        if !config.memory.enabled || config.memory.embedding.is_none() {
+            return Err(AppError::configuration(
+                "--reindex-memory requires enabled memory and an explicit [memory.embedding] model",
+            ));
+        }
+        let mut memory = build_memory(&config).await?;
+        memory.select_profile(&config.persona.profile_id).await?;
+        let count = memory.reindex_embeddings().await?;
+        println!("Reindexed {count} memory record(s) for the configured persona.");
+        return Ok(());
+    }
     if (args.serve || args.managed) && !config.control.enabled {
         return Err(AppError::configuration(
             "--serve and --managed require control.enabled = true",
@@ -178,11 +190,7 @@ async fn run() -> Result<(), AppError> {
     let audit = build_audit(&config).await?;
     let plugin_runtime = connect_plugins(&config.plugins).await;
 
-    let memory = if config.memory.enabled {
-        MemoryStore::open(&config.memory.path).await?
-    } else {
-        MemoryStore::disabled()
-    };
+    let memory = build_memory(&config).await?;
     memory.select_profile(&config.persona.profile_id).await?;
 
     if args.check {
@@ -1023,6 +1031,21 @@ async fn run_speech_worker(
     }
 }
 
+async fn build_memory(config: &AppConfig) -> Result<MemoryStore, AppError> {
+    if !config.memory.enabled {
+        return Ok(MemoryStore::disabled());
+    }
+    let memory = MemoryStore::open(&config.memory.path).await?;
+    match &config.memory.embedding {
+        Some(settings) => Ok(memory.with_embedder(Arc::new(OllamaEmbeddingClient::new(
+            &settings.base_url,
+            &settings.model,
+            &settings.space,
+            Duration::from_secs(settings.timeout_seconds),
+        )?))),
+        None => Ok(memory),
+    }
+}
 async fn build_tts(config: &AppConfig) -> Result<Option<GptSovitsClient>, AppError> {
     if !config.tts.enabled {
         return Ok(None);

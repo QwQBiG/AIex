@@ -6,16 +6,17 @@ use ai_ex_domain::{AppError, MemoryEntry, MemoryKind, MemorySource, TurnId};
 use flate2::read::MultiGzDecoder;
 use ring::digest::{SHA256, digest};
 use serde::{
-    Deserialize, Deserializer,
+    Deserialize, Deserializer, Serialize,
     de::{MapAccess, SeqAccess, Visitor},
 };
-use serde_json::{Value, value::RawValue};
+use serde_json::{Map, Value, value::RawValue};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 const MAX_BACKUP_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_RECORDS: usize = 50_000;
 const MAX_RECORD_TEXT_BYTES: usize = 128 * 1024;
+const MAX_EMBEDDING_DIMENSIONS: usize = 8192;
 
 #[derive(Deserialize)]
 struct Backup {
@@ -29,13 +30,31 @@ struct Backup {
 struct LegacyMemory {
     id: Uuid,
     content: String,
-    metadata: Value,
+    metadata: Map<String, Value>,
+    #[serde(default)]
+    embedding: Option<Value>,
+}
+
+#[derive(Serialize)]
+struct ImportedEmbedding {
+    space: String,
+    values: Vec<f32>,
+}
+
+#[derive(Serialize)]
+struct ImportedMemory {
+    #[serde(flatten)]
+    entry: MemoryEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    embedding: Option<ImportedEmbedding>,
+    legacy_metadata: Map<String, Value>,
 }
 
 pub fn import_backup(
     path: &Path,
     profile: &str,
     utc_offset: Option<i16>,
+    embedding_space: Option<&str>,
 ) -> Result<Vec<u8>, AppError> {
     if profile.trim().is_empty() || profile.chars().count() > 128 {
         return Err(AppError::configuration(
@@ -73,7 +92,7 @@ pub fn import_backup(
     } else {
         read_bounded(reader, MAX_BACKUP_BYTES)?
     };
-    convert_backup(&content, profile, utc_offset)
+    convert_backup(&content, profile, utc_offset, embedding_space)
 }
 
 fn read_bounded(reader: impl Read, limit: u64) -> Result<Vec<u8>, AppError> {
@@ -94,7 +113,17 @@ fn convert_backup(
     content: &[u8],
     profile: &str,
     utc_offset: Option<i16>,
+    embedding_space: Option<&str>,
 ) -> Result<Vec<u8>, AppError> {
+    if embedding_space.is_some_and(|space| {
+        space.trim().is_empty()
+            || space.chars().count() > 256
+            || space.chars().any(char::is_control)
+    }) {
+        return Err(AppError::configuration(
+            "embedding space must be a nonempty identifier of at most 256 characters without control characters",
+        ));
+    }
     let root: Box<RawValue> = serde_json::from_slice(content)
         .map_err(|_| AppError::configuration("invalid legacy memory backup JSON"))?;
     let mut checked = String::new();
@@ -132,6 +161,7 @@ fn convert_backup(
     }
     let mut ids = BTreeSet::new();
     let mut output = Vec::new();
+    let mut embedding_dimensions = None;
     for (index, memory) in memories.into_iter().enumerate() {
         let fail =
             |reason| AppError::configuration(format!("memory record {}: {reason}", index + 1));
@@ -160,6 +190,9 @@ fn convert_backup(
         if user_text.len().saturating_add(assistant_text.len()) > MAX_RECORD_TEXT_BYTES {
             return Err(fail("text exceeds 128 KiB"));
         }
+        let embedding =
+            convert_embedding(memory.embedding, embedding_space, &mut embedding_dimensions)
+                .map_err(fail)?;
         let entry = MemoryEntry {
             id: memory.id,
             profile_id: profile.to_owned(),
@@ -173,7 +206,12 @@ fn convert_backup(
             source: MemorySource::Automatic,
             revision: 1,
         };
-        serde_json::to_writer(&mut output, &entry)
+        let imported = ImportedMemory {
+            entry,
+            embedding,
+            legacy_metadata: memory.metadata,
+        };
+        serde_json::to_writer(&mut output, &imported)
             .map_err(|_| AppError::protocol("cannot encode migrated memory"))?;
         output.push(b'\n');
         if output.len() as u64 > MAX_BACKUP_BYTES {
@@ -181,6 +219,46 @@ fn convert_backup(
         }
     }
     Ok(output)
+}
+
+fn convert_embedding(
+    embedding: Option<Value>,
+    space: Option<&str>,
+    dimensions: &mut Option<usize>,
+) -> Result<Option<ImportedEmbedding>, &'static str> {
+    let Some(embedding) = embedding else {
+        return Ok(None);
+    };
+    let values = embedding.as_array().ok_or("embedding must be an array")?;
+    // Missing, null and empty legacy embeddings all denote an unembedded record.
+    if values.is_empty() {
+        return Ok(None);
+    }
+    if values.len() > MAX_EMBEDDING_DIMENSIONS {
+        return Err("embedding exceeds 8192 dimensions");
+    }
+    let space = space.ok_or("--embedding-space is required for backups with embeddings")?;
+    if dimensions.is_some_and(|expected| expected != values.len()) {
+        return Err("embedding dimensions differ within the backup");
+    }
+    let values = values
+        .iter()
+        .map(|value| {
+            let number = value.as_f64().ok_or("embedding values must be numbers")? as f32;
+            if !number.is_finite() {
+                return Err("embedding values must be finite f32 numbers");
+            }
+            Ok(number)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !values.iter().any(|value| *value != 0.0) {
+        return Err("embedding must contain a nonzero f32 value");
+    }
+    *dimensions = Some(values.len());
+    Ok(Some(ImportedEmbedding {
+        space: space.to_owned(),
+        values,
+    }))
 }
 
 fn timestamp_ms(value: &str, utc_offset: Option<i16>) -> Result<u128, AppError> {
@@ -333,7 +411,7 @@ mod tests {
     }
 
     fn memory() -> Value {
-        json!({"id":"00000000-0000-4000-8000-000000000001", "content":"User: 茶\nAI: 好", "metadata":{"timestamp":"2026-10-05T12:00:00.123456","memory_type":"INTERACTION","user_input":"茶","ai_response":"好"},"embedding":[0.0,1e-05]})
+        json!({"id":"00000000-0000-4000-8000-000000000001", "content":"User: 茶\nAI: 好", "metadata":{"timestamp":"2026-10-05T12:00:00.123456","memory_type":"INTERACTION","user_input":"茶","ai_response":"好"}})
     }
 
     #[test]
@@ -349,14 +427,14 @@ mod tests {
         );
         // Frozen SHA-256 of the Python-compatible compact ASCII representation.
         let empty: Backup = serde_json::from_slice(br#"{"schema_version":"1.0","total_memories":0,"memories":[],"backup_integrity_hash":"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"}"#).unwrap();
-        assert!(convert_backup(&serde_json::to_vec(&json!({"schema_version":empty.schema_version,"total_memories":0,"memories":[],"backup_integrity_hash":empty.backup_integrity_hash})).unwrap(), "default", None).unwrap().is_empty());
+        assert!(convert_backup(&serde_json::to_vec(&json!({"schema_version":empty.schema_version,"total_memories":0,"memories":[],"backup_integrity_hash":empty.backup_integrity_hash})).unwrap(), "default", None, None).unwrap().is_empty());
     }
 
     #[test]
     fn preserves_identity_text_and_explicit_local_time_without_confirming_facts() {
         let source = fixture(json!([memory()]));
-        assert!(convert_backup(&source, "character-a", None).is_err());
-        let output = convert_backup(&source, "character-a", Some(480)).unwrap();
+        assert!(convert_backup(&source, "character-a", None, None).is_err());
+        let output = convert_backup(&source, "character-a", Some(480), None).unwrap();
         let entry: MemoryEntry = serde_json::from_slice(&output).unwrap();
         assert_eq!(entry.profile_id, "character-a");
         assert_eq!(entry.user_text, "茶");
@@ -365,7 +443,7 @@ mod tests {
         assert_eq!(entry.created_ms, 1_791_172_800_123);
         assert_eq!(
             output,
-            convert_backup(&source, "character-a", Some(480)).unwrap()
+            convert_backup(&source, "character-a", Some(480), None).unwrap()
         );
     }
 
@@ -375,15 +453,37 @@ mod tests {
         let mut corrupted: Value = serde_json::from_slice(&source).unwrap();
         corrupted["memories"][0]["content"] = json!("changed");
         assert!(
-            convert_backup(&serde_json::to_vec(&corrupted).unwrap(), "default", Some(0)).is_err()
+            convert_backup(
+                &serde_json::to_vec(&corrupted).unwrap(),
+                "default",
+                Some(0),
+                None
+            )
+            .is_err()
         );
-        assert!(convert_backup(&fixture(json!([memory(), memory()])), "default", Some(0)).is_err());
+        assert!(
+            convert_backup(
+                &fixture(json!([memory(), memory()])),
+                "default",
+                Some(0),
+                None
+            )
+            .is_err()
+        );
         let mut unsupported = memory();
         unsupported["metadata"]["memory_type"] = json!("UNKNOWN");
-        assert!(convert_backup(&fixture(json!([unsupported])), "default", Some(0)).is_err());
+        assert!(convert_backup(&fixture(json!([unsupported])), "default", Some(0), None).is_err());
         let mut count: Value = serde_json::from_slice(&source).unwrap();
         count["total_memories"] = json!(2);
-        assert!(convert_backup(&serde_json::to_vec(&count).unwrap(), "default", Some(0)).is_err());
+        assert!(
+            convert_backup(
+                &serde_json::to_vec(&count).unwrap(),
+                "default",
+                Some(0),
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -427,7 +527,7 @@ mod hostile_input_tests {
             r#"{"memories":[],"memories":[]}"#,
             r#"{"memories":[{"metadata":{"x":1,"x":2}}]}"#,
         ] {
-            assert!(convert_backup(source.as_bytes(), "default", None).is_err());
+            assert!(convert_backup(source.as_bytes(), "default", None, None).is_err());
         }
         let nested = format!("{}0{}", "[".repeat(66), "]".repeat(66));
         let raw = RawValue::from_string(nested).unwrap();
@@ -449,3 +549,7 @@ mod hostile_input_tests {
         assert!(timestamp_ms("1969-12-31T23:59:59.999999Z", None).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "legacy_memory_embedding_tests.rs"]
+mod embedding_tests;

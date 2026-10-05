@@ -14,7 +14,7 @@ fn validates_without_opening_models_memory_or_credentials() {
     ));
     fs::create_dir(&directory).unwrap();
     let config = directory.join("config.toml");
-    fs::write(&config, "[model]\nbackend = 'deepseek'\n[memory]\nenabled = true\npath = 'must-not-be-created.jsonl'\n[control]\nenabled = true\ntoken_path = 'missing-token'\n").unwrap();
+    fs::write(&config, "[model]\nbackend = 'deepseek'\n[memory]\nenabled = true\npath = 'must-not-be-created.jsonl'\n[memory.embedding]\nbase_url = 'http://127.0.0.1:1'\nmodel = 'offline-test'\nspace = 'offline-test-v1'\ntimeout_seconds = 1\n[control]\nenabled = true\ntoken_path = 'missing-token'\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_ai-ex-service"))
         .current_dir(&directory)
         .args(["--config", "config.toml", "--validate-config"])

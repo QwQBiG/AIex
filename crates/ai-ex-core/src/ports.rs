@@ -4,6 +4,13 @@ use ai_ex_domain::{
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+/// Optional semantic encoder. The stable space identifies the model revision and
+/// preprocessing shared by all comparable vectors; changing either needs a new space.
+#[async_trait]
+pub trait EmbeddingPort: Send + Sync {
+    fn space(&self) -> &str;
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, AppError>;
+}
 #[derive(Debug, Clone)]
 pub struct ModelRequest {
     pub turn_id: TurnId,

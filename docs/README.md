@@ -33,7 +33,7 @@
 
 ## 历史与迁移资料
 
-- [完全 Rust 化进展](RUST_ONLY_MIGRATION.md)：离线校验、旧记忆备份投影、语音清洗、实测分句基准与逐功能迁移合同。
+- [完全 Rust 化进展](RUST_ONLY_MIGRATION.md)：离线校验、旧备份与向量迁移、可选语义召回、原子重建、实测基准及逐功能迁移合同。
 
 [技术基线](CORE_TECHNICAL_BASELINE.md)、[Python 退役计划](LEGACY_RETIREMENT.md)、[0.7 一号人物与素材工作室](releases/0.7.0-alpha.1.md)、[0.6 二次元工作室](releases/0.6.0-alpha.1.md)、[0.5 记忆工作台](releases/0.5.0-alpha.1.md)、[0.4 人物工作室](releases/0.4.0-alpha.1.md)和[早期工作室说明](releases/0.2.0-alpha.1.md)保留历史进展。
 

@@ -10,7 +10,7 @@
 
 ## 完全 Rust 化进展
 
-当前运行与构建已使用 Rust，旧 Python 源码仍在逐功能迁移。新增离线配置校验、旧记忆备份转 Rust JSONL、语音清洗与分句基准见[迁移记录](docs/RUST_ONLY_MIGRATION.md)。这批本地改动尚未发布，也不代表已清除全部 Python。
+当前运行与构建已使用 Rust，旧 Python 源码仍在逐功能迁移。新增离线配置校验、旧备份向量与元数据迁移、可选语义召回、记忆重建及实测性能基准见[迁移记录](docs/RUST_ONLY_MIGRATION.md)。这批本地改动尚未发布，也不代表已清除全部 Python。
 
 ## 这次维护更新
 

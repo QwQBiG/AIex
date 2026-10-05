@@ -48,8 +48,10 @@ async fn profiles_isolate_recall_export_clear_and_survive_reopening() {
             .content
             .contains("tea")
     );
+    drop(store);
+    drop(live_writer);
     for file in [path, export] {
-        tokio::fs::remove_file(file).await.unwrap();
+        super::tests::remove_test_files(&file).await;
     }
     tokio::fs::remove_dir(directory).await.unwrap();
 }
@@ -75,7 +77,8 @@ async fn untagged_records_belong_only_to_default_profile() {
         tokio::fs::read_to_string(&path).await.unwrap(),
         format!("{legacy}\n")
     );
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&path).await;
 }
 
 #[tokio::test]
@@ -117,5 +120,6 @@ async fn switching_waits_for_a_pending_write_to_finish_in_its_original_scope() {
             .content
             .contains("original scope")
     );
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&path).await;
 }

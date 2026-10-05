@@ -7,6 +7,7 @@ pub struct Args {
     pub config: PathBuf,
     pub check: bool,
     pub validate_config: bool,
+    pub reindex_memory: bool,
     pub serve: bool,
     pub managed: bool,
     pub prompt: Option<String>,
@@ -23,6 +24,7 @@ impl Args {
         let mut config = PathBuf::from("config/ai-ex.example.toml");
         let mut check = false;
         let mut validate_config = false;
+        let mut reindex_memory = false;
         let mut serve = false;
         let mut managed = false;
         let mut prompt = None;
@@ -43,6 +45,7 @@ impl Args {
                 }
                 "--check" => check = true,
                 "--validate-config" => validate_config = true,
+                "--reindex-memory" => reindex_memory = true,
                 "--serve" => serve = true,
                 "--managed" => managed = true,
                 "--replay-events" => {
@@ -90,7 +93,7 @@ impl Args {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::configuration(
-                        "usage: ai-ex-service [--config PATH] [--validate-config | --serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --prompt TEXT | \
+                        "usage: ai-ex-service [--config PATH] [--validate-config | --reindex-memory | --serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --prompt TEXT | \
                          --vision-image PATH --vision-prompt TEXT]",
                     ));
                 }
@@ -112,6 +115,7 @@ impl Args {
             ));
         }
         let selected_modes = usize::from(validate_config)
+            + usize::from(reindex_memory)
             + usize::from(check)
             + usize::from(serve)
             + usize::from(managed)
@@ -122,13 +126,14 @@ impl Args {
             + usize::from(vision_image.is_some());
         if selected_modes > 1 {
             return Err(AppError::configuration(
-                "--validate-config, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --prompt, and vision analysis modes are mutually exclusive",
+                "--validate-config, --reindex-memory, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --prompt, and vision analysis modes are mutually exclusive",
             ));
         }
         Ok(Self {
             config,
             check,
             validate_config,
+            reindex_memory,
             serve,
             managed,
             prompt,
@@ -157,6 +162,33 @@ mod tests {
                 "--serve"
             };
             assert!(Args::parse([first.to_owned(), conflict.to_owned()]).is_err());
+        }
+    }
+
+    #[test]
+    fn reindex_memory_is_explicit_and_exclusive() {
+        assert!(
+            Args::parse(["--reindex-memory".to_owned()])
+                .unwrap()
+                .reindex_memory
+        );
+        for other in ["--check", "--serve", "--managed", "--validate-config"] {
+            assert!(Args::parse(["--reindex-memory".to_owned(), other.to_owned()]).is_err());
+        }
+        for other in [
+            "--replay-events",
+            "--replay-automation",
+            "--replay-stage",
+            "--prompt",
+        ] {
+            assert!(
+                Args::parse([
+                    "--reindex-memory".to_owned(),
+                    other.to_owned(),
+                    "value".to_owned()
+                ])
+                .is_err()
+            );
         }
     }
 

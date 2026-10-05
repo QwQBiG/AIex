@@ -26,7 +26,7 @@ async fn run() -> Result<(), AppError> {
     }
     if arguments == ["--help"] || arguments == ["-h"] {
         println!(
-            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES]\nOutputs must be new files. Sources are retained; memory embeddings stay in the source backup."
+            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nOutputs must be new files. Sources and complete metadata are retained. Backups with vectors require an explicit embedding space."
         );
         return Ok(());
     }
@@ -146,6 +146,7 @@ async fn migrate_memory(arguments: impl Iterator<Item = String>) -> Result<(), A
     let mut output = None;
     let mut profile = None;
     let mut utc_offset = None;
+    let mut embedding_space = None;
     let mut arguments = arguments;
     while let Some(argument) = arguments.next() {
         let value = arguments
@@ -155,6 +156,7 @@ async fn migrate_memory(arguments: impl Iterator<Item = String>) -> Result<(), A
             "--input" => input = Some(PathBuf::from(value)),
             "--output" => output = Some(PathBuf::from(value)),
             "--profile" => profile = Some(value),
+            "--embedding-space" => embedding_space = Some(value),
             "--utc-offset-minutes" => {
                 utc_offset = Some(
                     value
@@ -171,13 +173,13 @@ async fn migrate_memory(arguments: impl Iterator<Item = String>) -> Result<(), A
     let profile =
         profile.ok_or_else(|| AppError::configuration("--memory-backup requires --profile"))?;
     let content = tokio::task::spawn_blocking(move || {
-        legacy_memory::import_backup(&input, &profile, utc_offset)
+        legacy_memory::import_backup(&input, &profile, utc_offset, embedding_space.as_deref())
     })
     .await
     .map_err(|_| AppError::unavailable("memory import worker failed"))??;
     write_new_atomic(&output, &content).await?;
     println!(
-        "Migrated memory projection written to {}. The source backup is unchanged; embeddings and auxiliary metadata stay in that backup. Imported records remain automatic, not confirmed facts.",
+        "Migrated memories written to {} with legacy metadata and available embeddings. The source backup is unchanged. Imported records remain automatic, not confirmed facts.",
         output.display()
     );
     Ok(())

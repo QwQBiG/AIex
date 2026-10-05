@@ -4,6 +4,9 @@ pub mod appearance;
 pub mod character;
 pub mod scene;
 
+#[cfg(test)]
+mod memory_embedding_tests;
+
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -116,6 +119,9 @@ impl AppConfig {
     pub fn validate(&self) -> Result<(), AppError> {
         self.conversation.validate()?;
         self.persona.validate()?;
+        if let Some(embedding) = &self.memory.embedding {
+            embedding.validate()?;
+        }
         if self.model.backend == ModelBackend::DeepSeek {
             self.deepseek.validate()?;
         }
@@ -759,6 +765,37 @@ pub struct SafetyConfig {
 pub struct MemoryConfig {
     pub enabled: bool,
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<MemoryEmbeddingConfig>,
+}
+
+/// Explicit opt-in semantic model. A new model revision/preprocessing needs a new space.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryEmbeddingConfig {
+    pub base_url: String,
+    pub model: String,
+    pub space: String,
+    pub timeout_seconds: u64,
+}
+
+impl MemoryEmbeddingConfig {
+    fn validate(&self) -> Result<(), AppError> {
+        if !is_http_url(&self.base_url)
+            || self.base_url.chars().any(char::is_whitespace)
+            || self.base_url.contains(['@', '?', '#'])
+            || self.base_url.trim_end_matches('/').ends_with(':')
+            || self.model.trim().is_empty()
+            || self.model.chars().count() > 256
+            || self.space.trim().is_empty()
+            || self.space.chars().count() > 256
+            || !(1..=300).contains(&self.timeout_seconds)
+        {
+            return Err(AppError::configuration(
+                "memory.embedding requires an HTTP base URL without credentials, model and space of 1..=256 characters, and timeout_seconds in 1..=300",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -792,6 +829,7 @@ impl Default for MemoryConfig {
         Self {
             enabled: true,
             path: "memory_db/ai-ex.jsonl".to_owned(),
+            embedding: None,
         }
     }
 }

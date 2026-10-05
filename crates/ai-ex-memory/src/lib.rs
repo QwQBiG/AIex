@@ -2,6 +2,8 @@
 
 mod management;
 mod record;
+mod retrieval;
+mod writer;
 
 #[cfg(test)]
 mod persistence_tests;
@@ -18,17 +20,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ai_ex_core::MemoryPort;
 use ai_ex_domain::{
-    AppError, ComponentHealth, MemoryKind, MemoryProjection, MemorySource, Message, Role, TurnId,
+    AppError, ComponentHealth, MemoryEntry, MemoryKind, MemoryProjection, MemorySource, Message,
+    Role, TurnId,
 };
 use async_trait::async_trait;
 use record::MemoryRecord;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
+use writer::read_records;
 
 #[derive(Clone)]
 pub struct MemoryStore {
     inner: Arc<MemoryInner>,
+    embedder: Option<Arc<dyn ai_ex_core::EmbeddingPort>>,
 }
 
 struct MemoryInner {
@@ -36,35 +41,26 @@ struct MemoryInner {
     path: PathBuf,
     records: RwLock<Vec<MemoryRecord>>,
     write_lock: Mutex<()>,
+    writer_lease: Mutex<Option<std::fs::File>>,
     enabled: bool,
+    embedding_failed: RwLock<bool>,
 }
 
 impl MemoryStore {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, AppError> {
         let path = path.as_ref().to_owned();
-        let content = match tokio::fs::read_to_string(&path).await {
-            Ok(content) => content,
-            Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
-            Err(error) => return Err(AppError::unavailable(error.to_string())),
-        };
-        let mut records = Vec::new();
-        for (line_number, line) in content.lines().enumerate() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let record = serde_json::from_str(line).map_err(|error| {
-                AppError::protocol(format!("invalid memory line {}: {error}", line_number + 1))
-            })?;
-            records.push(record);
-        }
+        let records = read_records(&path).await?;
         Ok(Self {
             inner: Arc::new(MemoryInner {
                 profile_id: RwLock::new(record::default_profile()),
                 path,
                 records: RwLock::new(records),
                 write_lock: Mutex::new(()),
+                writer_lease: Mutex::new(None),
                 enabled: true,
+                embedding_failed: RwLock::new(false),
             }),
+            embedder: None,
         })
     }
 
@@ -75,8 +71,11 @@ impl MemoryStore {
                 path: PathBuf::new(),
                 records: RwLock::new(Vec::new()),
                 write_lock: Mutex::new(()),
+                writer_lease: Mutex::new(None),
                 enabled: false,
+                embedding_failed: RwLock::new(false),
             }),
+            embedder: None,
         }
     }
 
@@ -122,7 +121,36 @@ impl MemoryStore {
         ComponentHealth {
             component: "memory".to_owned(),
             ready: true,
-            detail: format!("{} record(s)", self.len().await),
+            detail: {
+                let profile_id = self.inner.profile_id.read().await;
+                let records = self.inner.records.read().await;
+                let scoped: Vec<_> = records
+                    .iter()
+                    .filter(|record| record.profile_id == *profile_id)
+                    .collect();
+                if let Some(provider) = &self.embedder {
+                    let indexed = scoped
+                        .iter()
+                        .filter(|record| {
+                            record
+                                .embedding
+                                .as_ref()
+                                .is_some_and(|embedding| embedding.space == provider.space())
+                        })
+                        .count();
+                    let state = if *self.inner.embedding_failed.read().await {
+                        "provider unavailable; lexical fallback"
+                    } else {
+                        "semantic + lexical"
+                    };
+                    format!(
+                        "{} record(s); {indexed} indexed in configured space; {state}",
+                        scoped.len()
+                    )
+                } else {
+                    format!("{} record(s); lexical retrieval", scoped.len())
+                }
+            },
         }
     }
 
@@ -132,40 +160,14 @@ impl MemoryStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<Message>, AppError> {
-        if !self.inner.enabled {
-            return Ok(Vec::new());
-        }
-        let profile_id = self.inner.profile_id.read().await;
-        let records = self.inner.records.read().await;
-        let mut ranked: Vec<_> = records
-            .iter()
-            .enumerate()
-            .filter(|(_, record)| record.profile_id == *profile_id)
-            .filter(|(_, record)| kind.is_none_or(|expected| record.kind == expected))
-            .filter_map(|(index, record)| {
-                let score = record::relevance(record, query);
-                (score > 0).then_some((
-                    (score, record.updated_ms.unwrap_or(record.created_ms), index),
-                    record,
-                ))
-            })
-            .collect();
-        ranked.sort_by_key(|item| std::cmp::Reverse(item.0));
-        Ok(ranked
-            .into_iter()
-            .take(limit)
-            .map(|(_score, record)| {
-                Message::new(
-                    Role::System,
-                    format!(
-                        "Relevant memory [{}] — User: {} Assistant: {}",
-                        record.kind.as_str(),
-                        record.user_text,
-                        record.assistant_text
-                    ),
-                )
-            })
-            .collect())
+        let kinds = kind.map(|kind| [kind]);
+        self.recall_filtered(
+            kinds.as_ref().map(|kinds| kinds.as_slice()),
+            query,
+            limit,
+            false,
+        )
+        .await
     }
 
     pub async fn recall_kinds(
@@ -174,53 +176,8 @@ impl MemoryStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<Message>, AppError> {
-        if !self.inner.enabled {
-            return Ok(Vec::new());
-        }
-        let profile_id = self.inner.profile_id.read().await;
-        let records = self.inner.records.read().await;
-        let mut ranked: Vec<_> = records
-            .iter()
-            .enumerate()
-            .filter(|(_, record)| record.profile_id == *profile_id)
-            .filter(|(_, record)| kinds.contains(&record.kind))
-            .filter_map(|(index, record)| {
-                let confirmed = record.source != MemorySource::Automatic;
-                let score = if confirmed {
-                    0
-                } else {
-                    record::relevance(record, query)
-                };
-                (confirmed || score > 0).then_some((
-                    (
-                        confirmed,
-                        score,
-                        record.updated_ms.unwrap_or(record.created_ms),
-                        index,
-                    ),
-                    record,
-                ))
-            })
-            .collect();
-        ranked.sort_by_key(|item| std::cmp::Reverse(item.0));
-        Ok(ranked
-            .into_iter()
-            .take(limit)
-            .map(|(_score, record)| {
-                Message::new(
-                    Role::System,
-                    format!(
-                        "Relevant context memory [{}; source={:?}] — User: {} Assistant: {}",
-                        record.kind.as_str(),
-                        record.source,
-                        record.user_text,
-                        record.assistant_text
-                    ),
-                )
-            })
-            .collect())
+        self.recall_filtered(Some(kinds), query, limit, true).await
     }
-
     pub async fn remember_kind(
         &mut self,
         kind: MemoryKind,
@@ -233,12 +190,13 @@ impl MemoryStore {
         }
         let profile_id = self.inner.profile_id.read().await;
         let _write_guard = self.inner.write_lock.lock().await;
+        self.ensure_writer().await?;
         if let Some(parent) = self.inner.path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|error| AppError::unavailable(error.to_string()))?;
         }
-        let record = MemoryRecord {
+        let mut record = MemoryRecord::new(MemoryEntry {
             profile_id: profile_id.clone(),
             id: Uuid::new_v4(),
             turn_id,
@@ -252,7 +210,8 @@ impl MemoryStore {
             updated_ms: None,
             source: MemorySource::Automatic,
             revision: 1,
-        };
+        });
+        self.enrich(&mut record).await?;
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -321,6 +280,7 @@ impl MemoryStore {
         }
         let profile_id = self.inner.profile_id.read().await;
         let _write_guard = self.inner.write_lock.lock().await;
+        self.ensure_writer().await?;
         let records = self.inner.records.read().await;
         let retained: Vec<_> = records
             .iter()
@@ -416,6 +376,19 @@ fn serialize_records(records: &[MemoryRecord]) -> Result<String, AppError> {
 mod tests {
     use super::*;
 
+    pub(super) async fn remove_test_files(path: &Path) {
+        tokio::fs::remove_file(path)
+            .await
+            .expect("test memory removed");
+        let mut lock_path = path.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        match tokio::fs::remove_file(PathBuf::from(lock_path)).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => panic!("test writer sidecar removal failed: {error}"),
+        }
+    }
+
     #[tokio::test]
     async fn persists_and_recalls_relevant_turns() {
         let path = std::env::temp_dir().join(format!("ai-ex-memory-{}.jsonl", Uuid::new_v4()));
@@ -433,9 +406,8 @@ mod tests {
 
         let reopened = MemoryStore::open(&path).await.expect("store reopens");
         assert_eq!(reopened.len().await, 1);
-        tokio::fs::remove_file(&path)
-            .await
-            .expect("temporary memory removed");
+        drop(store);
+        remove_test_files(&path).await;
     }
 
     #[tokio::test]
@@ -484,9 +456,8 @@ mod tests {
         let reopened = MemoryStore::open(&path).await.expect("store reopens");
         assert_eq!(reopened.count(Some(MemoryKind::Persona)).await, 1);
         assert_eq!(reopened.count(Some(MemoryKind::Viewer)).await, 0);
-        tokio::fs::remove_file(&path)
-            .await
-            .expect("temporary memory removed");
+        drop(store);
+        remove_test_files(&path).await;
         tokio::fs::remove_file(&export_path)
             .await
             .expect("temporary export removed");
@@ -518,9 +489,10 @@ mod tests {
             .await
             .expect("shared memory reopens");
         assert_eq!(reopened.len().await, 2);
-        tokio::fs::remove_file(&path)
-            .await
-            .expect("shared memory removed");
+        drop(first);
+        drop(second);
+        drop(store);
+        remove_test_files(&path).await;
     }
     #[tokio::test]
     async fn remembers_a_projected_live_event() {
@@ -539,9 +511,8 @@ mod tests {
             .await
             .expect("projection persists");
         assert_eq!(store.count(Some(MemoryKind::LiveEvent)).await, 1);
-        tokio::fs::remove_file(&path)
-            .await
-            .expect("projection memory removed");
+        drop(store);
+        remove_test_files(&path).await;
     }
     #[tokio::test]
     async fn reads_legacy_records_without_a_kind() {
@@ -558,9 +529,8 @@ mod tests {
             .expect("legacy memory written");
         let store = MemoryStore::open(&path).await.expect("legacy memory opens");
         assert_eq!(store.count(Some(MemoryKind::Conversation)).await, 1);
-        tokio::fs::remove_file(&path)
-            .await
-            .expect("legacy memory removed");
+        drop(store);
+        remove_test_files(&path).await;
     }
 
     #[tokio::test]
@@ -600,8 +570,7 @@ mod tests {
             .expect("context recall succeeds");
         assert_eq!(context.len(), 1);
         assert!(context[0].content.contains("对话记忆"));
-        tokio::fs::remove_file(&path)
-            .await
-            .expect("context memory removed");
+        drop(store);
+        remove_test_files(&path).await;
     }
 }

@@ -82,7 +82,8 @@ async fn confirmed_notes_survive_restart_without_a_matching_query_and_respect_bu
         .await
         .unwrap();
     assert!(recalled[2].content.contains("automatic old"));
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&path).await;
 }
 
 #[tokio::test]
@@ -125,6 +126,7 @@ async fn correction_replaces_automatic_content_and_forgetting_survives_reopening
     assert!(store.manage(forget(&original)).await.is_err());
     let disk = tokio::fs::read_to_string(&path).await.unwrap();
     assert!(!disk.contains("旧偏好") && !disk.contains("旧错误"));
+    drop(store);
     let mut reopened = MemoryStore::open(&path).await.unwrap();
     let recalled = reopened.recall_for_context("unrelated", 10).await.unwrap();
     assert_eq!(recalled.len(), 1);
@@ -132,7 +134,8 @@ async fn correction_replaces_automatic_content_and_forgetting_survives_reopening
     reopened.manage(forget(&changed)).await.unwrap();
     assert!(MemoryStore::open(&path).await.unwrap().is_empty().await);
     assert!(reopened.manage(forget(&changed)).await.is_err());
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(reopened);
+    super::tests::remove_test_files(&path).await;
 }
 
 #[tokio::test]
@@ -184,7 +187,8 @@ async fn pages_filter_actual_text_and_never_cross_profile_boundaries() {
     let mut reopened = MemoryStore::open(&path).await.unwrap();
     reopened.select_profile("other").await.unwrap();
     assert_eq!(page(&mut reopened, list("other", "", 0, 10)).await.total, 1);
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&path).await;
 }
 
 #[tokio::test]
@@ -211,7 +215,9 @@ async fn concurrent_edits_check_revision_after_obtaining_the_write_lock() {
             .entries,
         entries
     );
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(other);
+    drop(store);
+    super::tests::remove_test_files(&path).await;
 }
 
 #[tokio::test]
@@ -249,7 +255,8 @@ async fn old_records_expose_default_provenance_without_rewriting_the_file() {
     assert_eq!(entry.updated_ms, None);
     assert_eq!(entry.kind, MemoryKind::Conversation);
     assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), original);
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&path).await;
 }
 
 #[tokio::test]
@@ -289,7 +296,8 @@ async fn transport_budget_preserves_notes_and_marks_only_oversized_record_previe
     assert!(serde_json::to_vec(&large).unwrap().len() <= 48 * 1024);
     let raw = tokio::fs::read_to_string(&path).await.unwrap();
     assert!(raw.contains(&"x".repeat(100_000)));
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&path).await;
 }
 
 #[tokio::test]
@@ -303,7 +311,8 @@ async fn automatic_recall_breaks_equal_relevance_ties_by_recency() {
     }
     let recalled = store.recall_for_context("shared clue", 1).await.unwrap();
     assert!(recalled[0].content.ends_with("new"));
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&path).await;
 }
 
 #[cfg(windows)]
@@ -344,5 +353,6 @@ async fn failed_management_replacement_preserves_revision_and_allows_retry() {
             .revision,
         2
     );
-    tokio::fs::remove_file(path).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&path).await;
 }

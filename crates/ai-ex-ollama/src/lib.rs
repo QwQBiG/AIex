@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod embedding;
 mod protocol;
+
+pub use embedding::OllamaEmbeddingClient;
 
 use std::sync::Arc;
 use std::time::Duration;

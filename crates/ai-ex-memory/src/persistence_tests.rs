@@ -42,7 +42,8 @@ async fn export_rejects_existing_backup_and_source_without_changing_them() {
     );
     assert_eq!(tokio::fs::read(&backup).await.unwrap(), original);
     assert_eq!(MemoryStore::open(&backup).await.unwrap().len().await, 2);
-    tokio::fs::remove_file(source).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&source).await;
     tokio::fs::remove_file(backup).await.unwrap();
     tokio::fs::remove_dir(directory).await.unwrap();
 }
@@ -66,7 +67,8 @@ async fn clear_preserves_unrelated_temporary_file_and_can_clear_last_record() {
     assert_eq!(store.clear_kind(MemoryKind::Persona).await.unwrap(), 1);
     assert!(MemoryStore::open(&source).await.unwrap().is_empty().await);
     assert_eq!(store.clear_kind(MemoryKind::Persona).await.unwrap(), 0);
-    tokio::fs::remove_file(source).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&source).await;
     tokio::fs::remove_file(unrelated).await.unwrap();
     // A nonempty directory would also expose leaked replacement files.
     tokio::fs::remove_dir(directory).await.unwrap();
@@ -93,6 +95,7 @@ async fn failed_replacement_preserves_disk_and_memory_and_allows_retry() {
     drop(held);
     assert_eq!(store.clear_kind(MemoryKind::Viewer).await.unwrap(), 1);
     assert_eq!(MemoryStore::open(&source).await.unwrap().len().await, 1);
-    tokio::fs::remove_file(source).await.unwrap();
+    drop(store);
+    super::tests::remove_test_files(&source).await;
     tokio::fs::remove_dir(directory).await.unwrap();
 }

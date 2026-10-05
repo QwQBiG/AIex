@@ -65,4 +65,4 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 
 ## Rust 离线迁移与检查
 
-新增 `ai-ex-service --validate-config` 离线验证和 `ai-ex-migrate --memory-backup` 旧备份文本迁移；使用步骤、格式与数据边界见[完全 Rust 化记录](../docs/RUST_ONLY_MIGRATION.md)。语句分块的 Release 对照基准在 `crates/ai-ex-text/benches/sentence_stream.rs`，由 Cargo 执行，不需要 Python。
+新增 `ai-ex-service --validate-config` 离线验证和 `ai-ex-migrate --memory-backup` 旧备份文本/向量/元数据迁移与 `ai-ex-service --reindex-memory` 当前角色索引重建；使用步骤、格式与数据边界见[完全 Rust 化记录](../docs/RUST_ONLY_MIGRATION.md)。语句分块的 Release 对照基准在 `crates/ai-ex-text/benches/sentence_stream.rs`，记忆检索与启动缓存对照在 `crates/ai-ex-memory/benches/recall.rs`；均由 Cargo 执行，不需要 Python。

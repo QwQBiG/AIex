@@ -26,11 +26,7 @@ impl MemoryStore {
                 .enumerate()
                 .filter(|(_, entry)| entry.profile_id == *profile_id)
                 .filter(|(_, entry)| kind.is_none_or(|kind| kind == entry.kind))
-                .filter(|(_, entry)| {
-                    record::searchable_text(entry)
-                        .to_lowercase()
-                        .contains(&query)
-                })
+                .filter(|(_, entry)| entry.lowercase_text.contains(&query))
                 .collect();
             matches.sort_by_key(|(index, entry)| {
                 std::cmp::Reverse((entry.updated_ms.unwrap_or(entry.created_ms), *index))
@@ -44,7 +40,7 @@ impl MemoryStore {
                 truncated_ids: Vec::new(),
             };
             for (_, entry) in matches.into_iter().skip(offset).take(limit) {
-                page.entries.push(entry.clone());
+                page.entries.push(entry.entry.clone());
                 if serialized_size(&page)? <= 48 * 1024 {
                     continue;
                 }
@@ -63,24 +59,29 @@ impl MemoryStore {
             ));
         }
         let _write_guard = self.inner.write_lock.lock().await;
+        self.ensure_writer().await?;
         let mut records = self.inner.records.read().await.clone();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
         match request {
-            MemoryRequest::Remember { text, .. } => records.push(MemoryRecord {
-                id: Uuid::new_v4(),
-                profile_id: profile_id.clone(),
-                turn_id: TurnId::new(),
-                created_ms: now,
-                updated_ms: None,
-                kind: MemoryKind::Persona,
-                user_text: text.trim().to_owned(),
-                assistant_text: String::new(),
-                source: MemorySource::UserNote,
-                revision: 1,
-            }),
+            MemoryRequest::Remember { text, .. } => {
+                let mut record = MemoryRecord::new(MemoryEntry {
+                    id: Uuid::new_v4(),
+                    profile_id: profile_id.clone(),
+                    turn_id: TurnId::new(),
+                    created_ms: now,
+                    updated_ms: None,
+                    kind: MemoryKind::Persona,
+                    user_text: text.trim().to_owned(),
+                    assistant_text: String::new(),
+                    source: MemorySource::UserNote,
+                    revision: 1,
+                });
+                self.enrich(&mut record).await?;
+                records.push(record);
+            }
             MemoryRequest::Correct {
                 id,
                 expected_revision,
@@ -88,7 +89,7 @@ impl MemoryStore {
                 ..
             } => {
                 let index = find_record(&records, &profile_id, id, expected_revision)?;
-                let entry = &mut records[index];
+                let entry = &mut records[index].entry;
                 entry.revision = entry
                     .revision
                     .checked_add(1)
@@ -98,6 +99,8 @@ impl MemoryStore {
                 entry.kind = MemoryKind::Persona;
                 entry.source = MemorySource::UserCorrection;
                 entry.updated_ms = Some(now.max(entry.updated_ms.unwrap_or(entry.created_ms)));
+                records[index].legacy_metadata = None;
+                self.enrich(&mut records[index]).await?;
             }
             MemoryRequest::Forget {
                 id,
@@ -142,8 +145,8 @@ fn serialized_size(page: &MemoryPage) -> Result<usize, AppError> {
         .map_err(|error| AppError::protocol(error.to_string()))
 }
 
-fn preview_entry(entry: &MemoryRecord) -> MemoryRecord {
-    let mut preview = entry.clone();
+fn preview_entry(entry: &MemoryRecord) -> MemoryEntry {
+    let mut preview = entry.entry.clone();
     let user_budget = 4000 - entry.assistant_text.chars().take(2000).count();
     preview.user_text = entry.user_text.chars().take(user_budget).collect();
     let assistant_budget = 4000 - preview.user_text.chars().count();

@@ -13,7 +13,9 @@ mod stage_ports;
 pub use actor::{PendingTurn, RuntimeHandle, spawn_runtime};
 pub use engine::ConversationEngine;
 pub use policy::ConversationPolicy;
-pub use ports::{AvatarPort, EventSink, LanguageModelPort, MemoryPort, ModelRequest, SpeechPort};
+pub use ports::{
+    AvatarPort, EmbeddingPort, EventSink, LanguageModelPort, MemoryPort, ModelRequest, SpeechPort,
+};
 pub use protocol_adapter::LegacyModelBackend;
 pub use runtime::{Runtime, RuntimeControl, TurnOutcome};
 pub use stage_ports::{StageAvatarPort, StageJournal, StageOutput, StageSpeechPort};
