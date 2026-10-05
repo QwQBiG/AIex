@@ -144,20 +144,6 @@ crates/
 
 依赖方向固定为：`domain/text/duplex contracts → core → adapters → service`。网络、设备、数据库和 UI 不得反向进入领域层。
 
-## 代码规范
-
-控制流使用 Allman 大括号风格：
-
-```rust
-if is_ready()
-{
-    run();
-}
-else
-{
-    recover();
-}
-```
 
 不要运行会把控制流左花括号移回同一行的自动格式化。详细规则见 `CONTRIBUTING.md`。
 
