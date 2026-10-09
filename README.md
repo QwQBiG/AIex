@@ -1,3 +1,5 @@
+是为了消耗完我的剩余 token 而产生的项目（所以一开始是 py 之后在改为 Rust）
+
 # AIex
 
 AIex 是一个 Windows 优先、Rust-first 的本地 AI VTuber 运行时。新架构负责本地 LLM 流式对话、文本分句、持久记忆、语音队列、VTube Studio 控制和可观察性。
