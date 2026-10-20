@@ -115,3 +115,7 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 每条记录的 `knowledge.media` 保存可查询和编辑的媒体信息，完整原始快照另存到 `legacy_metadata`，包括原 ID、访问计数和时间；不会向原媒体 `metadata` 注入保留字段。导入来源统一为 `automatic`，不会因旧元数据而升级成确认笔记，也不从媒体描述提取用户姓名或偏好。
 
 输入和输出分别最多 32 MiB，输入最多 50,000 条记录；每条媒体对象序列化最多 8192 字节。无效字段、重复 JSON 键、过深嵌套和超限数据会拒绝整个导入。原始图像、音频文件及其识别模型不在此格式或工具范围内。
+
+### Chroma v2 快照桥接
+
+`ai-ex-migrate --chroma-export` 从明确指定的只读 v2 API 分页导出完整快照；`--chroma-snapshot` 将其中主记忆离线转换为新 JSONL。独立实体集合仅保留原始归档，不恢复实体图。操作、范围、固定 Rust CLI 版本和合成验收入口见 [Chroma 桥接说明](../docs/CHROMA_BRIDGE.md)。协议回归已通过，原生 SQLite/HNSW 临时库验收仍受官方二进制下载失败阻塞；不会自动启动 Python 或打开现用数据库。

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod chroma_bridge;
 mod legacy;
 mod legacy_memory;
 mod multimodal_memory;
@@ -27,7 +28,7 @@ async fn run() -> Result<(), AppError> {
     }
     if arguments == ["--help"] || arguments == ["-h"] {
         println!(
-            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nMultimodal dataclass snapshot: ai-ex-migrate --multimodal-memory --input SNAPSHOT.json --output NEW.jsonl --profile ID\nThis mode accepts explicitly exported dataclass JSON arrays, not an existing legacy backup format.\nOutputs must be new files. Sources and complete metadata are retained. Backups with vectors require an explicit embedding space."
+            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nMultimodal dataclass snapshot: ai-ex-migrate --multimodal-memory --input SNAPSHOT.json --output NEW.jsonl --profile ID\nThis mode accepts explicitly exported dataclass JSON arrays, not an existing legacy backup format.\nChroma export: ai-ex-migrate --chroma-export --url URL --collection NAME --tenant TENANT --database DATABASE --output SNAPSHOT.json [--entity-collection NAME]\nChroma snapshot: ai-ex-migrate --chroma-snapshot --input SNAPSHOT.json --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nThe Chroma bridge uses the read-only v2 API. Entity collections are archived only; their source graph is not restored.\nOutputs must be new files. Sources and complete metadata are retained. Backups with vectors require an explicit embedding space."
         );
         return Ok(());
     }
@@ -37,16 +38,21 @@ async fn run() -> Result<(), AppError> {
         .filter_map(|(index, value)| match value.as_str() {
             "--memory-backup" => Some((index, MemoryImportKind::Backup)),
             "--multimodal-memory" => Some((index, MemoryImportKind::Multimodal)),
+            "--chroma-snapshot" => Some((index, MemoryImportKind::ChromaSnapshot)),
+            "--chroma-export" => Some((index, MemoryImportKind::ChromaExport)),
             _ => None,
         })
         .collect();
     if memory_modes.len() > 1 {
         return Err(AppError::configuration(
-            "--memory-backup and --multimodal-memory are mutually exclusive and must not be repeated",
+            "migration modes are mutually exclusive and must not be repeated",
         ));
     }
     if let Some((index, mode)) = memory_modes.first().copied() {
         arguments.remove(index);
+        if mode == MemoryImportKind::ChromaExport {
+            return chroma_bridge::export(arguments.into_iter()).await;
+        }
         return migrate_memory(arguments.into_iter(), mode).await;
     }
     let (input, output) = parse_args(arguments.into_iter())?;
@@ -158,6 +164,8 @@ async fn write_new_atomic(path: &Path, content: &[u8]) -> Result<(), AppError> {
 enum MemoryImportKind {
     Backup,
     Multimodal,
+    ChromaSnapshot,
+    ChromaExport,
 }
 
 impl MemoryImportKind {
@@ -165,6 +173,8 @@ impl MemoryImportKind {
         match self {
             Self::Backup => "--memory-backup",
             Self::Multimodal => "--multimodal-memory",
+            Self::ChromaSnapshot => "--chroma-snapshot",
+            Self::ChromaExport => "--chroma-export",
         }
     }
 }
@@ -187,10 +197,10 @@ async fn migrate_memory(
             "--input" => input = Some(PathBuf::from(value)),
             "--output" => output = Some(PathBuf::from(value)),
             "--profile" => profile = Some(value),
-            "--embedding-space" if mode == MemoryImportKind::Backup => {
+            "--embedding-space" if mode != MemoryImportKind::Multimodal => {
                 embedding_space = Some(value)
             }
-            "--utc-offset-minutes" if mode == MemoryImportKind::Backup => {
+            "--utc-offset-minutes" if mode != MemoryImportKind::Multimodal => {
                 utc_offset = Some(
                     value
                         .parse::<i16>()
@@ -211,6 +221,12 @@ async fn migrate_memory(
             legacy_memory::import_backup(&input, &profile, utc_offset, embedding_space.as_deref())
         }
         MemoryImportKind::Multimodal => multimodal_memory::import_snapshot(&input, &profile),
+        MemoryImportKind::ChromaSnapshot => {
+            chroma_bridge::import_snapshot(&input, &profile, utc_offset, embedding_space.as_deref())
+        }
+        MemoryImportKind::ChromaExport => {
+            Err(AppError::configuration("export is not an import mode"))
+        }
     })
     .await
     .map_err(|_| AppError::unavailable("memory import worker failed"))??;
@@ -224,6 +240,13 @@ async fn migrate_memory(
             "Multimodal snapshot written to {} with complete features and original snapshots. The source JSON is unchanged. Imported records remain automatic, not confirmed facts.",
             output.display()
         ),
+        MemoryImportKind::ChromaSnapshot => println!(
+            "Chroma main memories written to {} with original metadata and available embeddings. The source snapshot is unchanged. Imported records remain automatic, not confirmed facts.",
+            output.display()
+        ),
+        MemoryImportKind::ChromaExport => {
+            return Err(AppError::configuration("export is not an import mode"));
+        }
     }
     Ok(())
 }

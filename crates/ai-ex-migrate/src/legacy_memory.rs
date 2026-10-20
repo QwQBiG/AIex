@@ -27,12 +27,12 @@ struct Backup {
 }
 
 #[derive(Deserialize)]
-struct LegacyMemory {
-    id: Uuid,
-    content: String,
-    metadata: Map<String, Value>,
+pub(super) struct LegacyMemory {
+    pub(super) id: Uuid,
+    pub(super) content: String,
+    pub(super) metadata: Map<String, Value>,
     #[serde(default)]
-    embedding: Option<Value>,
+    pub(super) embedding: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -157,6 +157,37 @@ fn convert_backup(
     if memories.len() != backup.total_memories {
         return Err(AppError::configuration(
             "memory backup record count does not match",
+        ));
+    }
+    convert_records(memories, profile, utc_offset, embedding_space)
+}
+
+pub(super) fn convert_records(
+    memories: Vec<LegacyMemory>,
+    profile: &str,
+    utc_offset: Option<i16>,
+    embedding_space: Option<&str>,
+) -> Result<Vec<u8>, AppError> {
+    if profile.trim().is_empty() || profile.chars().count() > 128 {
+        return Err(AppError::configuration(
+            "memory profile ID is outside supported bounds",
+        ));
+    }
+    if utc_offset.is_some_and(|offset| !(-1439..=1439).contains(&offset)) {
+        return Err(AppError::configuration(
+            "UTC offset must be between -1439 and 1439 minutes",
+        ));
+    }
+    if memories.len() > MAX_RECORDS {
+        return Err(AppError::configuration("memory record count exceeds 50000"));
+    }
+    if embedding_space.is_some_and(|space| {
+        space.trim().is_empty()
+            || space.chars().count() > 256
+            || space.chars().any(char::is_control)
+    }) {
+        return Err(AppError::configuration(
+            "embedding space must be a nonempty identifier of at most 256 characters without control characters",
         ));
     }
     let mut ids = BTreeSet::new();

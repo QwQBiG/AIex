@@ -1,0 +1,74 @@
+{
+  "format": "ai-ex-chroma-snapshot",
+  "schema_version": 1,
+  "api_version": "v2",
+  "reported_version": "1.0.0",
+  "tenant": "default_tenant",
+  "database": "default_database",
+  "main": {
+    "descriptor": {
+      "id": "00000000-0000-4000-8000-000000000100",
+      "name": "legacy_memories",
+      "configuration_json": {
+        "hnsw": { "space": "cosine", "ef_construction": 100, "ef_search": 100, "max_neighbors": 16 },
+        "spann": null,
+        "embedding_function": null
+      },
+      "schema": {
+        "defaults": { "float_list": { "vector_index": { "enabled": true, "config": { "space": "cosine" } } } },
+        "keys": {}
+      },
+      "metadata": { "source": "synthetic-legacy-fixture", "hnsw:space": "cosine" },
+      "dimension": 3,
+      "tenant": "default_tenant",
+      "database": "default_database",
+      "version": 0,
+      "log_position": 7
+    },
+    "record_count": 1,
+    "records": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "document": "User: 茶\nAI: 好",
+        "metadata": {
+          "timestamp": "1970-01-01T08:00:00.123456",
+          "memory_type": "INTERACTION",
+          "user_input": "茶",
+          "ai_response": "好",
+          "entities": "[\"like_tea\",\"茶🍵\"]",
+          "event_data": "{\"active\":true,\"score\":7}",
+          "importance_score": 0.75,
+          "access_count": 3,
+          "source": "user_correction",
+          "validated": true
+        },
+        "embedding": [0.25, -0.5, 1.0],
+        "uri": null
+      }
+    ]
+  },
+  "entities": {
+    "descriptor": {
+      "id": "00000000-0000-4000-8000-000000000200",
+      "name": "legacy_entities",
+      "configuration_json": { "hnsw": { "space": "l2" }, "spann": null, "embedding_function": null },
+      "schema": null,
+      "metadata": { "source": "synthetic-entity-fixture" },
+      "dimension": 3,
+      "tenant": "default_tenant",
+      "database": "default_database",
+      "version": 0,
+      "log_position": 9
+    },
+    "record_count": 1,
+    "records": [
+      {
+        "id": "entity_like_tea",
+        "document": "Raw legacy entity: 茶",
+        "metadata": { "name": "茶", "entity_type": "preference", "relationships": "[\"like_tea\"]" },
+        "embedding": [0.5, 0.0, 0.25],
+        "uri": "file:///archived-entities/tea.json"
+      }
+    ]
+  }
+}

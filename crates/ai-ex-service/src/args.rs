@@ -8,6 +8,10 @@ pub struct Args {
     pub check: bool,
     pub validate_config: bool,
     pub reindex_memory: bool,
+    pub maintain_media: bool,
+    pub apply_media_maintenance: bool,
+    pub media_capacity: usize,
+    pub archive_memory: Option<PathBuf>,
     pub serve: bool,
     pub managed: bool,
     pub prompt: Option<String>,
@@ -25,6 +29,10 @@ impl Args {
         let mut check = false;
         let mut validate_config = false;
         let mut reindex_memory = false;
+        let mut maintain_media = false;
+        let mut apply_media_maintenance = false;
+        let mut media_capacity = None;
+        let mut archive_memory = None;
         let mut serve = false;
         let mut managed = false;
         let mut prompt = None;
@@ -46,6 +54,26 @@ impl Args {
                 "--check" => check = true,
                 "--validate-config" => validate_config = true,
                 "--reindex-memory" => reindex_memory = true,
+                "--maintain-media" => maintain_media = true,
+                "--apply-media-maintenance" => apply_media_maintenance = true,
+                "--media-capacity" => {
+                    let capacity = values
+                        .next()
+                        .ok_or_else(|| {
+                            AppError::configuration("--media-capacity requires a positive integer")
+                        })?
+                        .parse::<usize>()
+                        .map_err(|_| AppError::configuration("invalid media capacity"))?;
+                    if capacity == 0 {
+                        return Err(AppError::configuration("media capacity must be positive"));
+                    }
+                    media_capacity = Some(capacity);
+                }
+                "--archive-memory" => {
+                    archive_memory = Some(PathBuf::from(values.next().ok_or_else(|| {
+                        AppError::configuration("--archive-memory requires a new path")
+                    })?));
+                }
                 "--serve" => serve = true,
                 "--managed" => managed = true,
                 "--replay-events" => {
@@ -93,7 +121,7 @@ impl Args {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::configuration(
-                        "usage: ai-ex-service [--config PATH] [--validate-config | --reindex-memory | --serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --prompt TEXT | \
+                        "usage: ai-ex-service [--config PATH] [--validate-config | --reindex-memory | --maintain-media [--media-capacity N] [--apply-media-maintenance --archive-memory NEW.jsonl] | --serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --prompt TEXT | \
                          --vision-image PATH --vision-prompt TEXT]",
                     ));
                 }
@@ -103,6 +131,18 @@ impl Args {
                     )));
                 }
             }
+        }
+        if !maintain_media
+            && (apply_media_maintenance || media_capacity.is_some() || archive_memory.is_some())
+        {
+            return Err(AppError::configuration(
+                "media maintenance options require --maintain-media",
+            ));
+        }
+        if archive_memory.is_some() && !apply_media_maintenance {
+            return Err(AppError::configuration(
+                "--archive-memory requires --apply-media-maintenance",
+            ));
         }
         if replay_report.is_some() && replay_events.is_none() {
             return Err(AppError::configuration(
@@ -116,6 +156,7 @@ impl Args {
         }
         let selected_modes = usize::from(validate_config)
             + usize::from(reindex_memory)
+            + usize::from(maintain_media)
             + usize::from(check)
             + usize::from(serve)
             + usize::from(managed)
@@ -126,7 +167,7 @@ impl Args {
             + usize::from(vision_image.is_some());
         if selected_modes > 1 {
             return Err(AppError::configuration(
-                "--validate-config, --reindex-memory, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --prompt, and vision analysis modes are mutually exclusive",
+                "--validate-config, --reindex-memory, --maintain-media, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --prompt, and vision analysis modes are mutually exclusive",
             ));
         }
         Ok(Self {
@@ -134,6 +175,10 @@ impl Args {
             check,
             validate_config,
             reindex_memory,
+            maintain_media,
+            apply_media_maintenance,
+            media_capacity: media_capacity.unwrap_or(1000),
+            archive_memory,
             serve,
             managed,
             prompt,
@@ -300,6 +345,42 @@ mod offline_validation_tests {
                 .chain(other)
                 .map(str::to_owned);
             assert!(Args::parse(values).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod maintenance_args_tests {
+    use super::*;
+    #[test]
+    fn maintenance_mode_and_apply_options_are_explicit() {
+        let args = Args::parse(["--maintain-media".to_owned()]).unwrap();
+        assert!(args.maintain_media);
+        assert!(!args.apply_media_maintenance);
+        assert_eq!(args.media_capacity, 1000);
+        let args = Args::parse(
+            [
+                "--maintain-media",
+                "--apply-media-maintenance",
+                "--archive-memory",
+                "new.jsonl",
+                "--media-capacity",
+                "10",
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(args.media_capacity, 10);
+        assert!(args.apply_media_maintenance);
+        for values in [
+            vec!["--media-capacity", "1"],
+            vec!["--maintain-media", "--media-capacity", "0"],
+            vec!["--maintain-media", "--archive-memory", "new"],
+            vec!["--maintain-media", "--serve"],
+            vec!["--maintain-media", "--media-capacity"],
+            vec!["--archive-memory"],
+        ] {
+            assert!(Args::parse(values.into_iter().map(str::to_owned)).is_err());
         }
     }
 }

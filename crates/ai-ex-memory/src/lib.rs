@@ -2,8 +2,11 @@
 
 mod entities;
 mod knowledge;
+mod maintenance;
 mod management;
 pub use knowledge::{MediaStats, observation_media};
+pub use maintenance::MediaMaintenanceReport;
+mod policy;
 mod record;
 mod retrieval;
 mod writer;
@@ -37,6 +40,8 @@ use writer::read_records;
 pub struct MemoryStore {
     inner: Arc<MemoryInner>,
     embedder: Option<Arc<dyn ai_ex_core::EmbeddingPort>>,
+    recall_policy: ai_ex_domain::MemoryRecallPolicy,
+    exclude_recent_turns: usize,
 }
 
 struct MemoryInner {
@@ -47,6 +52,7 @@ struct MemoryInner {
     writer_lease: Mutex<Option<std::fs::File>>,
     enabled: bool,
     embedding_failed: RwLock<bool>,
+    recent_memory_ids: RwLock<Vec<(String, Uuid)>>,
 }
 
 impl MemoryStore {
@@ -62,9 +68,27 @@ impl MemoryStore {
                 writer_lease: Mutex::new(None),
                 enabled: true,
                 embedding_failed: RwLock::new(false),
+                recent_memory_ids: RwLock::new(Vec::new()),
             }),
             embedder: None,
+            recall_policy: ai_ex_domain::MemoryRecallPolicy::Hybrid,
+            exclude_recent_turns: 3,
         })
+    }
+
+    pub fn with_recall_policy(
+        mut self,
+        policy: ai_ex_domain::MemoryRecallPolicy,
+        exclude_recent_turns: usize,
+    ) -> Result<Self, AppError> {
+        if exclude_recent_turns > 20 {
+            return Err(AppError::configuration(
+                "memory recent exclusion must be in 0..=20",
+            ));
+        }
+        self.recall_policy = policy;
+        self.exclude_recent_turns = exclude_recent_turns;
+        Ok(self)
     }
 
     pub fn disabled() -> Self {
@@ -77,8 +101,11 @@ impl MemoryStore {
                 writer_lease: Mutex::new(None),
                 enabled: false,
                 embedding_failed: RwLock::new(false),
+                recent_memory_ids: RwLock::new(Vec::new()),
             }),
             embedder: None,
+            recall_policy: ai_ex_domain::MemoryRecallPolicy::Hybrid,
+            exclude_recent_turns: 3,
         }
     }
 
@@ -109,7 +136,11 @@ impl MemoryStore {
             ));
         }
         // Readers retain their scope until their complete operation has finished.
-        *self.inner.profile_id.write().await = profile_id.to_owned();
+        let mut selected = self.inner.profile_id.write().await;
+        if *selected != profile_id {
+            *selected = profile_id.to_owned();
+            self.inner.recent_memory_ids.write().await.clear();
+        }
         Ok(())
     }
 
@@ -258,7 +289,14 @@ impl MemoryStore {
         file.sync_data()
             .await
             .map_err(|error| AppError::unavailable(error.to_string()))?;
+        let record_id = record.id;
         self.inner.records.write().await.push(record);
+        let mut recent = self.inner.recent_memory_ids.write().await;
+        recent.push((profile_id.clone(), record_id));
+        if recent.len() > 20 {
+            let excess = recent.len() - 20;
+            recent.drain(..excess);
+        }
         Ok(())
     }
 

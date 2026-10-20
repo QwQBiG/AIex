@@ -119,6 +119,11 @@ impl AppConfig {
     pub fn validate(&self) -> Result<(), AppError> {
         self.conversation.validate()?;
         self.persona.validate()?;
+        if self.memory.exclude_recent_turns > 20 {
+            return Err(AppError::configuration(
+                "memory.exclude_recent_turns must be in 0..=20",
+            ));
+        }
         if let Some(embedding) = &self.memory.embedding {
             embedding.validate()?;
         }
@@ -765,6 +770,8 @@ pub struct SafetyConfig {
 pub struct MemoryConfig {
     pub enabled: bool,
     pub path: String,
+    pub recall_policy: ai_ex_domain::MemoryRecallPolicy,
+    pub exclude_recent_turns: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<MemoryEmbeddingConfig>,
 }
@@ -829,6 +836,8 @@ impl Default for MemoryConfig {
         Self {
             enabled: true,
             path: "memory_db/ai-ex.jsonl".to_owned(),
+            recall_policy: ai_ex_domain::MemoryRecallPolicy::Hybrid,
+            exclude_recent_turns: 3,
             embedding: None,
         }
     }
@@ -959,5 +968,31 @@ mod input_boundary_tests {
         );
         tokio::fs::remove_file(path).await.unwrap();
         assert!(AppConfig::parse(&" ".repeat(MAX_CONFIG_BYTES)).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod memory_policy_tests {
+    use super::*;
+    #[test]
+    fn recall_policy_defaults_roundtrips_and_bounds() {
+        assert_eq!(
+            AppConfig::default().memory.recall_policy,
+            ai_ex_domain::MemoryRecallPolicy::Hybrid
+        );
+        let config =
+            AppConfig::parse("[memory]\nrecall_policy='legacy'\nexclude_recent_turns=0\n").unwrap();
+        assert_eq!(
+            config.memory.recall_policy,
+            ai_ex_domain::MemoryRecallPolicy::Legacy
+        );
+        assert_eq!(
+            AppConfig::parse(&toml::to_string(&config).unwrap())
+                .unwrap()
+                .memory
+                .exclude_recent_turns,
+            0
+        );
+        assert!(AppConfig::parse("[memory]\nexclude_recent_turns=21\n").is_err());
     }
 }

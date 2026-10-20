@@ -39,17 +39,9 @@ pub fn observation_media(
             .and_then(|features| features.get("objects"))
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
-    let factor = match modality {
-        MemoryModality::Text => 1.0,
-        MemoryModality::Audio => 1.1,
-        _ => 1.2,
-    };
-    let importance = ((0.3 * (text.chars().count() as f64 / 500.0).min(1.0)
-        + 0.2 * (entities as f64 / 10.0).min(1.0)
-        + 0.2 * factor)
-        .clamp(0.1, 1.0)
-        * 1000.0)
-        .round() as u16;
+    let importance =
+        (policy::legacy_multimodal_importance(modality, text.chars().count(), entities) * 1000.0)
+            .round() as u16;
     let media = MemoryMedia {
         modality,
         tags,

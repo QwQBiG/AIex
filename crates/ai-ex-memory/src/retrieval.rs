@@ -89,6 +89,15 @@ impl MemoryStore {
         if !self.inner.enabled || limit == 0 {
             return Ok(Vec::new());
         }
+        if self.recall_policy == ai_ex_domain::MemoryRecallPolicy::Legacy {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            return self
+                .recall_legacy(kinds, query, limit, include_confirmed, now)
+                .await;
+        }
         let profile_id = self.inner.profile_id.read().await;
         let query_terms = record::terms(query);
         if query_terms.is_empty() && !include_confirmed {
@@ -166,6 +175,142 @@ impl MemoryStore {
                         record.source,
                         record.user_text,
                         record.assistant_text
+                    ),
+                )
+            })
+            .collect())
+    }
+}
+
+impl MemoryStore {
+    /// Compatibility order: nearest min(limit*3,50), recent exclusion, L2 threshold,
+    /// first limit candidates, then importance+recency. Current confirmed notes retain
+    /// priority. Without a working encoder, explicit lexical fallback supplies candidates.
+    async fn recall_legacy(
+        &self,
+        kinds: Option<&[MemoryKind]>,
+        query: &str,
+        limit: usize,
+        include_confirmed: bool,
+        now_ms: u128,
+    ) -> Result<Vec<Message>, AppError> {
+        let profile = self.inner.profile_id.read().await;
+        let terms = record::terms(query);
+        let vector = if self.embedder.is_some() && !terms.is_empty() {
+            self.request_embedding(query).await.ok()
+        } else {
+            None
+        };
+        let recent = self
+            .inner
+            .recent_memory_ids
+            .read()
+            .await
+            .iter()
+            .rev()
+            .filter(|(p, _)| p == &*profile)
+            .take(self.exclude_recent_turns)
+            .map(|(_, id)| *id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let records = self.inner.records.read().await;
+        let eligible = |r: &MemoryRecord| {
+            r.profile_id == *profile && kinds.is_none_or(|ks| ks.contains(&r.kind))
+        };
+        let mut confirmed = records
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                eligible(r) && include_confirmed && r.source != MemorySource::Automatic
+            })
+            .map(|(i, r)| (r.updated_ms.unwrap_or(r.created_ms), i))
+            .collect::<Vec<_>>();
+        confirmed.sort_unstable_by(|a, b| b.cmp(a));
+        let mut indexes = confirmed
+            .into_iter()
+            .take(limit)
+            .map(|(_, i)| i)
+            .collect::<Vec<_>>();
+        let slots = limit.saturating_sub(indexes.len());
+        if slots > 0 && !terms.is_empty() {
+            let mut candidates = records
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    eligible(r) && (!include_confirmed || r.source == MemorySource::Automatic)
+                })
+                .filter_map(|(i, r)| {
+                    if let Some(q) = &vector {
+                        let stored = r.embedding.as_ref()?;
+                        if stored.space != q.space || stored.values.len() != q.values.len() {
+                            return None;
+                        }
+                        let distance = stored
+                            .values
+                            .iter()
+                            .zip(&q.values)
+                            .map(|(a, b)| (f64::from(*a) - f64::from(*b)).powi(2))
+                            .sum::<f64>();
+                        Some((i, distance))
+                    } else {
+                        let overlap = terms.intersection(&r.terms).count();
+                        (overlap > 0).then_some((i, -(overlap as f64)))
+                    }
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by(|(ai, a), (bi, b)| {
+                a.total_cmp(b)
+                    .then_with(|| records[*bi].created_ms.cmp(&records[*ai].created_ms))
+                    .then_with(|| bi.cmp(ai))
+            });
+            let mut selected = candidates
+                .into_iter()
+                .take(limit.saturating_mul(3).min(50))
+                .filter(|(i, d)| {
+                    !recent.contains(&records[*i].id) && (vector.is_none() || 1.0 - d >= 0.45)
+                })
+                .take(slots)
+                .map(|(i, _)| {
+                    let r = &records[i];
+                    let importance = r
+                        .knowledge
+                        .media
+                        .as_ref()
+                        .map(|m| f64::from(m.importance) / 1000.0)
+                        .or_else(|| {
+                            r.legacy_metadata
+                                .as_ref()
+                                .and_then(|m| m.get("importance_score"))
+                                .and_then(serde_json::Value::as_f64)
+                                .filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                        })
+                        .unwrap_or_else(|| {
+                            r.legacy_metadata
+                                .as_ref()
+                                .and_then(serde_json::Value::as_object)
+                                .map_or(0.5, policy::legacy_core_importance)
+                        });
+                    Ok((
+                        i,
+                        policy::legacy_rank_score(importance, r.created_ms, now_ms)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, AppError>>()?;
+            // Stable ties retain candidate order, as the legacy Python sort did.
+            selected.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+            indexes.extend(selected.into_iter().map(|(i, _)| i));
+        }
+        Ok(indexes
+            .into_iter()
+            .map(|i| {
+                let r = &records[i];
+                Message::new(
+                    Role::System,
+                    format!(
+                        "Relevant context memory [{}; source={:?}] — User: {} Assistant: {}",
+                        r.kind.as_str(),
+                        r.source,
+                        r.user_text,
+                        r.assistant_text
                     ),
                 )
             })

@@ -4,6 +4,8 @@ mod conversation;
 mod error;
 mod event;
 mod memory;
+mod memory_policy;
+pub use memory_policy::MemoryRecallPolicy;
 mod memory_knowledge;
 mod persona;
 mod playback;

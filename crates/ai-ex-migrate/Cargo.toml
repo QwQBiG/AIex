@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 ai-ex-config = { path = "../ai-ex-config" }
 ai-ex-domain = { path = "../ai-ex-domain" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 tokio.workspace = true

@@ -208,6 +208,7 @@ dependencies = [
  "ai-ex-domain",
  "ai-ex-memory",
  "flate2",
+ "reqwest",
  "ring",
  "serde",
  "serde_json",

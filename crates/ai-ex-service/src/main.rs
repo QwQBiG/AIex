@@ -129,6 +129,33 @@ async fn run() -> Result<(), AppError> {
         println!("Configuration is valid (offline; no services or credentials accessed).");
         return Ok(());
     }
+    if args.maintain_media {
+        if !config.memory.enabled {
+            return Err(AppError::configuration(
+                "--maintain-media requires enabled memory",
+            ));
+        }
+        let mut memory = MemoryStore::open(&config.memory.path).await?;
+        memory.select_profile(&config.persona.profile_id).await?;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| AppError::unavailable("system clock is before the Unix epoch"))?
+            .as_millis();
+        let report = memory
+            .maintain_media(
+                now_ms,
+                args.media_capacity,
+                args.apply_media_maintenance,
+                args.archive_memory.as_deref(),
+            )
+            .await?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| AppError::protocol(error.to_string()))?
+        );
+        return Ok(());
+    }
     if args.reindex_memory {
         if !config.memory.enabled || config.memory.embedding.is_none() {
             return Err(AppError::configuration(
@@ -1035,7 +1062,12 @@ async fn build_memory(config: &AppConfig) -> Result<MemoryStore, AppError> {
     if !config.memory.enabled {
         return Ok(MemoryStore::disabled());
     }
-    let memory = MemoryStore::open(&config.memory.path).await?;
+    let memory = MemoryStore::open(&config.memory.path)
+        .await?
+        .with_recall_policy(
+            config.memory.recall_policy,
+            config.memory.exclude_recent_turns,
+        )?;
     match &config.memory.embedding {
         Some(settings) => Ok(memory.with_embedder(Arc::new(OllamaEmbeddingClient::new(
             &settings.base_url,
