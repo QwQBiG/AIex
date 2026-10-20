@@ -131,6 +131,7 @@ pub struct ReflexController {
     pub(crate) tracking_misses: u8,
     pub(crate) last_timestamp: Option<u64>,
     pub(crate) last_capture_timestamp: Option<u64>,
+    pub(crate) control_generation: Option<(Uuid, u64)>,
 }
 
 impl ReflexController {
@@ -162,6 +163,7 @@ impl ReflexController {
             tracking_misses: 0,
             last_timestamp: None,
             last_capture_timestamp: None,
+            control_generation: None,
         })
     }
 

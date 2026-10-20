@@ -149,10 +149,25 @@ stdout 输出完整 JSON：顶层含 `execution_mode="dry_run"`、输入/筛选�
 
 指定 `report` 时，使用新文件创建和同步写入；已有文件在执行前拒绝，并发创建也不能覆盖。执行后的报告先输出 stdout，再尝试写文件；目录不可写或写入失败仍保留 stdout 中的执行证据，并返回非零退出码。输入校验失败或预检查发现已有报告时，尚未执行动作，不会生成执行报告。报告审计属于本次有界离线回放，不写入真实服务的审计库。
 
+## 可暂停的 Rust 会话
+
+需要从另一个任务暂停反射时，使用 `ReflexSession::new(controller)` 包住控制器，并通过 `session.control()` 取得可克隆的 `ReflexControl`。`session.step(...)` 返回 `ReflexSessionReport`：正常推进为 `advanced`，暂停、停止或旧代次失效为 `interrupted`；后者保留当前步已取得的 receipts、计数与类型化原因。`session.state()` 是执行进度，暂停/停止模式从 control snapshot 读取。
+
+`pause_for_chat()` 暂停、`resume()` 显式恢复、`invalidate_target()` 使旧工作失效，都会推进相关代次；`stop()` 对这个 control session 永久生效，恢复需要新的 session 与 controller。已暂停时重复暂停、运行时重复恢复是幂等操作。`invalidate_target()` 不会替换 matcher 或 target；这个 wrapper 的目标固定，geometry 在每步开始时提供。
+
+同一步只取得一次租约，跨越捕获、匹配、移动和点击的所有等待。coordinator 在请求审计前与授权审计后、真正派发前检查同一个租约；捕获/移动返回后也检查它。即使暂停与恢复已经完成，旧代次仍不能继续点击。暂停/恢复发生在两步之间时，下一步会立即清除旧追踪 ROI；保留总 misses、帧/动作预算和捕获间隔，下一次到期必须重新 capture。
+
+已派发的动作可能继续完成，不能把逻辑暂停说成撤回原生输入。正常暂停等待当前动作及审计返回，保留真实回执和消耗。完成审计失败、适配器失败或控制拒绝审计未持久化仍然进入 `failed`。已经成功且完成审计返回的 `click_once` 保持 `completed`，迟到的暂停不会让它恢复后再点击。
+
+直接取消或丢弃已开始的 step future 会使 controller 立即进入 `failed`，后续禁止续跑。派发前取消不增加未派发动作的计数；派发后取消保守计入一个可能已执行的捕获/指针动作。取消不伪造完成 receipt 或审计，当前 future 的完整报告也无法再返回。需要保留完整证据时，调用 `control.stop()` 并继续等待 step 结束。未 poll 的 future 尚未开始，不改变状态或审计。
+
+当前提供的是纯 Rust SDK 与合成时序验收；服务尚未持有与真实聊天共同运行的 reflex session。30 秒聊天静默恢复、VLM/队列仲裁及 GUI 接线仍待后续，不能把本 API 写成已启用的聊天或真实游戏功能。现有 raw `run_reflex_step` API 保留兼容，其动作取消也使用同一失败保护。
+
 ## 当前验证范围
 
-本轮已确认 `ai-ex-automation` 的 46 项测试和 `ai-ex-service` 的 46 项测试通过。其中 12 项 `reflex_workflow` 集成回归覆盖顺序与审计、单次完成、间隔/hover、预算、移动/点击失败、急停、审计失败、追踪回退、Lost 后恢复、单调时间和帧缓冲所有权；8 组服务 CLI 测试验证实际 Cookie Clicker profile/模板、PNG/JPEG 解码、坐标、完整九条审计、帧调度、报告防覆盖和无配置离线运行。2026-10-20 本检查点的全部 feature workspace 回归共 400 项通过、0 失败、2 项忽略；忽略项是需要真实输出设备的音频测试与等待固定原生二进制的 Chroma 临时库测试。workspace 严格 Clippy（全部 target/feature、`-D warnings`）、格式与 31 个包的架构检查、12 项架构回归也已通过。
+首个离线回放检查点确认 `ai-ex-automation` 的 46 项测试和 `ai-ex-service` 的 46 项测试通过。其中 12 项 `reflex_workflow` 集成回归覆盖顺序与审计、单次完成、间隔/hover、预算、移动/点击失败、急停、审计失败、追踪回退、Lost 后恢复、单调时间和帧缓冲所有权；8 组服务 CLI 测试验证实际 Cookie Clicker profile/模板、PNG/JPEG 解码、坐标、完整九条审计、帧调度、报告防覆盖和无配置离线运行。2026-10-20 本检查点的全部 feature workspace 回归共 400 项通过、0 失败、2 项忽略；忽略项是需要真实输出设备的音频测试与等待固定原生二进制的 Chroma 临时库测试。workspace 严格 Clippy（全部 target/feature、`-D warnings`）、格式与 31 个包的架构检查、12 项架构回归也已通过。
 
+随后受控会话检查点通过 `ai-ex-automation` 全部 80 项测试（原 46 项，加 8 项派发 guard、7 项控制状态、19 组会话/取消工作流），以及全部 feature 下的 8 组服务模板 CLI 回归。workspace 全部 target/feature 严格 Clippy 和格式检查通过。新增交错测试使用有界 channel 握手，无实际输入；覆盖两步之间的代次变化、Requested/Authorized/Completed/Rejected/Failed 审计取消、端口取消及 raw/受控单次点击防重复。
 合成微基准使用固定 seed `0x41494558`、release 构建、一次预热和七次测量中位数；每次断言矩形/分数相同，并用恰好够用及少一次乘法的预算验证实际工作量：
 
 | 模板 / 输入 | 搜索区域 | 像素对乘法 | 中位耗时 |
@@ -176,6 +191,7 @@ cargo run -p ai-ex-automation --example template_bench --release --locked --offl
 
 ```powershell
 cargo test -p ai-ex-automation --test reflex_workflow --locked --offline -j 1
+cargo test -p ai-ex-automation --test reflex_session --locked --offline -j 1 -- --test-threads=1
 cargo test -p ai-ex-service --test template_game --locked --offline -j 1
 ```
 

@@ -135,6 +135,9 @@ cargo run -p ai-ex-service --locked -- --config '测试配置.toml' --maintain-m
 
 本次已确认自动化库 46 项测试通过，其中新增 12 项受控工作流集成回归；服务 CLI 与微基准结果以该说明中的后续验收记录为准，尚不声称真实游戏、设备或帧率验收完成。
 
+受控反射 SDK 随后增加 `ReflexSession`、可克隆的 `ReflexControl` 与跨 await 的永久代次租约。派发前在授权审计返回后再次复核；暂停再恢复、两步之间的代次变化均清除旧追踪，保留总 misses 和消耗。已确认且完成审计成功的单次点击不会因迟到的暂停重复执行。直接取消已开始的 step future 会使 controller 失败，派发后保守计入一个可能已执行动作，禁止重试；不伪造完成回执。需要完整报告时用 stop 加等待自然返回。
+
+该 SDK 检查点通过 80 项自动化测试、全部 feature 的 8 组模板 CLI 回归，以及 workspace 全部 target/feature 严格 Clippy 和格式检查；上一离线回放检查点的整 workspace 回归为 400 通过、2 忽略。当前服务尚无与真实聊天共同运行的 reflex owner；30 秒静默恢复、VLM/队列仲裁、GUI 接线和真实 Windows 动作仍须继续迁移，不将 SDK 验收写成已启用的游戏功能。
 ## 模块设计与取舍
 
 | 职责 | 实现边界与选择 |

@@ -1,5 +1,8 @@
 use ai_ex_domain::AppError;
 
+use crate::coordinator::GuardedExecutionFailure;
+use crate::reflex_control::{ReflexControl, ReflexInactive, ReflexLease};
+use crate::reflex_session::{ReflexInterruption, ReflexSessionOutcome, ReflexSessionReport};
 use crate::{
     ActionResult, AuditSink, AutomationAction, AutomationCoordinator, AutomationPort,
     ExecutionPhase, FrameGeometry, PixelRect, PointerButton, ReflexController,
@@ -7,7 +10,7 @@ use crate::{
     ReflexReceipt, ReflexState, ReflexStepReport, ScreenFrame,
 };
 
-/// Advance one offline timestamp. Every external action uses this same coordinator.
+/// Advance one offline timestamp through the ordinary, uncontrolled coordinator path.
 /// Waiting and terminal reports consume no frame and issue no action.
 #[allow(
     clippy::result_large_err,
@@ -19,12 +22,78 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
     geometry: &FrameGeometry,
     timestamp_ms: u64,
 ) -> Result<ReflexStepReport, ReflexFailure> {
+    run_step(controller, coordinator, geometry, timestamp_ms, None)
+        .await
+        .map(|report| report.step)
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "failure retains the partial execution report and audit receipts"
+)]
+pub(crate) async fn run_controlled_reflex_step<P: AutomationPort, A: AuditSink>(
+    controller: &mut ReflexController,
+    control: &ReflexControl,
+    coordinator: &mut AutomationCoordinator<P, A>,
+    geometry: &FrameGeometry,
+    timestamp_ms: u64,
+) -> Result<ReflexSessionReport, ReflexFailure> {
+    if terminal(controller) {
+        return Ok(advanced(controller.report(timestamp_ms)));
+    }
+    // Acquire exactly once. Pause/resume cannot replace this in-flight generation.
+    let lease = match control.begin_step() {
+        Ok(lease) => lease,
+        Err(inactive) => {
+            let report = controller.report(timestamp_ms);
+            return Ok(interrupted(
+                controller,
+                report,
+                ReflexInterruption {
+                    inactive,
+                    action_id: None,
+                    rejection_audit_persisted: None,
+                },
+            ));
+        }
+    };
+    let issued = lease.snapshot();
+    let generation = (issued.session_id, issued.generation);
+    if controller.control_generation != Some(generation) {
+        // Control can change entirely between steps, without an observed interruption.
+        // A first controlled step also discards any tracking inherited from raw use.
+        clear_tracking(controller);
+    }
+    controller.control_generation = Some(generation);
+    run_step(
+        controller,
+        coordinator,
+        geometry,
+        timestamp_ms,
+        Some(&lease),
+    )
+    .await
+}
+
+/// Advance one offline timestamp. Every external action uses this same coordinator.
+/// Waiting and terminal reports consume no frame and issue no action.
+#[allow(
+    clippy::result_large_err,
+    reason = "failure retains the partial execution report and audit receipts"
+)]
+async fn run_step<P: AutomationPort, A: AuditSink>(
+    controller: &mut ReflexController,
+    coordinator: &mut AutomationCoordinator<P, A>,
+    geometry: &FrameGeometry,
+    timestamp_ms: u64,
+    lease: Option<&ReflexLease>,
+) -> Result<ReflexSessionReport, ReflexFailure> {
     let mut report = controller.report(timestamp_ms);
     if matches!(
         controller.state,
         ReflexState::Completed | ReflexState::BudgetExhausted | ReflexState::Failed
     ) {
-        return Ok(report);
+        return Ok(advanced(report));
     }
     if controller
         .last_timestamp
@@ -41,24 +110,30 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
     controller.last_timestamp = Some(timestamp_ms);
     if controller.budget_exhausted() {
         controller.exhaust_budget(&mut report);
-        return Ok(report);
+        return Ok(advanced(report));
     }
     if controller
         .last_capture_timestamp
         .is_some_and(|previous| timestamp_ms - previous < controller.options.interval_ms)
     {
         report.outcome = ReflexOutcome::Waiting;
-        return Ok(report);
+        return Ok(advanced(report));
     }
-    controller.last_capture_timestamp = Some(timestamp_ms);
-    let captured = execute(
+    let captured = match execute(
         controller,
         coordinator,
         &mut report,
         AutomationAction::CaptureScreen,
         ReflexFailureStage::Capture,
+        lease,
     )
-    .await?;
+    .await?
+    {
+        ActionAdvance::Executed(result) => result,
+        ActionAdvance::Interrupted(interruption) => {
+            return Ok(interrupted(controller, report, interruption));
+        }
+    };
     let ActionResult::ScreenCaptured(frame) = captured else {
         return Err(controller.fail(
             &mut report,
@@ -77,6 +152,9 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
             error.message,
         )
     })?;
+    if let Some(interruption) = check_lease(lease) {
+        return Ok(interrupted(controller, report, interruption));
+    }
     let region = search_region(controller, &frame).map_err(|error| {
         controller.fail(
             &mut report,
@@ -101,6 +179,9 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
         })?;
     report.score = Some(matched.score);
     report.matched_bounds = matched.bounds;
+    if let Some(interruption) = check_lease(lease) {
+        return Ok(interrupted(controller, report, interruption));
+    }
     let Some(bounds) = matched.bounds else {
         controller.misses = controller.misses.saturating_add(1);
         if controller.tracking_region.is_some() {
@@ -122,7 +203,7 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
             controller.exhaust_budget(&mut report);
         }
         controller.sync_report(&mut report);
-        return Ok(report);
+        return Ok(advanced(report));
     };
     controller.misses = 0;
     controller.tracking_misses = 0;
@@ -179,14 +260,21 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
             "normalized reflex coordinates cannot be represented as f32",
         ));
     }
-    let moved = execute(
+    let moved = match execute(
         controller,
         coordinator,
         &mut report,
         AutomationAction::MovePointer { x, y },
         ReflexFailureStage::Move,
+        lease,
     )
-    .await?;
+    .await?
+    {
+        ActionAdvance::Executed(result) => result,
+        ActionAdvance::Interrupted(interruption) => {
+            return Ok(interrupted(controller, report, interruption));
+        }
+    };
     if moved != ActionResult::Completed {
         return Err(controller.fail(
             &mut report,
@@ -196,12 +284,15 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
             "pointer move returned an unexpected result",
         ));
     }
+    if let Some(interruption) = check_lease(lease) {
+        return Ok(interrupted(controller, report, interruption));
+    }
     if controller.options.mode != ReflexMode::Hover {
         if controller.actions >= controller.options.max_actions {
             controller.exhaust_budget(&mut report);
-            return Ok(report);
+            return Ok(advanced(report));
         }
-        let clicked = execute(
+        let clicked = match execute(
             controller,
             coordinator,
             &mut report,
@@ -209,8 +300,15 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
                 button: PointerButton::Left,
             },
             ReflexFailureStage::Click,
+            lease,
         )
-        .await?;
+        .await?
+        {
+            ActionAdvance::Executed(result) => result,
+            ActionAdvance::Interrupted(interruption) => {
+                return Ok(interrupted(controller, report, interruption));
+            }
+        };
         if clicked != ActionResult::Completed {
             return Err(controller.fail(
                 &mut report,
@@ -221,6 +319,13 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
             ));
         }
     }
+    // A successful, audited ClickOnce is final even if control changed during its audit.
+    // Repeat clicks retain their execution receipts, then observe the original lease.
+    if controller.options.mode == ReflexMode::ClickRepeat
+        && let Some(interruption) = check_lease(lease)
+    {
+        return Ok(interrupted(controller, report, interruption));
+    }
     if controller.options.mode == ReflexMode::ClickOnce {
         controller.state = ReflexState::Completed;
         report.outcome = ReflexOutcome::Completed;
@@ -230,7 +335,43 @@ pub async fn run_reflex_step<P: AutomationPort, A: AuditSink>(
         report.outcome = ReflexOutcome::Matched;
     }
     controller.sync_report(&mut report);
-    Ok(report)
+    Ok(advanced(report))
+}
+
+#[derive(Debug)]
+enum ActionAdvance {
+    Executed(ActionResult),
+    Interrupted(ReflexInterruption),
+}
+/// A dropped action future cannot return a trustworthy receipt to its caller.
+/// Conservatively retain possible dispatch and prevent a later step from retrying.
+struct PendingExecution<'a> {
+    controller: &'a mut ReflexController,
+    report: &'a mut ReflexStepReport,
+    is_capture: bool,
+    dispatch_armed: bool,
+    disarmed: bool,
+}
+
+impl PendingExecution<'_> {
+    fn disarm(mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for PendingExecution<'_> {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+        if self.dispatch_armed {
+            record_execution(self.controller, self.report, self.is_capture);
+        }
+        self.controller.state = ReflexState::Failed;
+        clear_tracking(self.controller);
+        self.report.outcome = ReflexOutcome::Inactive;
+        self.controller.sync_report(self.report);
+    }
 }
 
 #[allow(
@@ -243,22 +384,46 @@ async fn execute<P: AutomationPort, A: AuditSink>(
     report: &mut ReflexStepReport,
     action: AutomationAction,
     stage: ReflexFailureStage,
-) -> Result<ActionResult, ReflexFailure> {
+    lease: Option<&ReflexLease>,
+) -> Result<ActionAdvance, ReflexFailure> {
     let is_capture = action == AutomationAction::CaptureScreen;
     let target = controller.target.clone();
-    let receipt = match coordinator
-        .execute(target, "bounded template reflex step", action.clone())
-        .await
-    {
+    let mut pending = PendingExecution {
+        controller: &mut *controller,
+        report: &mut *report,
+        is_capture,
+        dispatch_armed: false,
+        disarmed: false,
+    };
+    let mut first_check = true;
+    let result = coordinator
+        .execute_guarded(
+            target,
+            "bounded template reflex step",
+            action.clone(),
+            || {
+                if let Some(lease) = lease {
+                    lease.ensure_current()?;
+                }
+                // The coordinator checks once before pre-audits, then once immediately
+                // before adapter dispatch with no intervening await on success.
+                if first_check {
+                    first_check = false;
+                } else {
+                    pending.dispatch_armed = true;
+                }
+                Ok::<(), ReflexInactive>(())
+            },
+        )
+        .await;
+    // There is no await between disarming and the existing receipt/failure accounting.
+    pending.disarm();
+    let receipt = match result {
         Ok(receipt) => receipt,
-        Err(failure) => {
+        Err(GuardedExecutionFailure::Execution(failure)) => {
             if failure.phase == ExecutionPhase::DuringExecution {
                 // An adapter error cannot prove the external action did not happen.
-                if is_capture {
-                    controller.frames += 1;
-                } else {
-                    controller.actions += 1;
-                }
+                record_execution(controller, report, is_capture);
             }
             let phase = match failure.phase {
                 ExecutionPhase::BeforeExecution => ReflexExecutionPhase::BeforeExecution,
@@ -272,12 +437,28 @@ async fn execute<P: AutomationPort, A: AuditSink>(
                 failure.error.message,
             ));
         }
+        Err(GuardedExecutionFailure::GuardRejected {
+            action_id,
+            error,
+            rejection_audit_persisted,
+        }) => {
+            if !rejection_audit_persisted {
+                return Err(controller.fail(
+                    report,
+                    stage,
+                    Some(ReflexExecutionPhase::BeforeExecution),
+                    Some(action_id),
+                    format!("control rejected action ({error}) but its rejection audit was not persisted; reflex stopped without dispatch"),
+                ));
+            }
+            return Ok(ActionAdvance::Interrupted(ReflexInterruption {
+                inactive: error,
+                action_id: Some(action_id),
+                rejection_audit_persisted: Some(true),
+            }));
+        }
     };
-    if is_capture {
-        controller.frames += 1;
-    } else {
-        controller.actions += 1;
-    }
+    record_execution(controller, report, is_capture);
     report.receipts.push(ReflexReceipt {
         action_id: receipt.action_id,
         action,
@@ -287,7 +468,69 @@ async fn execute<P: AutomationPort, A: AuditSink>(
     if !receipt.completion_audit_persisted {
         return Err(controller.fail(report, ReflexFailureStage::CompletionAudit, Some(ReflexExecutionPhase::DuringExecution), Some(receipt.action_id), "action executed but its completion audit was not persisted; reflex stopped without retry"));
     }
-    Ok(receipt.result)
+    Ok(ActionAdvance::Executed(receipt.result))
+}
+
+fn record_execution(
+    controller: &mut ReflexController,
+    report: &ReflexStepReport,
+    is_capture: bool,
+) {
+    if is_capture {
+        controller.frames += 1;
+        // A rejected prepared capture must not consume the next capture interval.
+        controller.last_capture_timestamp = Some(report.timestamp_ms);
+    } else {
+        controller.actions += 1;
+    }
+}
+
+fn terminal(controller: &ReflexController) -> bool {
+    matches!(
+        controller.state,
+        ReflexState::Completed | ReflexState::BudgetExhausted | ReflexState::Failed
+    )
+}
+
+fn check_lease(lease: Option<&ReflexLease>) -> Option<ReflexInterruption> {
+    lease
+        .and_then(|lease| lease.ensure_current().err())
+        .map(|inactive| ReflexInterruption {
+            inactive,
+            action_id: None,
+            rejection_audit_persisted: None,
+        })
+}
+
+fn advanced(step: ReflexStepReport) -> ReflexSessionReport {
+    ReflexSessionReport {
+        outcome: ReflexSessionOutcome::Advanced,
+        step,
+        interruption: None,
+    }
+}
+
+fn clear_tracking(controller: &mut ReflexController) {
+    controller.tracking_region = None;
+    controller.tracking_misses = 0;
+    if controller.state == ReflexState::Tracking {
+        controller.state = ReflexState::Searching;
+    }
+}
+
+fn interrupted(
+    controller: &mut ReflexController,
+    mut report: ReflexStepReport,
+    interruption: ReflexInterruption,
+) -> ReflexSessionReport {
+    clear_tracking(controller);
+    report.outcome = ReflexOutcome::Inactive;
+    controller.sync_report(&mut report);
+    ReflexSessionReport {
+        outcome: ReflexSessionOutcome::Interrupted,
+        step: report,
+        interruption: Some(interruption),
+    }
 }
 
 fn search_region(
