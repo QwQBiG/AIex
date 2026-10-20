@@ -3,12 +3,16 @@
 use std::collections::BTreeSet;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU64, Ordering},
 };
 
 use ai_ex_domain::{AppError, ComponentHealth};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+// Even values identify active sessions; odd values mark the preceding session
+// stopped. A single atomic makes revocation and recovery one ordered state change.
+const STOPPED_BIT: u64 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,7 +59,8 @@ pub struct Permit {
     capability: Capability,
     target: String,
     rationale: String,
-    emergency_stop: Arc<AtomicBool>,
+    lease: u64,
+    lease_state: Arc<AtomicU64>,
 }
 
 impl Permit {
@@ -76,7 +81,8 @@ impl Permit {
     }
 
     pub fn ensure_active(&self) -> Result<(), AppError> {
-        if self.emergency_stop.load(Ordering::Acquire) {
+        let current = self.lease_state.load(Ordering::Acquire);
+        if current & STOPPED_BIT != 0 || current != self.lease {
             return Err(AppError::safety("permit revoked by emergency stop"));
         }
         Ok(())
@@ -85,19 +91,20 @@ impl Permit {
 
 pub struct SafetyGate {
     policy: SafetyPolicy,
-    emergency_stop: Arc<AtomicBool>,
+    lease_state: Arc<AtomicU64>,
 }
 
 impl SafetyGate {
     pub fn new(policy: SafetyPolicy) -> Self {
         Self {
             policy,
-            emergency_stop: Arc::new(AtomicBool::new(false)),
+            lease_state: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn authorize(&self, request: ActionRequest) -> Result<Permit, AppError> {
-        if self.emergency_stop.load(Ordering::Acquire) {
+        let lease = self.lease_state.load(Ordering::Acquire);
+        if lease & STOPPED_BIT != 0 {
             return Err(AppError::safety("automation emergency stop is active"));
         }
         if !self.policy.automation_enabled {
@@ -119,25 +126,40 @@ impl SafetyGate {
                 "automation target is outside allowed scopes",
             ));
         }
-        Ok(Permit {
+        let permit = Permit {
             id: Uuid::new_v4(),
             capability: request.capability,
             target: target.to_owned(),
             rationale: request.rationale,
-            emergency_stop: self.emergency_stop.clone(),
-        })
+            lease,
+            lease_state: Arc::clone(&self.lease_state),
+        };
+        // A stop/recovery during policy validation must not issue a permit for
+        // the stale session. A later stop is caught again at execution.
+        permit.ensure_active()?;
+        Ok(permit)
     }
 
     pub fn trigger_emergency_stop(&self) {
-        self.emergency_stop.store(true, Ordering::Release);
+        let _ = self.lease_state.fetch_or(STOPPED_BIT, Ordering::AcqRel);
     }
 
     pub fn clear_emergency_stop(&mut self) {
-        self.emergency_stop.store(false, Ordering::Release);
+        let _ = self
+            .lease_state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |lease| {
+                if lease & STOPPED_BIT == 0 {
+                    None
+                } else {
+                    // Exhaustion stays stopped, rather than wrapping around and
+                    // potentially making an ancient permit valid again.
+                    lease.checked_add(1)
+                }
+            });
     }
 
     pub fn emergency_stop_active(&self) -> bool {
-        self.emergency_stop.load(Ordering::Acquire)
+        self.lease_state.load(Ordering::Acquire) & STOPPED_BIT != 0
     }
 
     pub fn health(&self) -> ComponentHealth {
@@ -217,5 +239,114 @@ mod tests {
         gate.trigger_emergency_stop();
         assert!(permit.ensure_active().is_err());
         assert!(gate.emergency_stop_active());
+    }
+
+    fn request() -> ActionRequest {
+        ActionRequest {
+            capability: Capability::ScreenRead,
+            target: "VTube Studio".to_owned(),
+            rationale: "inspect avatar state".to_owned(),
+        }
+    }
+
+    #[test]
+    fn clearing_emergency_stop_does_not_revive_old_permits() {
+        let mut gate = SafetyGate::new(policy(true));
+        let old_permit = gate.authorize(request()).unwrap();
+        gate.trigger_emergency_stop();
+        assert!(gate.authorize(request()).is_err());
+        gate.clear_emergency_stop();
+
+        assert!(!gate.emergency_stop_active());
+        assert_eq!(
+            old_permit.ensure_active().unwrap_err().kind,
+            ErrorKind::Safety
+        );
+        let fresh_permit = gate.authorize(request()).unwrap();
+        fresh_permit.ensure_active().unwrap();
+        assert_ne!(fresh_permit.id(), old_permit.id());
+        assert_eq!(fresh_permit.capability(), Capability::ScreenRead);
+        assert_eq!(fresh_permit.target(), "VTube Studio");
+        assert_eq!(fresh_permit.rationale(), "inspect avatar state");
+    }
+
+    #[test]
+    fn active_clear_is_a_noop_and_repeated_recovery_keeps_all_old_permits_revoked() {
+        let mut gate = SafetyGate::new(policy(true));
+        let first = gate.authorize(request()).unwrap();
+        gate.clear_emergency_stop();
+        first.ensure_active().unwrap();
+        let mut retired = vec![first];
+
+        for _ in 0..4 {
+            gate.trigger_emergency_stop();
+            gate.trigger_emergency_stop();
+            gate.clear_emergency_stop();
+            gate.clear_emergency_stop();
+            for permit in &retired {
+                assert!(permit.ensure_active().is_err());
+            }
+            let fresh = gate.authorize(request()).unwrap();
+            fresh.ensure_active().unwrap();
+            retired.push(fresh);
+        }
+    }
+
+    #[test]
+    fn arc_gate_clones_share_cross_thread_revocation_without_recovery_reviving_permits() {
+        let gate = Arc::new(SafetyGate::new(policy(true)));
+        let clone = Arc::clone(&gate);
+        let first = gate.authorize(request()).unwrap();
+        let second = clone.authorize(request()).unwrap();
+        std::thread::spawn(move || clone.trigger_emergency_stop())
+            .join()
+            .unwrap();
+
+        // Joining establishes that the stop completed before either check.
+        assert!(gate.emergency_stop_active());
+        assert!(first.ensure_active().is_err());
+        assert!(second.ensure_active().is_err());
+        let mut gate = Arc::try_unwrap(gate).ok().expect("sole gate owner");
+        gate.clear_emergency_stop();
+        assert!(!gate.emergency_stop_active());
+        assert!(first.ensure_active().is_err());
+        assert!(second.ensure_active().is_err());
+        gate.authorize(request()).unwrap().ensure_active().unwrap();
+    }
+
+    #[test]
+    fn independent_gates_keep_independent_sessions() {
+        let mut stopped = SafetyGate::new(policy(true));
+        let other = SafetyGate::new(policy(true));
+        let stopped_permit = stopped.authorize(request()).unwrap();
+        let other_permit = other.authorize(request()).unwrap();
+
+        stopped.trigger_emergency_stop();
+        assert!(stopped_permit.ensure_active().is_err());
+        other_permit.ensure_active().unwrap();
+        stopped.clear_emergency_stop();
+        assert!(stopped_permit.ensure_active().is_err());
+        other_permit.ensure_active().unwrap();
+        stopped
+            .authorize(request())
+            .unwrap()
+            .ensure_active()
+            .unwrap();
+    }
+
+    #[test]
+    fn exhausted_session_counter_stays_stopped_instead_of_wrapping() {
+        let mut gate = SafetyGate::new(policy(true));
+        gate.lease_state.store(u64::MAX - 1, Ordering::Release);
+        let final_permit = gate.authorize(request()).unwrap();
+        final_permit.ensure_active().unwrap();
+
+        gate.trigger_emergency_stop();
+        gate.clear_emergency_stop();
+        gate.clear_emergency_stop();
+        assert!(gate.emergency_stop_active());
+        assert!(final_permit.ensure_active().is_err());
+        assert!(gate.authorize(request()).is_err());
+        assert_eq!(gate.health().detail, "emergency stop active");
     }
 }
