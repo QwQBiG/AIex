@@ -6,6 +6,7 @@ mod control_snapshot;
 mod events;
 mod lifecycle;
 mod playback;
+mod template_game;
 
 #[cfg(test)]
 mod interruption_tests;
@@ -124,6 +125,9 @@ async fn run() -> Result<(), AppError> {
         return Ok(());
     }
     let args = Args::parse(arguments)?;
+    if let Some(path) = args.template_game.as_ref() {
+        return template_game::replay(path).await;
+    }
     let config = AppConfig::load(&args.config).await?;
     if args.validate_config {
         println!("Configuration is valid (offline; no services or credentials accessed).");

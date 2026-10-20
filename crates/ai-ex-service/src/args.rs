@@ -19,6 +19,7 @@ pub struct Args {
     pub replay_report: Option<PathBuf>,
     pub replay_automation: Option<PathBuf>,
     pub replay_stage: Option<PathBuf>,
+    pub template_game: Option<PathBuf>,
     pub vision_image: Option<PathBuf>,
     pub vision_prompt: Option<String>,
 }
@@ -40,6 +41,7 @@ impl Args {
         let mut replay_report = None;
         let mut replay_automation = None;
         let mut replay_stage = None;
+        let mut template_game = None;
         let mut vision_image = None;
         let mut vision_prompt = None;
         let mut values = values.into_iter();
@@ -100,6 +102,12 @@ impl Args {
                     })?;
                     replay_stage = Some(PathBuf::from(path));
                 }
+                "--template-game" => {
+                    let path = values.next().ok_or_else(|| {
+                        AppError::configuration("--template-game requires a manifest path")
+                    })?;
+                    template_game = Some(PathBuf::from(path));
+                }
                 "--prompt" => {
                     prompt = Some(
                         values
@@ -121,7 +129,7 @@ impl Args {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::configuration(
-                        "usage: ai-ex-service [--config PATH] [--validate-config | --reindex-memory | --maintain-media [--media-capacity N] [--apply-media-maintenance --archive-memory NEW.jsonl] | --serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --prompt TEXT | \
+                        "usage: ai-ex-service [--config PATH] [--validate-config | --reindex-memory | --maintain-media [--media-capacity N] [--apply-media-maintenance --archive-memory NEW.jsonl] | --serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --template-game MANIFEST.json | --prompt TEXT | \
                          --vision-image PATH --vision-prompt TEXT]",
                     ));
                 }
@@ -163,11 +171,12 @@ impl Args {
             + usize::from(replay_events.is_some())
             + usize::from(replay_automation.is_some())
             + usize::from(replay_stage.is_some())
+            + usize::from(template_game.is_some())
             + usize::from(prompt.is_some())
             + usize::from(vision_image.is_some());
         if selected_modes > 1 {
             return Err(AppError::configuration(
-                "--validate-config, --reindex-memory, --maintain-media, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --prompt, and vision analysis modes are mutually exclusive",
+                "--validate-config, --reindex-memory, --maintain-media, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --template-game, --prompt, and vision analysis modes are mutually exclusive",
             ));
         }
         Ok(Self {
@@ -186,6 +195,7 @@ impl Args {
             replay_report,
             replay_automation,
             replay_stage,
+            template_game,
             vision_image,
             vision_prompt,
         })
@@ -381,6 +391,40 @@ mod maintenance_args_tests {
             vec!["--archive-memory"],
         ] {
             assert!(Args::parse(values.into_iter().map(str::to_owned)).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod template_game_args_tests {
+    use super::*;
+    #[test]
+    fn template_game_requires_a_path_and_is_exclusive() {
+        assert!(Args::parse(["--template-game".into()]).is_err());
+        let args = Args::parse(["--template-game".into(), "fixture.json".into()]).unwrap();
+        assert_eq!(args.template_game, Some(PathBuf::from("fixture.json")));
+        for conflict in [
+            vec!["--serve"],
+            vec!["--managed"],
+            vec!["--check"],
+            vec!["--maintain-media"],
+            vec!["--reindex-memory"],
+            vec!["--validate-config"],
+            vec!["--prompt", "hello"],
+            vec!["--replay-events", "events.jsonl"],
+            vec!["--replay-stage", "stage.jsonl"],
+            vec!["--replay-automation", "actions.jsonl"],
+            vec!["--vision-image", "image.png", "--vision-prompt", "describe"],
+        ] {
+            assert!(
+                Args::parse(
+                    ["--template-game", "fixture.json"]
+                        .into_iter()
+                        .chain(conflict)
+                        .map(str::to_owned)
+                )
+                .is_err()
+            );
         }
     }
 }

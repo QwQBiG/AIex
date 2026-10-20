@@ -11,7 +11,12 @@ use crate::{ActionResult, AutomationAction, AutomationPort, ScreenFrame};
 pub struct DryRunAutomationPort {
     actions: VecDeque<AutomationAction>,
     capacity: usize,
-    screen: ScreenFrame,
+    screen: ScreenSource,
+}
+
+enum ScreenSource {
+    Repeat(ScreenFrame),
+    Sequence(VecDeque<ScreenFrame>),
 }
 
 impl DryRunAutomationPort {
@@ -34,10 +39,29 @@ impl DryRunAutomationPort {
                 "automation dry-run capacity must be positive",
             ));
         }
+        let screen = ScreenFrame::new(screen.width, screen.height, screen.rgba)?;
         Ok(Self {
             actions: VecDeque::with_capacity(capacity),
             capacity,
-            screen,
+            screen: ScreenSource::Repeat(screen),
+        })
+    }
+
+    /// Consume one owned frame per successful capture; exhaustion is an adapter error.
+    pub fn with_frames(capacity: usize, frames: Vec<ScreenFrame>) -> Result<Self, AppError> {
+        if capacity == 0 {
+            return Err(AppError::configuration(
+                "automation dry-run capacity must be positive",
+            ));
+        }
+        let frames = frames
+            .into_iter()
+            .map(|frame| ScreenFrame::new(frame.width, frame.height, frame.rgba))
+            .collect::<Result<VecDeque<_>, _>>()?;
+        Ok(Self {
+            actions: VecDeque::with_capacity(capacity),
+            capacity,
+            screen: ScreenSource::Sequence(frames),
         })
     }
 
@@ -76,7 +100,15 @@ impl AutomationPort for DryRunAutomationPort {
             return Err(AppError::unavailable("automation dry-run queue is full"));
         }
         let result = match action {
-            AutomationAction::CaptureScreen => ActionResult::ScreenCaptured(self.screen.clone()),
+            AutomationAction::CaptureScreen => {
+                let frame = match &mut self.screen {
+                    ScreenSource::Repeat(frame) => frame.clone(),
+                    ScreenSource::Sequence(frames) => frames.pop_front().ok_or_else(|| {
+                        AppError::unavailable("automation dry-run frame sequence is exhausted")
+                    })?,
+                };
+                ActionResult::ScreenCaptured(frame)
+            }
             _ => ActionResult::Completed,
         };
         self.actions.push_back(action.clone());
