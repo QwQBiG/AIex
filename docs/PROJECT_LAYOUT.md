@@ -12,6 +12,10 @@ crates/
   ai-ex-config/               配置与角色、外形、场景清单
   ai-ex-control/              本地控制协议与客户端
   ai-ex-ui-model/             与窗口无关的桌面状态投影
+  ai-ex-memory/               JSONL、召回、实体/媒体来源与显式维护
+  ai-ex-automation/           受控反射会话、模板搜索与合成动作端口
+  ai-ex-vision/               视觉契约与可选观察模型适配
+  ai-ex-migrate/              旧配置、备份与快照的显式迁移
   ai-ex-service/              服务组合根与命令行入口
   ai-ex-desktop/              独立桌面 Cargo 包与锁文件
   ...                        模型、记忆、声音、舞台及其他适配器
@@ -28,11 +32,28 @@ docs/                        当前指南、协议、架构、版本和迁移记
 
 ## 桌面内部
 
-`crates/ai-ex-desktop/src/main.rs` 负责启动和页面入口。`app` 协调当前会话及已确认的人格、外形；`worker` 负责通信；`appearance` 负责外形；`preview` 负责离线预览；`setup` 负责连接配置；`ui/theme.rs` 提供各页面共用的视觉样式。
+`crates/ai-ex-desktop/src/main.rs` 负责启动和页面入口，`launch` 拥有纯启动参数契约，`session` 装配本次连接和进程凭据。`app` 协调当前会话及已确认的人格、外形；`worker` 负责通信；`appearance` 负责外形；`preview` 负责离线预览；`setup` 负责连接配置；`ui/theme.rs` 提供各页面共用的视觉样式。
+
+`app_reflex` 管理合成回放表单、服务确认与结果未知提示；会话和动作由服务持有。`worker` 为回放暂停、停止和状态查询保留独立有界通道，界面不直接依赖自动化执行器。
 
 共享样式只依赖窗口绘制基础，不依赖聊天状态、模型或设备。欢迎页、设置页、预览和记忆面板直接使用共享 UI 模块。`ui/test_support.rs` 仅在测试时提供离屏绘制、控件定位和输入事件辅助，页面测试不依赖其他页面的测试模块。外形素材位于该包的 `assets/`，预览示例位于 `examples/`；调整渲染文件位置时需要同时检查示例和资源嵌入路径。
 
 同一功能的实现与测试在对应 Rust 模块附近维护。部分桌面模块仍用 `#[path]` 将平铺文件组成子模块；目录整理应保持已有模块所有权和运行边界，不能只移动文件而遗漏示例、测试与文档引用。
+
+## 服务与存储内部
+
+`ai-ex-service/src/main.rs` 是组合根。当前源码的回放与观察按下列入口定位：
+
+| 模块 | 维护范围 |
+| --- | --- |
+| `template_game` | 清单、图片、几何与独立 CLI 回放 |
+| `template_host::TemplateHost` | 服务持有的合成会话、代次控制、聊天/语音占用与暂停仲裁 |
+| `conversation_activity::ConversationActivity` | 排队和活动提交的占用登记及结算；客户端等待结束不代替任务结算 |
+| `strategy_loop` | 可选慢速观察，只建议同一目标的搜索区域，由宿主核验后应用 |
+
+`ai-ex-automation` 拥有可复用的模板搜索、`ReflexSession` 与 permit/审计动作链。当前服务回放使用 `DryRunAutomationPort`；真实 Windows 捕获和键鼠适配仍待接入，不能用合成回放结果代替实机验收。操作与预算合同见[模板回放](TEMPLATE_GAME.md)。
+
+`ai-ex-memory` 内部按记录/写入、召回/评分、实体/媒体查询和显式管理维护组织；具体入口见[记忆存储与检索职责](ARCHITECTURE.md#记忆存储与检索职责)。旧数据格式转换和 Chroma 快照桥接归 `ai-ex-migrate`，不由桌面直接访问旧数据库。迁移范围及验证检查点见[Rust 迁移记录](RUST_ONLY_MIGRATION.md)。
 
 ## 文档与历史内容
 

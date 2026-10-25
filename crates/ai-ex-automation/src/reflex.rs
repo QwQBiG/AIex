@@ -2,7 +2,10 @@ use ai_ex_domain::AppError;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::{AutomationAction, PixelRect, TemplateMatcher};
+use crate::{
+    AutomationAction, PixelRect, TemplateMatcher, TemplateSearchIncompleteReason,
+    TemplateSearchProgress, TemplateSearchProof,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -73,6 +76,14 @@ pub struct ReflexStepReport {
     pub score: Option<f64>,
     /// The effective, frame-local region searched by this step.
     pub search_region: Option<PixelRect>,
+    /// Cumulative diagnostics for this frame's search, including interrupted searches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<TemplateSearchProgress>,
+    /// An incomplete search never supplies a target or counts as a miss.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_incomplete: Option<TemplateSearchIncompleteReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_proof: Option<TemplateSearchProof>,
     pub misses: u64,
     /// Captures executed or possibly executed before an adapter failure.
     pub frames: u64,
@@ -183,6 +194,9 @@ impl ReflexController {
             matched_bounds: None,
             score: None,
             search_region: None,
+            search: None,
+            search_incomplete: None,
+            search_proof: None,
             misses: self.misses,
             frames: self.frames,
             actions: self.actions,

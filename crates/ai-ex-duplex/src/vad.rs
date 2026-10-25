@@ -36,6 +36,11 @@ impl EnergyVad {
         })
     }
 
+    /// Whether speech has started and has not yet ended or been flushed.
+    pub fn speech_in_progress(&self) -> bool {
+        self.state == State::Speaking
+    }
+
     pub fn process(&mut self, frame: AudioFrame) -> Result<Option<VadEvent>, AppError> {
         if self.sample_rate != 0
             && (frame.sample_rate != self.sample_rate || frame.channels != self.channels)

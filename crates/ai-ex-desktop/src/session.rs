@@ -3,7 +3,7 @@ use std::path::Path;
 use ai_ex_domain::AppError;
 
 use crate::navigation::{Destination, Navigation};
-use crate::{LaunchOptions, app::DesktopApp, portable, scene_resume, setup, startup};
+use crate::{app::DesktopApp, launch::LaunchOptions, portable, scene_resume, setup, startup};
 use crate::{
     service_process::ManagedService,
     worker::{WorkerSettings, spawn_worker},

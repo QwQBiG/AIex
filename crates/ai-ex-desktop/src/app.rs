@@ -8,6 +8,9 @@ use crate::appearance::AppearancePanel;
 use crate::ui::theme::{self, configure_appearance};
 use crate::worker::{WorkerCommand, WorkerEvent, WorkerHandle};
 
+#[path = "app_reflex.rs"]
+mod reflex;
+
 #[path = "app_chat.rs"]
 mod chat;
 #[path = "app_layout.rs"]
@@ -82,6 +85,8 @@ pub struct DesktopApp {
     retained_messages: VecDeque<navigation::RetainedMessage>,
     show_retained: bool,
     memory: crate::memory_panel::MemoryPanel,
+    reflex: reflex::ReflexPanel,
+    reflex_runtime_ready: bool,
 }
 
 impl DesktopApp {
@@ -142,6 +147,8 @@ impl DesktopApp {
             retained_messages: VecDeque::new(),
             show_retained: false,
             memory: Default::default(),
+            reflex: Default::default(),
+            reflex_runtime_ready: false,
         }
     }
 
@@ -190,7 +197,17 @@ impl DesktopApp {
     fn drain_events(&mut self) {
         while let Ok(event) = self.worker.events.try_recv() {
             match event {
+                WorkerEvent::Automation { request_id, result } => {
+                    self.sync_reflex_identity();
+                    self.reflex.receive(Some(request_id), result);
+                }
+                WorkerEvent::AutomationStatus(result) => {
+                    self.sync_reflex_identity();
+                    self.reflex.receive(None, result);
+                }
                 WorkerEvent::Connection(connected) => {
+                    self.reflex_runtime_ready = false;
+                    self.reflex.disconnected();
                     if !connected {
                         self.persona_synced = false;
                     }
@@ -211,6 +228,8 @@ impl DesktopApp {
                         && snapshot.last_sequence >= self.state.runtime.last_sequence
                     {
                         self.state.apply_snapshot(snapshot);
+                        self.reflex_runtime_ready = true;
+                        self.sync_reflex_identity();
                     }
                 }
                 WorkerEvent::Memory { request_id, result } => {
@@ -237,6 +256,8 @@ impl DesktopApp {
                             })
                             .unwrap_or_else(|| self.state.runtime.clone());
                         self.state.recover_snapshot(snapshot);
+                        self.reflex_runtime_ready = true;
+                        self.sync_reflex_identity();
                         self.notice =
                             Some("记忆已更新，已开始新的对话上下文；输入草稿保留。".to_owned());
                     }
@@ -248,6 +269,8 @@ impl DesktopApp {
                         continue;
                     }
                     self.state.recover_snapshot(snapshot);
+                    self.reflex_runtime_ready = true;
+                    self.sync_reflex_identity();
                     let message = "连接已恢复，部分历史无法补齐；可以继续对话。";
                     self.notice = Some(message.to_owned());
                     self.push_log(message);
@@ -670,7 +693,8 @@ impl DesktopApp {
         });
     }
 
-    fn show_automation_panel(&self, ui: &mut egui::Ui) {
+    fn show_automation_panel(&mut self, ui: &mut egui::Ui) {
+        self.show_reflex_panel(ui);
         ui.collapsing("视觉与游戏安全状态", |ui|
         {
             ui.horizontal(|ui|

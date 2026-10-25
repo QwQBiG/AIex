@@ -595,13 +595,28 @@ fn invalid_images_are_input_errors_and_execution_failures_retain_capture_evidenc
         assert!(!output.status.success());
         let report = report(&output);
         assert_eq!(report["execution_mode"], "dry_run");
-        assert_eq!(report["outcome"], "failed");
+        assert_eq!(
+            report["outcome"],
+            if stage == "match" {
+                "search_incomplete"
+            } else {
+                "failed"
+            }
+        );
         assert_eq!(report["failure"]["stage"], stage);
         assert!(report["steps"].as_array().unwrap().is_empty());
         let partial = &report["failure"]["report"];
         assert_eq!(partial["state"], "failed");
         assert_eq!(partial["frames"], 1);
         assert_eq!(partial["actions"], 0);
+        if stage == "match" {
+            assert_eq!(partial["search_incomplete"], "work_budget_exhausted");
+            assert_eq!(partial["search"]["max_work"], 1);
+            assert_eq!(partial["search"]["work"], 0);
+            assert!(partial["matched_bounds"].is_null());
+            assert!(partial["score"].is_null());
+            assert_eq!(partial["misses"], 0);
+        }
         assert_eq!(receipt_types(partial), vec!["capture_screen"]);
         assert_eq!(report["audit"].as_array().unwrap().len(), 3);
         let saved: Value = serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
@@ -660,4 +675,18 @@ fn jpeg_frames_decode_offline_and_template_mode_is_mutually_exclusive() {
     let conflicting = case.run_path("manifest.json", &["--check"]);
     assert!(!conflicting.status.success());
     assert!(String::from_utf8_lossy(&conflicting.stderr).contains("mutually exclusive"));
+}
+#[test]
+fn strategic_options_require_the_service_host_before_loading_any_image() {
+    let mut case = Case::new();
+    let mut manifest = case.manifest(vec![frame("must-not-read.png", 0)]);
+    manifest["strategy"] = json!({"prompt": "Locate the current target"});
+    let output = case.run("strategy.json", &manifest);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("strategy options require a service-hosted template session")
+    );
+    case.assert_no_services();
 }

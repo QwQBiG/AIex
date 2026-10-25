@@ -49,7 +49,10 @@ $core = Get-PackageMetadata (Join-Path $repository 'Cargo.toml')
 $desktop = Get-PackageMetadata (Join-Path $repository 'crates/ai-ex-desktop/Cargo.toml')
 $version = ($core.packages | Where-Object name -EQ 'ai-ex-service').version
 $desktopVersion = ($desktop.packages | Where-Object name -EQ 'ai-ex-desktop').version
-if (-not $version -or $version -ne $desktopVersion) { throw 'Desktop and service versions must match.' }
+$migratorVersion = ($core.packages | Where-Object name -EQ 'ai-ex-migrate').version
+if (-not $version -or $version -ne $desktopVersion -or $version -ne $migratorVersion) {
+    throw 'Desktop, service and migrator versions must match.'
+}
 $name = "AIex-Windows-x64-$version"
 $destination = Join-Path $outputRoot $name
 $archive = "$destination.zip"
@@ -61,8 +64,8 @@ foreach ($path in @($destination, $archive, $checksum)) {
 if (-not $SkipBuild) {
     $buildArgs = @('build', '--release', '--locked')
     if ($Offline) { $buildArgs += '--offline' }
-    & cargo @buildArgs --manifest-path (Join-Path $repository 'Cargo.toml') -p ai-ex-service --all-features
-    if ($LASTEXITCODE -ne 0) { throw 'Service release build failed.' }
+    & cargo @buildArgs --manifest-path (Join-Path $repository 'Cargo.toml') -p ai-ex-service -p ai-ex-migrate --all-features
+    if ($LASTEXITCODE -ne 0) { throw 'Core executable release build failed.' }
     & cargo @buildArgs --manifest-path (Join-Path $repository 'crates/ai-ex-desktop/Cargo.toml')
     if ($LASTEXITCODE -ne 0) { throw 'Desktop release build failed.' }
 }
@@ -70,6 +73,7 @@ if (-not $SkipBuild) {
 $binaries = @{
     'AIex.exe' = Join-Path $desktop.target_directory 'release/ai-ex-desktop.exe'
     'ai-ex-service.exe' = Join-Path $core.target_directory 'release/ai-ex-service.exe'
+    'ai-ex-migrate.exe' = Join-Path $core.target_directory 'release/ai-ex-migrate.exe'
 }
 foreach ($path in $binaries.Values) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Release executable missing: $path" }
@@ -104,6 +108,10 @@ if (-not $status.ready -or $status.version -ne $version) { throw 'Packaged deskt
 $serviceVersion = Invoke-PackageCheck (Join-Path $destination 'ai-ex-service.exe') '--version'
 if ($serviceVersion.Trim() -ne "ai-ex-service $version") {
     throw 'Packaged service version check failed.'
+}
+$migratorVersion = Invoke-PackageCheck (Join-Path $destination 'ai-ex-migrate.exe') '--version'
+if ($migratorVersion.Trim() -ne "ai-ex-migrate $version") {
+    throw 'Packaged migrator version check failed.'
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem

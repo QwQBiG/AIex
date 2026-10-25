@@ -1,6 +1,6 @@
 # 当前架构与扩展边界
 
-本文描述 0.7.1-alpha.1 的数字伙伴工作室架构；本次维护变化与验证见[0.7.1 版本说明](releases/0.7.1-alpha.1.md)。源码、资源与历史内容的归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，验收入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
+本文描述 0.8.0-alpha.1 的数字伙伴工作室架构，包含记忆与合成回放工作流。交付范围和验证见[0.8 版本说明](releases/0.8.0-alpha.1.md)；此前基线见[0.7.1 版本说明](releases/0.7.1-alpha.1.md)，迁移进度和注明范围的历史检查点见[Rust 迁移记录](RUST_ONLY_MIGRATION.md)。源码、资源与历史内容的归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，验收入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
 
 ## 1. 运行结构与状态归属
 
@@ -29,17 +29,29 @@ flowchart TB
 
 | 模块 | 职责 |
 | --- | --- |
-| `main` / `session` / `navigation` | 参数、页面切换、配置与本次进程凭据、服务和客户端装配 |
+| `main` / `launch` / `session` / `navigation` | 启动参数校验、页面切换、配置与本次进程凭据、服务和客户端装配 |
 | `app` / `app_layout` / `app_chat` | 事件归并、页面布局、输入和消息显示 |
+| `app_reflex` | 合成回放的操作草稿、服务确认应答与结果未知提示，不持有执行会话 |
 | `ui/theme` | 欢迎、设置、预览、聊天和记忆共用的字体与配色，不依赖聊天状态 |
 | `ui/test_support` | 仅供测试复用的离屏绘制与输入辅助，不进入发布程序 |
-| `worker` | 独立读轮询与命令发送、优先控制、事件补齐与恢复 |
+| `worker` | 独立读轮询与命令发送、优先控制、事件补齐与恢复；回放的暂停、停止和查询使用独立有界通道 |
 | `memory_panel` / `memory_panel_ui` | 当前角色的记忆列表、笔记草稿、修改确认与异步应答归并 |
 | `appearance` / `builtin_character` | 外形偏好、稳定人物 ID、选择与构图，不修改角色身份 |
 | `anime_portrait` / `oc_portrait` | 各自的人物素材缓存、局部坐标与绘制；共同消费表现参数 |
 | `appearance_import` / `image_appearance` | 自定义图片包的异步校验、解码、纹理选择和失败保留 |
 | `welcome` / `preview` / `setup_view` / `oc_gallery` | 首次入口、离线人物舞台、独立静态素材册、连接表单与固定底部操作区 |
 | `character_library` / `scene_files` / `scene_resume` | 角色收藏、资源包读写、按连接范围恢复组合 |
+
+服务中的合成回放按下列边界装配：
+
+| 模块 | 职责 |
+| --- | --- |
+| `template_game` | 显式清单与图片校验、几何映射和独立 CLI 回放 |
+| `template_host::TemplateHost` | 持有回放会话、控制代次和仲裁锁；替换或关闭前排空已开始的步骤与审计 |
+| `conversation_activity::ConversationActivity` | 登记排队和活动对话的占用，由实际执行任务结算；客户端断开不提前宣称空闲 |
+| `strategy_loop` | 可选慢速观察 worker，只产生 Keep / FocusRegion 建议，由宿主在完整快步骤边界核验 |
+
+快循环通过 `ai-ex-automation::ReflexSession` 执行动作；慢观察不取得输入或暂停恢复权限。当前宿主只构造 `DryRunAutomationPort`，处理清单图片，不接入真实 Windows 捕获和键鼠。聊天、转写和语音占用参与同一暂停仲裁，完整合同与限制见[模板回放](TEMPLATE_GAME.md)。
 
 预览和聊天使用相同应用存储标识，共享外形偏好。页面退出的导航请求本身不启动服务；离线预览不创建模型、网络客户端或声音设备。聊天窗口持有自己启动的子进程并检查它是否提前退出，外部服务只建立控制连接。
 
@@ -55,6 +67,7 @@ PNG 插画通过 `include_bytes!` 编译进桌面程序，解码结果与纹理�
 | 事件顺序与快照 | `ai-ex-observability` | 串行分配序号、更新快照并广播 |
 | 服务人格快照与命令应答 | 服务控制后端 | 对应命令成功后确认；不由桌面草稿推断成功 |
 | 编辑草稿、收藏、外形、启动组合 | `ai-ex-desktop` | 草稿与已应用内容分离；资源校验和服务确认后切换 |
+| 合成回放会话与控制租约 | 服务 `TemplateHost` 与 `ai-ex-automation::ReflexSession` | 宿主仲裁操作与占用；旧代次不能恢复执行，慢观察结果在下一完整步骤边界核验 |
 
 ## 2. 模块地图
 
@@ -66,11 +79,11 @@ PNG 插画通过 `include_bytes!` 编译进桌面程序，解码结果与纹理�
 | 配置与资源清单 | `ai-ex-config` | TOML、角色/外形/场景校验；桌面负责图片解码和绘制 |
 | 对话编排 | `ai-ex-core`、`ai-ex-text` | 状态机、端口、取消与分句；不依赖具体网络/设备实现 |
 | 模型 | `ai-ex-deepseek`、`ai-ex-ollama`、`ai-ex-koboldcpp` | 实现模型端口，处理流协议和取消 |
-| 记忆 | `ai-ex-memory` | 本地 JSONL、分类与身份隔离、检索、带版本检查的单条管理 |
+| 记忆 | `ai-ex-memory` | JSONL、身份隔离、词法/可选语义召回、实体与媒体来源、带版本检查的管理及显式维护 |
 | 表现与声音 | `ai-ex-stage`、`ai-ex-vts`、`ai-ex-stage-obs`、`ai-ex-audio`、`ai-ex-tts` | 舞台能力路由、可选外形、语音队列、合成及播放 |
 | 语音输入 | `ai-ex-duplex`、`ai-ex-asr`、`ai-ex-capture` | VAD/输入契约、HTTP 转写、可选原生采集 |
 | 直播与回放 | `ai-ex-event-bus`、`ai-ex-bilibili`、`ai-ex-simulator` | 直播领域事件、连接与离线模拟；与运行状态事件区分 |
-| 扩展与动作 | `ai-ex-plugin`、`ai-ex-vision`、`ai-ex-safety`、`ai-ex-automation`、`ai-ex-audit` | 插件协议、只读观察、能力许可、动作编排和审计 |
+| 扩展与动作 | `ai-ex-plugin`、`ai-ex-vision`、`ai-ex-safety`、`ai-ex-automation`、`ai-ex-audit` | 插件协议、只读观察、能力许可、受控反射会话和审计；当前回放使用合成端口 |
 | 观察与控制 | `ai-ex-observability`、`ai-ex-control`、`ai-ex-ui-model` | 运行状态事件、认证控制协议、框架无关的 UI 投影 |
 | 入口 | `ai-ex-service`、`ai-ex-migrate`、`ai-ex-desktop` | 服务装配、旧配置迁移、独立桌面 |
 
@@ -128,6 +141,17 @@ StageRouter 依据 `Speech` 能力分组清理；外形扩展应与语音执行�
 - **启动组合**：桌面本机快照，按配置绝对路径与控制地址区分；复用已有服务时先预览确认。
 
 导入先校验版本、资源路径、大小和图片内容，再进入确认流程。连接超时可能导致客户端无法确定服务是否已应用，此时保留本地外形并提示重新确认；没有跨进程事务回滚。持久记忆存在本机，召回内容会随请求发送到用户选择的模型。
+
+### 记忆存储与检索职责
+
+| `ai-ex-memory` 内部模块 | 职责 |
+| --- | --- |
+| `record` / `writer` | JSONL 记录、派生检索字段、文件读取和独占写入租约 |
+| `retrieval` / `policy` | 默认混合召回或显式旧兼容策略、模型空间核对与显式向量重建；评分公式不触发后台维护 |
+| `entities` / `knowledge` | 从记录建立有来源的实体候选，提供媒体描述、标签与结构化特征查询 |
+| `management` / `maintenance` | 确认笔记、更正、遗忘与显式媒体维护，持久写入成功后才发布修改 |
+
+向量模型通过 `EmbeddingPort` 注入；没有配置时保持本地检索。旧备份、媒体快照与显式 Chroma v2 快照由 `ai-ex-migrate` 转换，桌面不直接连接旧数据库。实体候选不等于已核实事实，媒体元数据也不等于自动理解或原始附件迁移；格式、导入范围与原生库验收限制见[Rust 迁移记录](RUST_ONLY_MIGRATION.md)。
 
 ### 记忆管理的数据流
 

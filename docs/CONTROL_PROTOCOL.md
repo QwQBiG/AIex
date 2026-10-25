@@ -41,6 +41,7 @@ max_message_bytes = 65536
 {"type":"stage"}
 {"type":"persona"}
 {"type":"memory","request":{"type":"list","profile_id":"default","query":"","kind":null,"offset":0,"limit":12}}
+{"type":"automation","request":{"type":"status"}}
 {"type":"set_persona","profile":{"profile_id":"default","revision":2,"name":"AIex","system_prompt":"","tone":"warm, concise, and curious","taboos":[],"live_mode":"controlled"}}
 {"type":"events","after":42,"limit":256}
 {"type":"emergency_stop"}
@@ -57,9 +58,48 @@ max_message_bytes = 65536
 
 `stage` 返回最近的舞台动作摘要，包含遥测 schema、单调序号、动作类型和受限 detail；它只读，不会触发 OBS 或桌面副作用。
 
+## 合成模板回放
+
+`automation` 命令使用同一个请求信封、令牌和响应 UUID，控制服务持有的合成模板会话。以下契约适用于 0.8.0-alpha.1；旧 0.7.1 程序不包含该入口，使用时需一起升级桌面与服务。它只读取明确指定的回放图片并记录 dry-run 动作，不提供真实屏幕或键鼠执行选项。清单准备和执行边界见[模板回放说明](TEMPLATE_GAME.md)。
+
+以下每行都是独立命令，发送时放入请求信封；示例中的实例、会话和版本需替换为实际状态：
+
+```json
+{"type":"automation","request":{"type":"status"}}
+{"type":"automation","request":{"type":"start_template","instance_id":"00000000-0000-0000-0000-000000000001","expected_revision":4,"operation_id":"00000000-0000-0000-0000-000000000002","manifest":"D:/replay/manifest.json"}}
+{"type":"automation","request":{"type":"pause","instance_id":"00000000-0000-0000-0000-000000000001","session_id":"00000000-0000-0000-0000-000000000003","expected_revision":5}}
+{"type":"automation","request":{"type":"resume","instance_id":"00000000-0000-0000-0000-000000000001","session_id":"00000000-0000-0000-0000-000000000003","expected_revision":6}}
+{"type":"automation","request":{"type":"stop","instance_id":"00000000-0000-0000-0000-000000000001","session_id":"00000000-0000-0000-0000-000000000003","expected_revision":6}}
+```
+
+成功响应的 payload 为 `{"type":"automation","data":{...}}`，`data` 直接对应 `AutomationSnapshot`，没有额外的 Box 层：
+
+| 字段 | 含义 |
+| --- | --- |
+| `schema_version` | 当前为 `1`；不支持的版本拒绝应用 |
+| `instance_id` | 与运行时快照相同的服务实例 UUID；重启后重新读取，不沿用旧实例的会话或游标 |
+| `revision` | 变更游标，包含控制、暂停归属和静默期限变化；纯帧进度不增加它 |
+| `projection_sequence` | 同一实例中所有已发布摘要的顺序，包括帧进度与命令应答；旧轮询不能覆盖更新摘要 |
+| `available` | 当前服务是否提供合成回放主机 |
+| `session` | 无会话时为 `null`，否则包含稳定 `session_id`、`operation_id`、阶段、控制状态和有界执行摘要 |
+
+`session_id` 由服务为新会话分配；`operation_id` 由客户端为一次开始意图分配，用于识别同一次开始操作。它们与每条请求信封的 `request_id` 分别使用，不能互相替代。
+
+新建 `start_template` 必须使用当前 `instance_id` 和精确的 `expected_revision`。服务先登记 `operation_id` 再加载图片，成功应答中的 `loading` 不代表回放已经完成。对当前 operation 和同一路径的重复请求返回当前状态，不重复启动；同一 operation 指向另一路径会拒绝。manifest 路径最多 4096 个 UTF-8 字节，不得为空或含控制字符；它在服务端解析，跨工作目录使用时建议传绝对路径。清单中的图片和 profile 相对清单所在目录解析。
+
+`pause` 和 `resume` 校验当前实例、会话及精确的变更版本。手动暂停即使已经处于聊天暂停，也会撤销自动恢复权；恢复只在宿主确认聊天、排队话轮、转写和语音都空闲时允许。`stop` 对当前会话是终态，接受不高于当前的旧版本，拒绝未来版本，使停止能胜过并发暂停或聊天。`stopping` 表示已经撤销后续派发、正在排空已开始的步骤；已派发动作不能由停止响应撤回。继续执行需要显式开始新会话。
+
+会话摘要包含 `phase`、`control_mode`、暂停原因、恢复条件、已消耗/最大帧数和动作数、最后结果及受限错误。`chat_deadline_ms` 属于宿主单调时钟，仅供观察，不能当作客户端墙钟时间或恢复权限。`search_incomplete` 是计算预算不足、无法认证完整匹配的终态；可选 `search` 只携带区域和有界计算进度，不携带暂定分数、目标坐标或可重试动作。
+
+完整 `AutomationSnapshot` 序列化上限为 **16 KiB**；摘要不含 RGBA、原始图片、完整回执或审计记录。`revision` 和 `projection_sequence` 是用途不同的整数游标，不能互相替代。自动化摘要不推进聊天事件游标。
+
+超时或响应丢失表示结果未知，客户端保留清单草稿，先查询 `automation/status`，不自动重发 Start、Pause、Resume 或 Stop。相同快照不能证明一个待确认命令尚未执行，刷新后仍可能需要保持“待核对”；只有能与实例、operation、会话或变更版本对应的确认才解除等待。版本冲突时也应刷新，不覆盖较新的控制状态。
+
+桌面的回放状态查询、Pause 和 Stop 各有独立的有界通道，Stop 不排在聊天、记忆、Start、Resume、Status 或 Pause 请求之后；全局 `emergency_stop` 继续使用独立紧急入口。断线或事件历史待同步时禁用普通回放变更；连接有效、会话身份已知时仍可请求停止。通道独立不保证断网时命令已经执行，应以服务确认和后续状态为准。
+
 ## 记忆管理
 
-`memory` 命令包装领域层的 `MemoryRequest`，仍使用相同请求 UUID 和令牌。以下契约对应当前源码；实体及媒体请求尚未包含在已发布的 0.7.1-alpha.1 程序中，桌面与服务需同步构建。
+`memory` 命令包装领域层的 `MemoryRequest`，仍使用相同请求 UUID 和令牌。以下契约适用于 0.8.0-alpha.1；实体及媒体请求需要同版服务，旧 0.7.1 仅支持原有基础记忆操作。
 
 每行都是独立命令，发送时仍需放入前述请求信封：
 

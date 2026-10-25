@@ -1,5 +1,6 @@
 use ai_ex_domain::{
-    AppError, ComponentHealth, MemoryRequest, MemoryResponse, PersonaSnapshot, StageSnapshot,
+    AppError, AutomationRequest, AutomationSnapshot, ComponentHealth, MemoryRequest,
+    MemoryResponse, PersonaSnapshot, StageSnapshot,
 };
 use ai_ex_observability::{RuntimeSnapshot, SequencedEvent};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,7 @@ pub enum ControlCommand {
     Status,
     Persona,
     Memory { request: MemoryRequest },
+    Automation { request: AutomationRequest },
     SetPersona { profile: PersonaSnapshot },
     Health,
     Stage,
@@ -34,6 +36,7 @@ pub enum ControlPayload {
     Snapshot(RuntimeSnapshot),
     Persona(PersonaSnapshot),
     Memory(Box<MemoryReply>),
+    Automation(Box<AutomationSnapshot>),
     Health(Vec<ComponentHealth>),
     Stage(StageSnapshot),
     Events(Vec<SequencedEvent>),
@@ -156,6 +159,80 @@ mod memory_protocol_tests {
                 .unwrap()
                 .truncated_ids
                 .is_empty()
+        );
+    }
+}
+
+#[cfg(test)]
+mod automation_protocol_tests {
+    use super::*;
+    use ai_ex_domain::{
+        AutomationControlMode, AutomationSessionPhase, AutomationSessionSnapshot,
+        AutomationStepOutcome,
+    };
+
+    #[test]
+    fn automation_request_uses_existing_authenticated_correlated_envelope() {
+        let request = ControlRequest {
+            request_id: Uuid::from_u128(1),
+            token: "synthetic-test-token".into(),
+            command: ControlCommand::Automation {
+                request: AutomationRequest::StartTemplate {
+                    instance_id: Uuid::from_u128(2),
+                    expected_revision: 4,
+                    operation_id: Uuid::from_u128(3),
+                    manifest: "fixture/replay.json".into(),
+                },
+            },
+        };
+        let bytes = serde_json::to_vec(&request).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<ControlRequest>(&bytes).unwrap(),
+            request
+        );
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["command"]["type"], "automation");
+        assert_eq!(value["command"]["request"]["type"], "start_template");
+        assert_eq!(value["command"]["request"]["expected_revision"], 4);
+        assert_eq!(value["request_id"], Uuid::from_u128(1).to_string());
+        assert_eq!(
+            value["command"]["request"]["operation_id"],
+            Uuid::from_u128(3).to_string()
+        );
+    }
+
+    #[test]
+    fn bounded_terminal_automation_snapshot_round_trips_as_a_typed_success() {
+        let mut snapshot = AutomationSnapshot::new(Uuid::from_u128(1), true);
+        snapshot.revision = 11;
+        snapshot.projection_sequence = 24;
+        let mut session =
+            AutomationSessionSnapshot::loading(Uuid::from_u128(2), Uuid::from_u128(3));
+        session.phase = AutomationSessionPhase::Finished;
+        session.control_mode = AutomationControlMode::Stopped;
+        session.latest_outcome = Some(AutomationStepOutcome::Stopped);
+        snapshot.session = Some(session);
+        snapshot.validate().unwrap();
+        let response = ControlResponse::Success {
+            request_id: Uuid::from_u128(4),
+            payload: ControlPayload::Automation(Box::new(snapshot.clone())),
+        };
+        let bytes = serde_json::to_vec(&response).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<ControlResponse>(&bytes).unwrap(),
+            response
+        );
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["payload"]["type"], "automation");
+        assert_eq!(value["payload"]["data"]["revision"], 11);
+        assert_eq!(value["payload"]["data"]["projection_sequence"], 24);
+        assert_eq!(
+            value["payload"]["data"]["session"]["latest_outcome"],
+            "stopped"
+        );
+        assert_eq!(
+            serde_json::from_value::<AutomationSnapshot>(value["payload"]["data"].clone()).unwrap(),
+            snapshot
         );
     }
 }

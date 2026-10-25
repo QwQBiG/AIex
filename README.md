@@ -2,19 +2,21 @@
 
 一个 Windows 优先、以 Rust 为核心的本地数字伙伴工作室。人格、记忆和表现相互独立：同一个角色可以使用原生人物立绘、自定义图片，也可以隐藏外形或连接 VTube Studio。
 
-当前版本：**0.7.1-alpha.1 · 架构与维护整理**。[版本说明](docs/releases/0.7.1-alpha.1.md)记录本次维护变化及验证；[演进路线](docs/DIGITAL_HUMAN_ROADMAP.md)记录后续设计。
+当前版本：**0.8.0-alpha.1 · 记忆与合成回放工作室**。[版本说明](docs/releases/0.8.0-alpha.1.md)记录交付范围及验证；[演进路线](docs/DIGITAL_HUMAN_ROADMAP.md)记录后续设计。
 
 **首次体验只需完整解压程序包，双击 `AIex.exe`。** 无需安装 Rust、Python 或 VTube Studio。[整体验收流程](docs/MANUAL_TEST_PLAN.md)从界面操作开始。
 
-[下载 Windows 便携包](https://github.com/QwQBiG/AIA/releases/download/v0.7.1-alpha.1/AIex-Windows-x64-0.7.1-alpha.1.zip) · [查看发布与校验文件](https://github.com/QwQBiG/AIA/releases/tag/v0.7.1-alpha.1)
+[下载 Windows 便携包](https://github.com/QwQBiG/AIex/releases/download/v0.8.0-alpha.1/AIex-Windows-x64-0.8.0-alpha.1.zip) · [查看发布与校验文件](https://github.com/QwQBiG/AIex/releases/tag/v0.8.0-alpha.1)
 
 ## 完全 Rust 化进展
 
-当前运行与构建已使用 Rust，旧 Python 源码仍在逐功能迁移。新增离线配置校验、旧备份向量与元数据迁移、可选语义召回、记忆重建及实测性能基准见[迁移记录](docs/RUST_ONLY_MIGRATION.md)。当前源码的[记忆工作台](docs/MEMORY_WORKSPACE.md)还增加实体候选与来源核对、媒体描述与标签筛选，支持更正和遗忘后同步更新来源；[离线迁移工具](tools/README.md#显式多模态快照导入)可保留显式多模态快照的嵌套特征和元数据。新增[模板匹配与受控游戏回放](docs/TEMPLATE_GAME.md)通过有界图片清单验证匹配、坐标映射和同一 permit/审计动作链，当前仅执行 dry-run。这批本地改动尚未发布，实体候选不代表独立事实核验，媒体记录不包含自动理解或原始附件能力，旧 Python 仍有待迁移项目。
+当前运行与构建已使用 Rust，旧 Python 源码仍在逐功能迁移。本版在原有人物、角色收藏和场景组合之上增加：
 
-## 这次维护更新
+- **记忆工作台**：可选语义召回、角色范围的记忆重建、实体候选与来源核对，以及媒体描述和标签筛选。更正、遗忘会同步更新对应来源，见[记忆工作台](docs/MEMORY_WORKSPACE.md)。实体候选不代表独立事实核验，媒体记录不包含自动理解或原始附件采集。
+- **合成模板回放**：服务持有有界图片会话，桌面设置页可开始、暂停、恢复和停止；聊天与语音占用会暂缓回放。可选视觉观察只建议同一目标的搜索区域，增量精确搜索会明确报告预算内未完成的结果。入口和限制见[模板回放说明](docs/TEMPLATE_GAME.md)，当前执行端为合成 dry-run。
+- **显式数据迁移**：便携包附带 `ai-ex-migrate.exe`，可保留旧备份向量、元数据与显式多模态快照；[Chroma 桥接](docs/CHROMA_BRIDGE.md)提供只读导出和主记忆导入，实体集合保留归档。参数、验证记录与剩余迁移合同集中在[迁移记录](docs/RUST_ONLY_MIGRATION.md)和[工具索引](tools/README.md)。
 
-0.7.1 整理了各页面共用的界面模块，强化包名、路径与依赖方向检查，并补齐[项目目录](docs/PROJECT_LAYOUT.md)和维护入口。人物、对话、场景与记忆流程保持一致，现有数据格式继续沿用。
+真实 Windows 屏幕捕获、键鼠与旧 Python 的其余必迁移能力仍在后续计划中，不能把合成回放视为真实游戏操作已经完成。
 
 ## 自己的 OC，放在第一位
 
@@ -29,7 +31,8 @@
 | 能力 | 当前实现 |
 | --- | --- |
 | 自定义角色 | 新建、独立复制、收藏多个版本、导入导出、预览确认后应用 |
-| 记忆工作台 | 按角色查看、新建确认笔记、更正与单条遗忘；换外形不换身份 |
+| 记忆工作台 | 按角色管理确认笔记、实体来源、媒体描述和标签；更正与遗忘同步更新对应来源 |
+| 合成模板回放 | 有界图片清单、聊天与语音暂停、手动恢复和停止；仅记录 dry-run 动作 |
 | 多种外形 | 两位内置人物、OC 半身/全身与素材册、PNG/JPEG 表情组、隐藏外形；VTS 可选 |
 | 组合场景 | 保存角色、人物选择和构图，图片随包携带；支持启动时恢复已选组合 |
 | 对话与打断 | 三种模型适配器、流式回答、有界排队、慢模型和语音拥堵时取消 |
@@ -37,7 +40,7 @@
 | 故障恢复 | 断线重同步、外形输出降级、停止期间保护已开始的记忆写入 |
 | 可选输入与扩展 | Whisper 兼容转写、原生采集、Bilibili、OBS、插件与只读视觉分析 |
 
-网页、桌面悬浮窗口、VRM 3D、图形化声音/行为包编辑器尚未实现。场景包目前组合角色与外形，模型凭据、声音配置和私人记忆不随包导出。Windows 自动化动作适配器尚未启用。
+网页、桌面悬浮窗口、VRM 3D、图形化声音/行为包编辑器尚未实现。场景包目前组合角色与外形，模型凭据、声音配置和私人记忆不随包导出。真实 Windows 捕获与键鼠适配器尚未接入。
 
 ![聊天页与内置人物（离屏渲染）](docs/assets/studio-chat.png)
 
@@ -45,7 +48,7 @@
 
 ## 快速开始
 
-1. 将 `AIex-Windows-x64-0.7.1-alpha.1.zip` 完整解压到可写入的文件夹。
+1. 将 `AIex-Windows-x64-0.8.0-alpha.1.zip` 完整解压到可写入的文件夹。
 2. 双击其中的 **`AIex.exe`**，点击 **“先体验外形”**。先看一号人物，切换半身/全身，展开 **“OC 素材册”** 翻看原画。无需账号或模型；也可选择初始伙伴或导入自己的图片外形。
 3. 直接在预览底部点击 **“开始对话”**，按界面填写模型连接信息并保存。预览中的外形会沿用，后台服务已随包提供，会自动启动。
 
@@ -152,7 +155,7 @@ flowchart LR
 
 ## 验证与文档
 
-[整体验收流程](docs/MANUAL_TEST_PLAN.md)提供简短体验清单，以及可展开的深度检查和故障记录方法。自动验证范围见[本版说明](docs/releases/0.7.1-alpha.1.md)；真实窗口操作和音频设备仍需整机验收。
+[整体验收流程](docs/MANUAL_TEST_PLAN.md)提供简短体验清单，以及可展开的深度检查和故障记录方法。自动验证范围见[本版说明](docs/releases/0.8.0-alpha.1.md)；真实窗口操作和音频设备仍需整机验收。
 
 - [角色收藏](docs/CHARACTER_LIBRARY.md) · [角色包](docs/CHARACTER_PACKS.md) · [图片外形](docs/APPEARANCE_PACKS.md) · [场景组合](docs/SCENE_PACKS.md)
 - [记忆工作台](docs/MEMORY_WORKSPACE.md) · [人格与记忆](docs/PERSONA_MEMORY.md) · [控制协议](docs/CONTROL_PROTOCOL.md) · [插件协议](docs/PLUGIN_PROTOCOL.md)

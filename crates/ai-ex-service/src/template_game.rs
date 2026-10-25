@@ -45,6 +45,7 @@ struct Manifest {
     max_actions: Option<u64>,
     search_region: Option<PixelRect>,
     report: Option<PathBuf>,
+    strategy: Option<crate::strategy_loop::StrategyOptions>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,7 +116,28 @@ impl AuditSink for ReplayAudit {
     }
 }
 
-pub async fn replay(path: &Path) -> Result<(), AppError> {
+/// Validated, cadence-filtered replay input shared by CLI and service sessions.
+/// Frame pixels, geometry and timestamps have matching positions in their vectors.
+pub(crate) struct PreparedTemplate {
+    pub(crate) controller: ReflexController,
+    pub(crate) frames: Vec<ScreenFrame>,
+    pub(crate) geometries: Vec<FrameGeometry>,
+    pub(crate) timestamps_ms: Vec<u64>,
+    pub(crate) profile: String,
+    pub(crate) target: String,
+    pub(crate) mode: String,
+    pub(crate) input_frames: usize,
+    pub(crate) report_path: Option<PathBuf>,
+    pub(crate) action_capacity: usize,
+    pub(crate) strategy: Option<crate::strategy_loop::StrategyOptions>,
+}
+
+/// Load bounded session input without accessing the CLI-only report destination.
+pub(crate) fn load_session(path: &Path) -> Result<PreparedTemplate, AppError> {
+    prepare(path, false)
+}
+
+fn prepare(path: &Path, check_report_path: bool) -> Result<PreparedTemplate, AppError> {
     let bytes = read_limited(path, MAX_MANIFEST_BYTES)?;
     let mut manifest: Manifest = serde_json::from_slice(&bytes).map_err(|error| {
         AppError::configuration(format!(
@@ -134,6 +156,14 @@ pub async fn replay(path: &Path) -> Result<(), AppError> {
             "template replay requires schema 1, 1..=256 frames and interval_ms in 1..=60000",
         ));
     }
+    if let Some(strategy) = &manifest.strategy {
+        strategy.validate()?;
+        if check_report_path {
+            return Err(AppError::configuration(
+                "strategy options require a service-hosted template session",
+            ));
+        }
+    }
     let mode = match manifest.mode.as_str() {
         "click_once" => ReflexMode::ClickOnce,
         "click_repeat" => ReflexMode::ClickRepeat,
@@ -149,7 +179,7 @@ pub async fn replay(path: &Path) -> Result<(), AppError> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let report_path = manifest.report.as_ref().map(|p| resolve(base, p));
-    if report_path.as_ref().is_some_and(|p| p.exists()) {
+    if check_report_path && report_path.as_ref().is_some_and(|p| p.exists()) {
         return Err(AppError::configuration(
             "refusing to overwrite template replay report",
         ));
@@ -208,6 +238,7 @@ pub async fn replay(path: &Path) -> Result<(), AppError> {
     }
     let mut frames = Vec::with_capacity(scheduled.len());
     let mut geometries = Vec::with_capacity(scheduled.len());
+    let mut timestamps_ms = Vec::with_capacity(scheduled.len());
     let mut frame_bytes = 0usize;
     for input in &scheduled {
         let frame = load_image(&resolve(base, &input.image))?;
@@ -228,6 +259,7 @@ pub async fn replay(path: &Path) -> Result<(), AppError> {
         )?;
         frames.push(frame);
         geometries.push(geometry);
+        timestamps_ms.push(input.timestamp_ms);
     }
     let options = ReflexOptions {
         mode,
@@ -236,32 +268,55 @@ pub async fn replay(path: &Path) -> Result<(), AppError> {
         max_actions,
         search_region: manifest.search_region,
     };
-    let mut controller = ReflexController::new(manifest.target.clone(), matcher, options)?;
+    let controller = ReflexController::new(manifest.target.clone(), matcher, options)?;
+    let action_capacity = usize::try_from(max_frames + max_actions)
+        .map_err(|_| AppError::configuration("template replay action budget overflow"))?;
+    Ok(PreparedTemplate {
+        controller,
+        frames,
+        geometries,
+        timestamps_ms,
+        profile: profile.display_name,
+        target: manifest.target,
+        mode: manifest.mode,
+        input_frames,
+        report_path,
+        action_capacity,
+        strategy: manifest.strategy,
+    })
+}
+
+pub async fn replay(path: &Path) -> Result<(), AppError> {
+    let PreparedTemplate {
+        mut controller,
+        frames,
+        geometries,
+        timestamps_ms,
+        profile,
+        target,
+        mode,
+        input_frames,
+        report_path,
+        action_capacity,
+        strategy: _,
+    } = prepare(path, true)?;
+    let scheduled_frames = timestamps_ms.len();
     let safety = Arc::new(SafetyGate::new(SafetyPolicy {
         automation_enabled: true,
         allowed_capabilities: BTreeSet::from([Capability::ScreenRead, Capability::MouseInput]),
-        allowed_targets: vec![manifest.target.clone()],
+        allowed_targets: vec![target.clone()],
     }));
-    let actions_capacity = usize::try_from(max_frames + max_actions)
-        .map_err(|_| AppError::configuration("template replay action budget overflow"))?;
     let records = Arc::new(Mutex::new(Vec::new()));
     let audit = ReplayAudit {
         records: Arc::clone(&records),
-        capacity: actions_capacity * 3,
+        capacity: action_capacity * 3,
     };
-    let port = DryRunAutomationPort::with_frames(actions_capacity, frames)?;
+    let port = DryRunAutomationPort::with_frames(action_capacity, frames)?;
     let mut coordinator = AutomationCoordinator::new(safety, port, audit);
     let mut steps = Vec::new();
     let mut failure = None;
-    for (input, geometry) in scheduled.iter().zip(&geometries) {
-        match run_reflex_step(
-            &mut controller,
-            &mut coordinator,
-            geometry,
-            input.timestamp_ms,
-        )
-        .await
-        {
+    for (timestamp_ms, geometry) in timestamps_ms.iter().zip(&geometries) {
+        match run_reflex_step(&mut controller, &mut coordinator, geometry, *timestamp_ms).await {
             Ok(step) => steps.push(step),
             Err(error) => {
                 failure = Some(error);
@@ -275,7 +330,12 @@ pub async fn replay(path: &Path) -> Result<(), AppError> {
             break;
         }
     }
-    let outcome = if failure.is_some() {
+    let outcome = if failure
+        .as_ref()
+        .is_some_and(|error| error.report.search_incomplete.is_some())
+    {
+        "search_incomplete"
+    } else if failure.is_some() {
         "failed"
     } else {
         match controller.state() {
@@ -287,12 +347,12 @@ pub async fn replay(path: &Path) -> Result<(), AppError> {
     let report = Report {
         schema_version: 1,
         execution_mode: "dry_run",
-        profile: profile.display_name,
-        target: manifest.target,
-        mode: manifest.mode,
+        profile,
+        target,
+        mode,
         input_frames,
-        scheduled_frames: scheduled.len(),
-        skipped_frames: input_frames - scheduled.len(),
+        scheduled_frames,
+        skipped_frames: input_frames - scheduled_frames,
         outcome: outcome.into(),
         steps,
         failure,

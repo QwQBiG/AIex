@@ -10,6 +10,10 @@ ai-ex-domain = { path = "../ai-ex-domain" }
 async-trait.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
 
 [lints]
 workspace = true

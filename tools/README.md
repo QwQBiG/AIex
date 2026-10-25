@@ -10,7 +10,8 @@
 | --- | --- |
 | [check_architecture.ps1](check_architecture.ps1) | 读取核心工作区与独立桌面的 Cargo 元数据，校验内部依赖方向与包登记。无参数执行正常检查；`-ProbeViolation` 在内存中注入违规依赖，预期退出码为 1，不改写 Cargo 文件。 |
 | [create_control_token.ps1](create_control_token.ps1) | 生成随机控制令牌并写入 UTF-8 文件。`-Path` 指定文件，默认 `config/control.token`；目标存在时拒绝覆盖，只有明确轮换令牌才使用 `-Force`。 |
-| [package_windows.ps1](package_windows.ps1) | 在 Windows 上构建并打包桌面、服务与分发模板，检查可执行文件与版本，生成 ZIP 和 SHA256。支持 `-OutputDirectory`、`-SkipBuild`、`-Offline`；已存在的输出拒绝覆盖。 |
+| [package_windows.ps1](package_windows.ps1) | 在 Windows 上构建并打包桌面、服务、迁移器与分发模板，检查可执行文件与版本，生成 ZIP 和 SHA256。支持 `-OutputDirectory`、`-SkipBuild`、`-Offline`；已存在的输出拒绝覆盖。 |
+| [verify_windows_portable.ps1](verify_windows_portable.ps1) | 验证已有 ZIP 的文件、版本、迁移路径和无窗口运行；兼容旧五文件包，0.8 起要求包含迁移器的六文件包。`-ArchivePath` 必需；`-EvidenceDirectory` 可选，指定证据父目录，默认 `target`。每次创建独立子目录并输出 JSON 摘要，不调用 Cargo。 |
 
 架构检查使用离线、锁定依赖的 Cargo 元数据：
 
@@ -36,6 +37,14 @@ pwsh -NoProfile -File tools/package_windows.ps1
 ```
 
 打包要求可用的 Rust 与 Windows 链接器；`-SkipBuild` 仅适用于已完成 release 构建的程序，`-Offline` 要求依赖已在本机缓存。分发内容与安装检查边界见 [Windows 便携版](../docs/PORTABLE_WINDOWS.md)。
+
+将 `$archivePath` 设为打包结果中的 ZIP 路径后，可单独验证已有包：
+
+```powershell
+pwsh -NoProfile -File tools/verify_windows_portable.ps1 -ArchivePath $archivePath
+```
+
+验证在中文和空格目录中解压，只检查公开分发模板与离线回放；缺少服务程序应明确报错。证据、解压目录与 JSON 报告保留在唯一子目录，不覆盖旧证据，也不清理用户文件。真实窗口、模型和设备仍按整体验收流程测试。
 
 ## 架构检查的回归入口
 
@@ -67,9 +76,11 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 
 新增 `ai-ex-service --validate-config` 离线验证和 `ai-ex-migrate --memory-backup` 旧备份文本/向量/元数据迁移与 `ai-ex-service --reindex-memory` 当前角色索引重建；使用步骤、格式与数据边界见[完全 Rust 化记录](../docs/RUST_ONLY_MIGRATION.md)。语句分块的 Release 对照基准在 `crates/ai-ex-text/benches/sentence_stream.rs`，记忆检索与启动缓存对照在 `crates/ai-ex-memory/benches/recall.rs`；均由 Cargo 执行，不需要 Python。
 
+便携包同时提供 `ai-ex-migrate.exe`。在解压目录运行迁移器即可导入数据，无需安装 Rust；迁移文档中的 `cargo run -p ai-ex-migrate --locked --` 可替换为 `.\ai-ex-migrate.exe`，保留后续参数，并明确选择输入、全新输出和角色 ID。
+
 ### 显式多模态快照导入
 
-当前源码的 `ai-ex-migrate --multimodal-memory` 可将旧 `MultimodalMemory` dataclass 的显式 JSON 数组转换为独立 Rust JSONL。旧模块没有磁盘导出接口；此模式需要已经准备好的快照，不会连接 Python、读取 Chroma，也不能从旧主记忆 gzip 备份找回其中未保存的媒体对象。此功能尚未包含在已发布的 0.7.1-alpha.1 包中。
+`ai-ex-migrate --multimodal-memory` 可将旧 `MultimodalMemory` dataclass 的显式 JSON 数组转换为独立 Rust JSONL，0.8 便携包已提供迁移器入口。旧模块没有磁盘导出接口；此模式需要已经准备好的快照，不会连接 Python、读取 Chroma，也不能从旧主记忆 gzip 备份找回其中未保存的媒体对象。
 
 以下为合成示例，可保存到独立测试目录的 `multimodal-snapshot.json`。输入是一个普通 UTF-8 JSON 数组，不是逐行 JSON 或 gzip：
 

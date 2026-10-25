@@ -56,21 +56,10 @@ fn existing_service_is_reused_only_after_authentication() {
 }
 
 #[test]
-fn unused_address_allows_starting_and_cli_overrides_are_exclusive() {
+fn unused_address_allows_starting() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut config = AppConfig::default();
     config.control.bind = listener.local_addr().unwrap().to_string();
     drop(listener);
     assert!(!service_is_running(&config, "startup-test-token-with-thirty-two-bytes").unwrap());
-    assert!(
-        crate::parse_options(["--connect-only".to_owned()].into_iter())
-            .unwrap()
-            .connect_only
-    );
-    assert!(
-        crate::parse_options(
-            ["--connect-only".to_owned(), "--start-service".to_owned()].into_iter()
-        )
-        .is_err()
-    );
 }

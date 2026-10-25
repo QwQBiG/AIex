@@ -21,6 +21,11 @@ where
         Self { vad, transcriber }
     }
 
+    /// Whether VAD is collecting speech; transcription may already have completed.
+    pub fn speech_in_progress(&self) -> bool {
+        self.vad.speech_in_progress()
+    }
+
     pub async fn process_frame(
         &mut self,
         frame: AudioFrame,

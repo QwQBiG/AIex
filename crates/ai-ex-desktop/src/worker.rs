@@ -3,7 +3,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use ai_ex_control::{ControlClient, ControlCommand, ControlPayload};
-use ai_ex_domain::{AppError, ComponentHealth, PersonaSnapshot, StageSnapshot};
+use ai_ex_domain::{
+    AppError, AutomationRequest, AutomationSnapshot, ComponentHealth, PersonaSnapshot,
+    StageSnapshot,
+};
 use ai_ex_observability::{RuntimeSnapshot, SequencedEvent};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -24,6 +27,10 @@ pub enum WorkerCommand {
     Interrupt,
     EmergencyStop,
     SetPersona(PersonaSnapshot),
+    Automation {
+        request_id: u64,
+        request: AutomationRequest,
+    },
     Memory {
         request_id: u64,
         request: ai_ex_domain::MemoryRequest,
@@ -31,6 +38,11 @@ pub enum WorkerCommand {
 }
 
 pub enum WorkerEvent {
+    Automation {
+        request_id: u64,
+        result: Result<AutomationSnapshot, AppError>,
+    },
+    AutomationStatus(Result<AutomationSnapshot, AppError>),
     Connection(bool),
     Snapshot(RuntimeSnapshot),
     HistoryGap(RuntimeSnapshot),
@@ -102,7 +114,7 @@ async fn run_worker(
     }
 }
 
-async fn run_commands(
+async fn run_ordinary_commands(
     client: &ControlClient,
     commands: UnboundedReceiver<WorkerCommand>,
     events: &Sender<WorkerEvent>,
@@ -142,6 +154,10 @@ fn reject_command(events: &Sender<WorkerEvent>, command: WorkerCommand, message:
             error: message.to_owned(),
         },
         WorkerCommand::SetPersona(_) => WorkerEvent::PersonaApplyFailed(message.to_owned()),
+        WorkerCommand::Automation { request_id, .. } => WorkerEvent::Automation {
+            request_id,
+            result: Err(AppError::unavailable(message)),
+        },
         WorkerCommand::Memory { request_id, .. } => WorkerEvent::Memory {
             request_id,
             result: Err(AppError::unavailable(message)),
@@ -561,6 +577,11 @@ async fn send_command(
             None,
         ),
         WorkerCommand::EmergencyStop => (ControlCommand::EmergencyStop, None),
+        WorkerCommand::Automation { .. } => {
+            return Err(AppError::protocol(
+                "automation uses a dedicated reply channel",
+            ));
+        }
         WorkerCommand::Memory { .. } => {
             return Err(AppError::protocol("memory uses a dedicated reply channel"));
         }
@@ -695,4 +716,179 @@ async fn poll(client: &ControlClient, after: u64) -> Result<Vec<SequencedEvent>,
 
 fn emit(sender: &Sender<WorkerEvent>, event: WorkerEvent) -> bool {
     sender.send(event).is_ok()
+}
+
+struct QueuedAutomation {
+    request_id: u64,
+    request: AutomationRequest,
+    epoch: u64,
+}
+
+// Separate bounded lanes keep both Pause and Stop independent of a slow
+// conversation, Start, Resume, Status, or even the other priority request.
+pub(crate) async fn run_commands(
+    client: &ControlClient,
+    mut commands: UnboundedReceiver<WorkerCommand>,
+    events: &Sender<WorkerEvent>,
+    persona_epoch: &AtomicU64,
+) {
+    let (ordinary, ordinary_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (regular, regular_rx) = tokio::sync::mpsc::channel(32);
+    let (status, status_rx) = tokio::sync::mpsc::channel(1);
+    let (pause, pause_rx) = tokio::sync::mpsc::channel(1);
+    let (stop, stop_rx) = tokio::sync::mpsc::channel(1);
+    let epoch = AtomicU64::new(0);
+    let router = async {
+        while let Some(command) = commands.recv().await {
+            if matches!(&command, WorkerCommand::EmergencyStop) {
+                let _previous = epoch.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                    value.checked_add(1)
+                });
+            }
+            let WorkerCommand::Automation {
+                request_id,
+                request,
+            } = command
+            else {
+                if ordinary.send(command).is_err() {
+                    return;
+                }
+                continue;
+            };
+            if let Err(error) = request.validate() {
+                if !emit(
+                    events,
+                    WorkerEvent::Automation {
+                        request_id,
+                        result: Err(error),
+                    },
+                ) {
+                    return;
+                }
+                continue;
+            }
+            let priority = matches!(
+                &request,
+                AutomationRequest::Pause { .. } | AutomationRequest::Stop { .. }
+            );
+            if priority {
+                // MAX is a permanent fail-closed epoch; never wrap old work live.
+                let _previous = epoch.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                    value.checked_add(1)
+                });
+            }
+            let lane = match &request {
+                AutomationRequest::Status => &status,
+                AutomationRequest::Pause { .. } => &pause,
+                AutomationRequest::Stop { .. } => &stop,
+                _ => &regular,
+            };
+            let queued = QueuedAutomation {
+                request_id,
+                request,
+                epoch: epoch.load(Ordering::Acquire),
+            };
+            if let Err(error) = lane.try_send(queued) {
+                let queued = error.into_inner();
+                if !emit(
+                    events,
+                    WorkerEvent::Automation {
+                        request_id: queued.request_id,
+                        result: Err(AppError::unavailable(
+                            "automation command queue is full or stopped",
+                        )),
+                    },
+                ) {
+                    return;
+                }
+            }
+        }
+    };
+    tokio::select! {
+        _ = router => {},
+        _ = async {
+            tokio::join!(
+                run_ordinary_commands(client, ordinary_rx, events, persona_epoch),
+                execute_automation(client, regular_rx, events, Some(&epoch)),
+                execute_automation(client, pause_rx, events, None),
+                execute_automation(client, stop_rx, events, None),
+                poll_automation(client, status_rx, events),
+            );
+        } => {},
+    }
+}
+
+async fn automation_request(
+    client: &ControlClient,
+    request: AutomationRequest,
+) -> Result<AutomationSnapshot, AppError> {
+    request.validate()?;
+    match client.send(ControlCommand::Automation { request }).await? {
+        ControlPayload::Automation(snapshot) => {
+            snapshot.validate()?;
+            Ok(*snapshot)
+        }
+        _ => Err(AppError::protocol(
+            "automation returned an unexpected payload",
+        )),
+    }
+}
+
+async fn execute_automation(
+    client: &ControlClient,
+    mut commands: tokio::sync::mpsc::Receiver<QueuedAutomation>,
+    events: &Sender<WorkerEvent>,
+    epoch: Option<&AtomicU64>,
+) {
+    while let Some(queued) = commands.recv().await {
+        let revoked = epoch.is_some_and(|current| {
+            let current = current.load(Ordering::Acquire);
+            current == u64::MAX || current != queued.epoch
+        });
+        let result = if revoked {
+            Err(AppError::unavailable(
+                "queued automation command revoked by Pause or Stop",
+            ))
+        } else {
+            // A dispatched request may already have reached the service. Never
+            // retry it after a timeout; only the Status lane reconciles state.
+            automation_request(client, queued.request).await
+        };
+        if !emit(
+            events,
+            WorkerEvent::Automation {
+                request_id: queued.request_id,
+                result,
+            },
+        ) {
+            return;
+        }
+    }
+}
+
+async fn poll_automation(
+    client: &ControlClient,
+    mut commands: tokio::sync::mpsc::Receiver<QueuedAutomation>,
+    events: &Sender<WorkerEvent>,
+) {
+    // Do not send unsolicited automation requests to older services. The panel
+    // activates this read-only stream with its first explicit Status request.
+    let mut active = false;
+    let mut interval = tokio::time::interval(Duration::from_millis(500));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            queued = commands.recv() => {
+                let Some(queued) = queued else { return; };
+                let result = automation_request(client, AutomationRequest::Status).await;
+                if !emit(events, WorkerEvent::Automation { request_id: queued.request_id, result }) { return; }
+                active = true;
+                interval.reset();
+            }
+            _ = interval.tick(), if active => {
+                let result = automation_request(client, AutomationRequest::Status).await;
+                if !emit(events, WorkerEvent::AutomationStatus(result)) { return; }
+            }
+        }
+    }
 }

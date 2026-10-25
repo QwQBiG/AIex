@@ -7,8 +7,8 @@ use crate::ScreenFrame;
 
 // Bounds frame validation and integral-image allocation independently of the
 // convolution budget; full-frame captures up to 4096 x 4096 pixels fit.
-const MAX_FRAME_PIXELS: u64 = 16_777_216;
-const MAX_SEARCH_CANDIDATES: u64 = 16_777_216;
+pub(crate) const MAX_FRAME_PIXELS: u64 = 16_777_216;
+pub(crate) const MAX_SEARCH_CANDIDATES: u64 = 16_777_216;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PixelPoint {
@@ -32,7 +32,7 @@ impl PixelRect {
         }
     }
 
-    fn clipped_to(self, width: u32, height: u32) -> Result<Self, AppError> {
+    pub(crate) fn clipped_to(self, width: u32, height: u32) -> Result<Self, AppError> {
         if self.width == 0 || self.height == 0 || self.x >= width || self.y >= height {
             return Err(AppError::configuration(
                 "template search region is empty or outside the frame",
@@ -51,8 +51,9 @@ impl PixelRect {
 #[serde(default)]
 pub struct MatchOptions {
     pub threshold: f64,
-    /// Maximum completed grayscale pixel-pair multiplications per search.
-    /// Constant windows require no kernel work and do not consume this budget.
+    /// Maximum cumulative exact pixel-pair work plus conservative bound-query work.
+    /// Each hierarchical 16-block query costs 48 units; exact kernels charge
+    /// only completed pixel-pair multiplications. Constant windows remain free.
     pub max_work: u64,
 }
 
@@ -92,12 +93,13 @@ pub struct TemplateMatch {
 
 #[derive(Debug)]
 pub struct TemplateMatcher {
-    width: usize,
-    height: usize,
-    gray: Vec<u8>,
-    sum: u64,
-    variance: u64,
-    options: MatchOptions,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) gray: Vec<u8>,
+    pub(crate) sum: u64,
+    pub(crate) variance: u64,
+    pub(crate) options: MatchOptions,
+    pub(crate) projection: Option<crate::template_search::BlockProjection>,
 }
 
 impl TemplateMatcher {
@@ -127,6 +129,12 @@ impl TemplateMatcher {
                 "template must contain nonconstant grayscale detail",
             ));
         }
+        let projection = crate::template_search::BlockProjection::new(
+            &gray,
+            template.width as usize,
+            template.height as usize,
+            squared_sum,
+        );
         Ok(Self {
             width: template.width as usize,
             height: template.height as usize,
@@ -134,127 +142,43 @@ impl TemplateMatcher {
             sum,
             variance,
             options,
+            projection,
         })
     }
 
+    /// Start an incremental exact search over this immutable frame and region.
+    pub fn begin_search<'a>(
+        &'a self,
+        frame: &'a ScreenFrame,
+        region: Option<PixelRect>,
+    ) -> Result<crate::template_search::TemplateMatchSearch<'a>, AppError> {
+        crate::template_search::TemplateMatchSearch::new(self, frame, region)
+    }
+
+    /// Compatibility wrapper: only a certified result can escape; an incomplete
+    /// search retains the original work-limit error and exposes no guessed hit.
     pub fn find_match(
         &self,
         frame: &ScreenFrame,
         region: Option<PixelRect>,
     ) -> Result<TemplateMatch, AppError> {
-        validate_frame(frame)?;
-        let region = region
-            .unwrap_or(PixelRect {
-                x: 0,
-                y: 0,
-                width: frame.width,
-                height: frame.height,
-            })
-            .clipped_to(frame.width, frame.height)?;
-        let width = region.width as usize;
-        let height = region.height as usize;
-        if self.width > width || self.height > height {
-            return Ok(TemplateMatch {
-                score: 0.0,
-                bounds: None,
-            });
-        }
-        let columns = width - self.width + 1;
-        let rows = height - self.height + 1;
-        let candidates = (columns as u64)
-            .checked_mul(rows as u64)
-            .ok_or_else(|| AppError::configuration("template candidate count overflow"))?;
-        if candidates > MAX_SEARCH_CANDIDATES {
-            return Err(AppError::configuration(
-                "template search contains too many candidate positions",
-            ));
-        }
-
-        let gray = grayscale(frame, region)?;
-        let integral = IntegralImage::new(&gray, width, height)?;
-        let pixel_count = self.gray.len() as u64;
-        let mut work = 0_u64;
-        let mut best_score = -1.0_f64;
-        let mut best_bounds = None;
-
-        for y in 0..rows {
-            for x in 0..columns {
-                let moments = integral.window(x, y, self.width, self.height);
-                let variance = pixel_count * moments.squared_sum - moments.sum * moments.sum;
-                if variance == 0 {
-                    continue;
+        let mut search = self.begin_search(frame, region)?;
+        loop {
+            match search.advance(65_536)? {
+                crate::template_search::TemplateSearchStep::Pending => {}
+                crate::template_search::TemplateSearchStep::Complete(complete) => {
+                    return Ok(complete.matched);
                 }
-
-                // Charge only this actual kernel, after the constant-window
-                // shortcut. A partial search must never return a guessed best hit.
-                work = work
-                    .checked_add(pixel_count)
-                    .filter(|next| *next <= self.options.max_work)
-                    .ok_or_else(|| {
-                        AppError::unavailable("template matching work limit exhausted")
-                    })?;
-                let dot = self.dot(&gray, width, x, y);
-                let numerator = i128::from(pixel_count * dot) - i128::from(self.sum * moments.sum);
-                let variance_product = u128::from(self.variance) * u128::from(variance);
-                let absolute_numerator = numerator.unsigned_abs();
-                let perfect =
-                    numerator > 0 && absolute_numerator * absolute_numerator == variance_product;
-                let score = if perfect {
-                    1.0
-                } else {
-                    (numerator as f64 / (variance_product as f64).sqrt()).clamp(-1.0, 1.0)
-                };
-                let bounds = PixelRect {
-                    x: region.x + x as u32,
-                    y: region.y + y as u32,
-                    width: self.width as u32,
-                    height: self.height as u32,
-                };
-                if best_bounds.is_none() || score > best_score {
-                    best_score = score;
-                    best_bounds = Some(bounds);
-                }
-                // Integer Cauchy equality proves that later candidates cannot
-                // improve this result. Row-major traversal preserves the first tie.
-                if perfect {
-                    return Ok(TemplateMatch {
-                        score: 1.0,
-                        bounds: Some(bounds),
-                    });
+                crate::template_search::TemplateSearchStep::Incomplete(_) => {
+                    return Err(AppError::unavailable(
+                        "template matching work limit exhausted",
+                    ));
                 }
             }
         }
-
-        Ok(TemplateMatch {
-            score: if best_bounds.is_some() {
-                best_score
-            } else {
-                0.0
-            },
-            bounds: if best_score >= self.options.threshold {
-                best_bounds
-            } else {
-                None
-            },
-        })
-    }
-
-    fn dot(&self, gray: &[u8], stride: usize, x: usize, y: usize) -> u64 {
-        let mut dot = 0_u64;
-        for row in 0..self.height {
-            let template_offset = row * self.width;
-            let frame_offset = (y + row) * stride + x;
-            let template_row = &self.gray[template_offset..template_offset + self.width];
-            let frame_row = &gray[frame_offset..frame_offset + self.width];
-            for (&template_pixel, &frame_pixel) in template_row.iter().zip(frame_row) {
-                dot += u64::from(template_pixel) * u64::from(frame_pixel);
-            }
-        }
-        dot
     }
 }
-
-fn validate_frame(frame: &ScreenFrame) -> Result<(), AppError> {
+pub(crate) fn validate_frame(frame: &ScreenFrame) -> Result<(), AppError> {
     let pixels = u64::from(frame.width) * u64::from(frame.height);
     if frame.width == 0 || frame.height == 0 || pixels > MAX_FRAME_PIXELS {
         return Err(AppError::protocol(
@@ -289,59 +213,4 @@ fn grayscale(frame: &ScreenFrame, region: PixelRect) -> Result<Vec<u8>, AppError
         }
     }
     Ok(gray)
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct Moments {
-    sum: u64,
-    squared_sum: u64,
-}
-
-struct IntegralImage {
-    stride: usize,
-    moments: Vec<Moments>,
-}
-
-impl IntegralImage {
-    fn new(gray: &[u8], width: usize, height: usize) -> Result<Self, AppError> {
-        let stride = width
-            .checked_add(1)
-            .ok_or_else(|| AppError::protocol("template integral width overflow"))?;
-        let count = height
-            .checked_add(1)
-            .and_then(|height| stride.checked_mul(height))
-            .ok_or_else(|| AppError::protocol("template integral image size overflow"))?;
-        let mut moments = Vec::new();
-        moments
-            .try_reserve_exact(count)
-            .map_err(|_| AppError::unavailable("cannot allocate template integral image"))?;
-        moments.resize(count, Moments::default());
-        for y in 0..height {
-            let mut row = Moments::default();
-            for x in 0..width {
-                let pixel = u64::from(gray[y * width + x]);
-                row.sum += pixel;
-                row.squared_sum += pixel * pixel;
-                let above = moments[y * stride + x + 1];
-                moments[(y + 1) * stride + x + 1] = Moments {
-                    sum: above.sum + row.sum,
-                    squared_sum: above.squared_sum + row.squared_sum,
-                };
-            }
-        }
-        Ok(Self { stride, moments })
-    }
-
-    fn window(&self, x: usize, y: usize, width: usize, height: usize) -> Moments {
-        let top_left = self.moments[y * self.stride + x];
-        let top_right = self.moments[y * self.stride + x + width];
-        let bottom_left = self.moments[(y + height) * self.stride + x];
-        let bottom_right = self.moments[(y + height) * self.stride + x + width];
-        Moments {
-            sum: bottom_right.sum + top_left.sum - top_right.sum - bottom_left.sum,
-            squared_sum: bottom_right.squared_sum + top_left.squared_sum
-                - top_right.squared_sum
-                - bottom_left.squared_sum,
-        }
-    }
 }

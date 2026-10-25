@@ -3,11 +3,16 @@
 mod args;
 mod automation_replay;
 mod control_snapshot;
+mod conversation_activity;
 mod events;
 mod lifecycle;
 mod playback;
+mod strategy_loop;
 mod template_game;
+mod template_host;
 
+#[cfg(test)]
+mod duplex_activity_tests;
 #[cfg(test)]
 mod interruption_tests;
 #[cfg(test)]
@@ -30,8 +35,8 @@ use ai_ex_bilibili::{BilibiliConnector, BilibiliSettings};
 use ai_ex_config::{AppConfig, BilibiliConfig, ModelBackend, PluginConfig};
 use ai_ex_control::{ControlBackend, ControlCommand, ControlPayload, ControlServer, MemoryReply};
 use ai_ex_core::{
-    ConversationPolicy, EventSink, LanguageModelPort, ModelRequest, Runtime, RuntimeHandle,
-    StageJournal, StageOutput, spawn_runtime,
+    ConversationPolicy, EventSink, LanguageModelPort, ModelRequest, Runtime, StageJournal,
+    StageOutput, spawn_runtime,
 };
 use ai_ex_deepseek::{DeepSeekClient, DeepSeekSettings};
 use ai_ex_domain::{
@@ -56,15 +61,19 @@ use ai_ex_vts::{VtsClient, VtsSettings};
 use args::Args;
 use async_trait::async_trait;
 use automation_replay::replay as replay_automation;
+use conversation_activity::ConversationActivity;
 use events::ConsoleEvents;
+use template_host::TemplateHost;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "native-capture")]
 use ai_ex_capture::{CaptureSettings, NativeAudioSource};
-#[cfg(feature = "native-capture")]
-use ai_ex_duplex::{AudioSourcePort, DuplexController, DuplexDirective, EnergyVad, VadConfig};
+#[cfg(any(feature = "native-capture", test))]
+use ai_ex_duplex::{
+    AudioSourcePort, DuplexController, DuplexDirective, EnergyVad, TranscriberPort, VadConfig,
+};
 
 enum ConfiguredModel {
     Ollama(OllamaClient),
@@ -216,6 +225,7 @@ async fn run() -> Result<(), AppError> {
     }
     let (speech, receiver) = SpeechQueue::new(config.audio.queue_capacity)?;
     let player = receiver.player();
+    let speech_activity = speech.activity();
     let tts = build_tts(&config).await?;
     let safety = Arc::new(build_safety(&config)?);
     let audit = build_audit(&config).await?;
@@ -258,6 +268,24 @@ async fn run() -> Result<(), AppError> {
     })
     .await;
     let event_hub = EventHub::new(256)?;
+    let mut automation = TemplateHost::new(
+        event_hub
+            .current()
+            .instance_id
+            .ok_or_else(|| AppError::unavailable("service instance identity is unavailable"))?,
+        speech_activity,
+        Arc::clone(&safety),
+    )?;
+    if config.vision.enabled {
+        let settings = OllamaVisionSettings {
+            base_url: config.vision.base_url.clone(),
+            model: config.vision.model.clone(),
+            timeout: Duration::from_secs(config.vision.timeout_seconds),
+        };
+        automation = automation.with_strategy_factory(Arc::new(move || {
+            Ok(Box::new(OllamaVisionClient::new(settings.clone())?) as Box<dyn VisionAnalyzerPort>)
+        }));
+    }
     let health_snapshot = Arc::new(RwLock::new(startup_health));
     publish_health_snapshot(&health_snapshot, &event_hub).await;
     let _plugin_refresh = plugin_runtime.spawn_health_refresh(Arc::clone(&health_snapshot));
@@ -295,9 +323,10 @@ async fn run() -> Result<(), AppError> {
             config.effective_system_prompt(),
         )
         .await?;
-    let runtime = spawn_runtime(runtime, 32)?;
+    let runtime = ConversationActivity::new(spawn_runtime(runtime, 32)?, automation.clone());
     if let Some(prompt) = args.prompt {
         runtime.submit(prompt).await?;
+        automation.shutdown().await?;
         runtime.shutdown().await?;
         drop(stage_output);
         join_speech_worker(speech_task).await?;
@@ -331,13 +360,14 @@ async fn run() -> Result<(), AppError> {
         Arc::clone(&safety),
         Arc::clone(&health_snapshot),
         stage_output.journal(),
+        automation.clone(),
     )
     .await?;
-    let duplex_task = spawn_duplex(&config, runtime.clone())?;
+    let duplex_task = spawn_duplex(&config, runtime.clone(), automation.clone())?;
     let session_result = if args.serve || args.managed {
         lifecycle::wait_for_shutdown(args.managed).await
     } else {
-        run_interactive(&runtime, &event_hub, &safety).await
+        run_interactive(&runtime, &event_hub, &safety, &automation).await
     };
     if let Some(task) = bilibili_runtime.task {
         task.abort();
@@ -348,18 +378,21 @@ async fn run() -> Result<(), AppError> {
     if let Some(task) = control_task {
         task.abort();
     }
+    let automation_result = automation.shutdown().await;
     let shutdown_result = runtime.shutdown().await;
     drop(stage_output);
     let speech_result = join_speech_worker(speech_task).await;
     session_result?;
+    automation_result?;
     shutdown_result?;
     speech_result
 }
 
 async fn run_interactive(
-    runtime: &RuntimeHandle,
+    runtime: &ConversationActivity,
     event_hub: &EventHub,
     safety: &SafetyGate,
+    automation: &TemplateHost,
 ) -> Result<(), AppError> {
     println!("AIex Rust interactive mode. Commands: /status, /interrupt, /emergency-stop, /quit.",);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -390,6 +423,7 @@ async fn run_interactive(
         }
         if line == "/emergency-stop" {
             safety.trigger_emergency_stop();
+            automation.emergency_stop()?;
             if let Err(error) = runtime.interrupt("emergency stop").await
                 && error.kind != ErrorKind::InvalidTransition
             {
@@ -398,10 +432,15 @@ async fn run_interactive(
             println!("Emergency stop is active until the service restarts.");
             continue;
         }
-        let submitter = runtime.clone();
-        let input = line.to_owned();
+        let pending = match runtime.start_submit(line.to_owned()) {
+            Ok(pending) => pending,
+            Err(error) => {
+                eprintln!("turn failed: {error}");
+                continue;
+            }
+        };
         tokio::spawn(async move {
-            if let Err(error) = submitter.submit(input).await {
+            if let Err(error) = pending.wait().await {
                 eprintln!("turn failed: {error}");
             }
         });
@@ -417,7 +456,7 @@ struct BilibiliRuntime {
 fn spawn_bilibili(
     config: &BilibiliConfig,
     memory: MemoryStore,
-    runtime: RuntimeHandle,
+    runtime: ConversationActivity,
     event_hub: EventHub,
     safety: Arc<SafetyGate>,
 ) -> Result<BilibiliRuntime, AppError> {
@@ -493,9 +532,15 @@ fn spawn_bilibili(
                                 continue;
                             }
                             last_reaction_ms = Some(delivered.timestamp_ms);
-                            let submitter = runtime.clone();
+                            let pending = match runtime.start_submit(prompt) {
+                                Ok(pending) => pending,
+                                Err(error) => {
+                                    tracing::warn!(%error, %event_id, "live reaction failed");
+                                    continue;
+                                }
+                            };
                             reactions.spawn(async move {
-                                if let Err(error) = submitter.submit(prompt).await {
+                                if let Err(error) = pending.wait().await {
                                     tracing::warn!(%error, %event_id, "live reaction failed");
                                 }
                             });
@@ -1196,11 +1241,12 @@ fn build_asr(config: &AppConfig) -> Result<WhisperHttpTranscriber, AppError> {
 
 #[derive(Clone)]
 struct ServiceControl {
-    runtime: RuntimeHandle,
+    runtime: ConversationActivity,
     events: EventHub,
     safety: Arc<SafetyGate>,
     health: Arc<RwLock<Vec<ComponentHealth>>>,
     stage: StageJournal,
+    automation: TemplateHost,
     persona: Arc<RwLock<PersonaSnapshot>>,
 }
 
@@ -1208,6 +1254,9 @@ struct ServiceControl {
 impl ControlBackend for ServiceControl {
     async fn execute(&self, command: ControlCommand) -> Result<ControlPayload, AppError> {
         match command {
+            ControlCommand::Automation { request } => Ok(ControlPayload::Automation(Box::new(
+                self.automation.execute(request).await?,
+            ))),
             ControlCommand::Submit { text } => {
                 let text = text.trim();
                 if text.is_empty() {
@@ -1276,11 +1325,13 @@ impl ControlBackend for ServiceControl {
             }
             ControlCommand::EmergencyStop => {
                 self.safety.trigger_emergency_stop();
+                let automation_result = self.automation.emergency_stop();
                 if let Err(error) = self.runtime.interrupt("emergency stop").await
                     && error.kind != ErrorKind::InvalidTransition
                 {
                     return Err(error);
                 }
+                automation_result?;
                 Ok(ControlPayload::Accepted)
             }
         }
@@ -1289,11 +1340,12 @@ impl ControlBackend for ServiceControl {
 
 async fn spawn_control(
     config: &AppConfig,
-    runtime: RuntimeHandle,
+    runtime: ConversationActivity,
     events: EventHub,
     safety: Arc<SafetyGate>,
     health: Arc<RwLock<Vec<ComponentHealth>>>,
     stage: StageJournal,
+    automation: TemplateHost,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
     if !config.control.enabled {
         return Ok(None);
@@ -1330,6 +1382,7 @@ async fn spawn_control(
         health,
         persona: Arc::new(RwLock::new(persona)),
         stage,
+        automation,
     });
     tracing::info!(%address, "local control server ready");
     Ok(Some(tokio::spawn(async move {
@@ -1395,7 +1448,8 @@ fn capture_health(config: &AppConfig) -> ComponentHealth {
 #[cfg(not(feature = "native-capture"))]
 fn spawn_duplex(
     config: &AppConfig,
-    _runtime: RuntimeHandle,
+    _runtime: ConversationActivity,
+    _automation: TemplateHost,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
     if config.duplex.enabled {
         return Err(AppError::configuration(
@@ -1408,7 +1462,8 @@ fn spawn_duplex(
 #[cfg(feature = "native-capture")]
 fn spawn_duplex(
     config: &AppConfig,
-    runtime: RuntimeHandle,
+    runtime: ConversationActivity,
+    automation: TemplateHost,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
     if !config.duplex.enabled {
         return Ok(None);
@@ -1431,24 +1486,35 @@ fn spawn_duplex(
     })?;
     let controller = DuplexController::new(vad, transcriber);
     Ok(Some(tokio::spawn(async move {
-        if let Err(error) = run_duplex(source, controller, runtime).await {
+        if let Err(error) = run_duplex(source, controller, runtime, automation).await {
             tracing::error!(%error, "full-duplex input stopped");
         }
     })))
 }
 
-#[cfg(feature = "native-capture")]
-async fn run_duplex(
-    mut source: NativeAudioSource,
-    mut controller: DuplexController<WhisperHttpTranscriber>,
-    runtime: RuntimeHandle,
-) -> Result<(), AppError> {
+#[cfg(any(feature = "native-capture", test))]
+async fn run_duplex<S, T>(
+    mut source: S,
+    mut controller: DuplexController<T>,
+    runtime: ConversationActivity,
+    automation: TemplateHost,
+) -> Result<(), AppError>
+where
+    S: AudioSourcePort,
+    T: TranscriberPort,
+{
+    let mut voice_activity = None;
     while let Some(frame) = source.next_frame().await? {
         let Some(directive) = controller.process_frame(frame).await? else {
+            if !controller.speech_in_progress() {
+                drop(voice_activity.take());
+            }
             continue;
         };
         match directive {
             DuplexDirective::InterruptCurrentTurn => {
+                let activity = automation.begin_chat()?;
+                voice_activity = Some(activity);
                 if let Err(error) = runtime.interrupt("voice barge-in").await
                     && error.kind != ErrorKind::InvalidTransition
                 {
@@ -1456,9 +1522,10 @@ async fn run_duplex(
                 }
             }
             DuplexDirective::SubmitTranscript(transcript) => {
-                let runtime = runtime.clone();
+                let pending = runtime.start_submit(transcript)?;
+                drop(voice_activity.take());
                 tokio::spawn(async move {
-                    if let Err(error) = runtime.submit(transcript).await {
+                    if let Err(error) = pending.wait().await {
                         tracing::error!(%error, "transcribed turn failed");
                     }
                 });

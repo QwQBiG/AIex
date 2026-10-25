@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{VisionAnalyzerPort, VisionObservation, VisionRequest};
 
+const MAX_RESPONSE_BODY_BYTES: usize = 256 * 1024;
+const MAX_ERROR_BODY_BYTES: usize = 8 * 1024;
+const MAX_ERROR_BODY_CHARS: usize = 512;
+
 #[derive(Debug, Clone)]
 pub struct OllamaVisionSettings {
     pub base_url: String,
@@ -112,16 +116,26 @@ impl VisionAnalyzerPort for OllamaVisionClient {
             .await
             .map_err(|error| AppError::connectivity(format!("vision request failed: {error}")))?;
         let status = response.status();
+        let body_limit = if status.is_success() {
+            MAX_RESPONSE_BODY_BYTES
+        } else {
+            MAX_ERROR_BODY_BYTES
+        };
+        let body = read_bounded_body(response, body_limit)
+            .await
+            .map_err(|message| {
+                AppError::protocol(format!("vision returned {status}: {message}"))
+            })?;
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
             return Err(AppError::protocol(format!(
                 "vision returned {status}: {}",
-                body.chars().take(512).collect::<String>(),
+                String::from_utf8_lossy(&body)
+                    .chars()
+                    .take(MAX_ERROR_BODY_CHARS)
+                    .collect::<String>(),
             )));
         }
-        let response: ChatResponse = response
-            .json()
-            .await
+        let response: ChatResponse = serde_json::from_slice(&body)
             .map_err(|error| AppError::protocol(format!("invalid vision response: {error}")))?;
         if response.message.content.trim().is_empty() {
             return Err(AppError::protocol("vision returned an empty observation"));
@@ -133,6 +147,34 @@ impl VisionAnalyzerPort for OllamaVisionClient {
     }
 }
 
+// Read in the analyze future so dropping it or reaching the client deadline also
+// drops the response. Check both advertised and received sizes before growing it.
+async fn read_bounded_body(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    let oversized = || format!("response body exceeds {limit} bytes");
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(oversized());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        if error.is_timeout() {
+            "response body read timed out".to_owned()
+        } else {
+            format!("response body read failed: {error}")
+        }
+    })? {
+        if chunk.len() > limit - body.len() {
+            return Err(oversized());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
 fn encode_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -168,3 +210,7 @@ mod tests {
         assert_eq!(encode_base64(b"foo"), "Zm9v");
     }
 }
+
+#[cfg(test)]
+#[path = "ollama_tests.rs"]
+mod response_tests;

@@ -7,8 +7,8 @@ mod envelope;
 mod native;
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ai_ex_core::SpeechPort;
 use ai_ex_domain::{AppError, ComponentHealth, Emotion, SpeechPlaybackSnapshot, TurnId};
@@ -108,14 +108,146 @@ impl SpeechJob {
     }
 }
 
+/// An authoritative point-in-time view of one queue and its single consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeechActivitySnapshot {
+    Idle,
+    /// Pending includes queued jobs and sends waiting for channel capacity.
+    Busy {
+        pending: usize,
+        active: bool,
+    },
+    /// Consumer loss or untrustworthy accounting must never be treated as idle.
+    Unavailable,
+}
+
+#[derive(Debug)]
+struct SpeechActivityState {
+    pending: usize,
+    active: bool,
+    receiver_alive: bool,
+    healthy: bool,
+}
+
+/// Clone before moving the queue into a stage router; snapshots hold no async lock.
+#[derive(Debug, Clone)]
+pub struct SpeechActivity {
+    inner: Arc<Mutex<SpeechActivityState>>,
+}
+
+impl SpeechActivity {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(SpeechActivityState {
+                pending: 0,
+                active: false,
+                receiver_alive: true,
+                healthy: true,
+            })),
+        }
+    }
+
+    pub fn snapshot(&self) -> SpeechActivitySnapshot {
+        let Ok(state) = self.inner.lock() else {
+            return SpeechActivitySnapshot::Unavailable;
+        };
+        if !state.healthy || !state.receiver_alive {
+            SpeechActivitySnapshot::Unavailable
+        } else if state.pending == 0 && !state.active {
+            SpeechActivitySnapshot::Idle
+        } else {
+            SpeechActivitySnapshot::Busy {
+                pending: state.pending,
+                active: state.active,
+            }
+        }
+    }
+
+    fn reserve(&self) -> Result<SpeechReservation, AppError> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::unavailable("speech activity accounting is unavailable"))?;
+        if !state.receiver_alive {
+            return Err(AppError::unavailable("audio queue consumer stopped"));
+        }
+        if !state.healthy {
+            return Err(AppError::unavailable(
+                "speech activity accounting is unavailable",
+            ));
+        }
+        let Some(pending) = state.pending.checked_add(1) else {
+            state.healthy = false;
+            return Err(AppError::unavailable(
+                "speech activity count exceeded its bounds",
+            ));
+        };
+        state.pending = pending;
+        Ok(SpeechReservation {
+            activity: self.clone(),
+            reserved: true,
+        })
+    }
+
+    fn finish_active(&self) {
+        if let Ok(mut state) = self.inner.lock() {
+            state.active = false;
+        }
+    }
+
+    fn receive_job(&self, active: bool) {
+        if let Ok(mut state) = self.inner.lock() {
+            match state.pending.checked_sub(1) {
+                Some(pending) => state.pending = pending,
+                None => state.healthy = false,
+            }
+            // Release pending and mark the delivered job active under the same lock.
+            state.active = active;
+        }
+    }
+
+    fn consumer_stopped(&self) {
+        if let Ok(mut state) = self.inner.lock() {
+            state.receiver_alive = false;
+        }
+    }
+}
+
+struct SpeechReservation {
+    activity: SpeechActivity,
+    reserved: bool,
+}
+
+impl SpeechReservation {
+    fn sent(mut self) {
+        // The receiver now owns the pending count; it can already have consumed it.
+        self.reserved = false;
+    }
+}
+
+impl Drop for SpeechReservation {
+    fn drop(&mut self) {
+        if self.reserved
+            && let Ok(mut state) = self.activity.inner.lock()
+        {
+            match state.pending.checked_sub(1) {
+                Some(pending) => state.pending = pending,
+                None => state.healthy = false,
+            }
+        }
+    }
+}
+
 pub struct SpeechQueue {
     sender: mpsc::Sender<SpeechJob>,
     generation: Arc<AtomicU64>,
+    activity: SpeechActivity,
 }
 
 pub struct SpeechReceiver {
     receiver: mpsc::Receiver<SpeechJob>,
     generation: Arc<AtomicU64>,
+    activity: SpeechActivity,
 }
 
 impl SpeechQueue {
@@ -127,16 +259,23 @@ impl SpeechQueue {
         }
         let (sender, receiver) = mpsc::channel(capacity);
         let generation = Arc::new(AtomicU64::new(0));
+        let activity = SpeechActivity::new();
         Ok((
             Self {
                 sender,
                 generation: Arc::clone(&generation),
+                activity: activity.clone(),
             },
             SpeechReceiver {
                 receiver,
                 generation,
+                activity,
             },
         ))
+    }
+
+    pub fn activity(&self) -> SpeechActivity {
+        self.activity.clone()
     }
 
     pub fn health(&self) -> ComponentHealth {
@@ -155,13 +294,25 @@ impl SpeechReceiver {
         }
     }
 
+    /// Calling receive again signals that the single consumer finished the prior job.
+    /// Activity remains busy through synthesis, playback, and cancellation cleanup.
     pub async fn receive(&mut self) -> Option<SpeechJob> {
+        self.activity.finish_active();
         while let Some(job) = self.receiver.recv().await {
-            if job.generation == self.generation.load(Ordering::Acquire) {
+            let current = job.generation == self.generation.load(Ordering::Acquire);
+            self.activity.receive_job(current);
+            if current {
                 return Some(job);
             }
         }
+        self.activity.consumer_stopped();
         None
+    }
+}
+
+impl Drop for SpeechReceiver {
+    fn drop(&mut self) {
+        self.activity.consumer_stopped();
     }
 }
 
@@ -189,10 +340,13 @@ impl SpeechPort for SpeechQueue {
             emotion,
             generation: self.generation.load(Ordering::Acquire),
         };
+        let reservation = self.activity.reserve()?;
         self.sender
             .send(job)
             .await
-            .map_err(|_| AppError::unavailable("audio queue consumer stopped"))
+            .map_err(|_| AppError::unavailable("audio queue consumer stopped"))?;
+        reservation.sent();
+        Ok(())
     }
 
     async fn interrupt(&mut self) -> Result<(), AppError> {
@@ -336,5 +490,274 @@ mod tests {
             .play_wav(&job, vec![1, 2, 3])
             .await
             .expect("cancelled playback is skipped");
+    }
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use std::future::{Future, poll_fn};
+    use std::pin::Pin;
+    use std::task::Poll;
+    use std::time::Duration;
+
+    use super::*;
+
+    async fn bounded<F: Future>(future: F) -> F::Output {
+        tokio::time::timeout(Duration::from_secs(2), future)
+            .await
+            .expect("speech activity workflow completed within its bound")
+    }
+
+    async fn assert_pending<F: Future + ?Sized>(mut future: Pin<&mut F>) {
+        poll_fn(|context| {
+            assert!(future.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn activity_covers_queue_processing_and_next_receive_boundary() {
+        bounded(async {
+            let (mut queue, mut receiver) = SpeechQueue::new(2).unwrap();
+            let activity = queue.activity();
+            assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Idle);
+
+            queue.enqueue(TurnId::new(), "first".into()).await.unwrap();
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 1,
+                    active: false,
+                }
+            );
+            assert_eq!(receiver.receive().await.unwrap().text, "first");
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 0,
+                    active: true,
+                }
+            );
+
+            queue.enqueue(TurnId::new(), "second".into()).await.unwrap();
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 1,
+                    active: true,
+                }
+            );
+            assert_eq!(receiver.receive().await.unwrap().text, "second");
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 0,
+                    active: true,
+                }
+            );
+
+            let mut waiting = Box::pin(receiver.receive());
+            assert_pending(waiting.as_mut()).await;
+            assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Idle);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn dropping_blocked_send_releases_only_its_reservation() {
+        bounded(async {
+            let (mut queue, mut receiver) = SpeechQueue::new(1).unwrap();
+            let activity = queue.activity();
+            queue.enqueue(TurnId::new(), "queued".into()).await.unwrap();
+
+            let mut blocked = Box::pin(queue.enqueue(TurnId::new(), "cancelled".into()));
+            assert_pending(blocked.as_mut()).await;
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 2,
+                    active: false,
+                }
+            );
+            drop(blocked);
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 1,
+                    active: false,
+                }
+            );
+            assert_eq!(receiver.receive().await.unwrap().text, "queued");
+
+            let mut waiting = Box::pin(receiver.receive());
+            assert_pending(waiting.as_mut()).await;
+            assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Idle);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn successful_blocked_send_transfers_reservation_to_receiver_once() {
+        bounded(async {
+            let (mut queue, mut receiver) = SpeechQueue::new(1).unwrap();
+            let activity = queue.activity();
+            queue.enqueue(TurnId::new(), "first".into()).await.unwrap();
+            let mut blocked = Box::pin(queue.enqueue(TurnId::new(), "second".into()));
+            assert_pending(blocked.as_mut()).await;
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 2,
+                    active: false,
+                }
+            );
+
+            assert_eq!(receiver.receive().await.unwrap().text, "first");
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 1,
+                    active: true,
+                }
+            );
+            blocked.await.unwrap();
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 1,
+                    active: true,
+                }
+            );
+            assert_eq!(receiver.receive().await.unwrap().text, "second");
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 0,
+                    active: true,
+                }
+            );
+
+            let mut waiting = Box::pin(receiver.receive());
+            assert_pending(waiting.as_mut()).await;
+            assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Idle);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn interruption_keeps_active_cleanup_busy_and_drains_stale_jobs() {
+        bounded(async {
+            let (mut queue, mut receiver) = SpeechQueue::new(3).unwrap();
+            let activity = queue.activity();
+            let player = receiver.player();
+            queue
+                .enqueue(TurnId::new(), "active old".into())
+                .await
+                .unwrap();
+            queue
+                .enqueue(TurnId::new(), "queued old".into())
+                .await
+                .unwrap();
+            let old = receiver.receive().await.unwrap();
+            SpeechPort::interrupt(&mut queue).await.unwrap();
+            assert!(player.cancelled(&old));
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 1,
+                    active: true,
+                }
+            );
+            queue.enqueue(TurnId::new(), "fresh".into()).await.unwrap();
+            let fresh = receiver.receive().await.unwrap();
+            assert_eq!(fresh.text, "fresh");
+            assert!(!player.cancelled(&fresh));
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 0,
+                    active: true,
+                }
+            );
+
+            let mut waiting = Box::pin(receiver.receive());
+            assert_pending(waiting.as_mut()).await;
+            assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Idle);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn consumer_loss_is_unavailable_and_rolls_back_failed_send() {
+        bounded(async {
+            let (mut queue, receiver) = SpeechQueue::new(1).unwrap();
+            let activity = queue.activity();
+            queue.enqueue(TurnId::new(), "queued".into()).await.unwrap();
+            let mut blocked = Box::pin(queue.enqueue(TurnId::new(), "blocked".into()));
+            assert_pending(blocked.as_mut()).await;
+            drop(receiver);
+            assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Unavailable);
+            assert!(blocked.await.is_err());
+            assert_eq!(activity.inner.lock().unwrap().pending, 1);
+            assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Unavailable);
+            assert!(queue.enqueue(TurnId::new(), "closed".into()).await.is_err());
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn consumer_exhaustion_clears_active_and_marks_source_unavailable() {
+        bounded(async {
+            let (mut queue, mut receiver) = SpeechQueue::new(1).unwrap();
+            let activity = queue.activity();
+            queue.enqueue(TurnId::new(), "last".into()).await.unwrap();
+            assert_eq!(receiver.receive().await.unwrap().text, "last");
+            drop(queue);
+            assert_eq!(
+                activity.snapshot(),
+                SpeechActivitySnapshot::Busy {
+                    pending: 0,
+                    active: true,
+                }
+            );
+            assert!(receiver.receive().await.is_none());
+            assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Unavailable);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn accounting_overflow_and_poison_cannot_report_idle() {
+        let (mut queue, _receiver) = SpeechQueue::new(1).unwrap();
+        let activity = queue.activity();
+        activity.inner.lock().unwrap().pending = usize::MAX;
+        assert!(
+            queue
+                .enqueue(TurnId::new(), "overflow".into())
+                .await
+                .is_err()
+        );
+        assert_eq!(activity.inner.lock().unwrap().pending, usize::MAX);
+        assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Unavailable);
+        activity.inner.lock().unwrap().pending = 0;
+        assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Unavailable);
+
+        let (mut queue, receiver) = SpeechQueue::new(1).unwrap();
+        let activity = queue.activity();
+        let poisoned = std::panic::catch_unwind(|| {
+            let _guard = activity.inner.lock().unwrap();
+            panic!("deliberately poison the accounting lock");
+        });
+        assert!(poisoned.is_err());
+        assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Unavailable);
+        assert!(
+            queue
+                .enqueue(TurnId::new(), "poisoned".into())
+                .await
+                .is_err()
+        );
+        drop(receiver);
+        assert_eq!(activity.snapshot(), SpeechActivitySnapshot::Unavailable);
     }
 }

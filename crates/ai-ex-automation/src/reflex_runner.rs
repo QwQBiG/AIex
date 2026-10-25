@@ -1,3 +1,6 @@
+use std::future::poll_fn;
+use std::task::Poll;
+
 use ai_ex_domain::AppError;
 
 use crate::coordinator::GuardedExecutionFailure;
@@ -7,7 +10,8 @@ use crate::{
     ActionResult, AuditSink, AutomationAction, AutomationCoordinator, AutomationPort,
     ExecutionPhase, FrameGeometry, PixelRect, PointerButton, ReflexController,
     ReflexExecutionPhase, ReflexFailure, ReflexFailureStage, ReflexMode, ReflexOutcome,
-    ReflexReceipt, ReflexState, ReflexStepReport, ScreenFrame,
+    ReflexReceipt, ReflexState, ReflexStepReport, ScreenFrame, TemplateMatcher,
+    TemplateSearchComplete, TemplateSearchIncomplete, TemplateSearchStep,
 };
 
 /// Advance one offline timestamp through the ordinary, uncontrolled coordinator path.
@@ -165,18 +169,27 @@ async fn run_step<P: AutomationPort, A: AuditSink>(
         )
     })?;
     report.search_region = Some(region);
-    let matched = controller
-        .matcher
-        .find_match(&frame, Some(region))
-        .map_err(|error| {
-            controller.fail(
+    let matched = match search(controller, &mut report, &frame, region, lease).await? {
+        SearchAdvance::Complete(complete) => {
+            report.search = Some(complete.progress);
+            report.search_proof = Some(complete.proof);
+            complete.matched
+        }
+        SearchAdvance::Incomplete(incomplete) => {
+            report.search = Some(incomplete.progress);
+            report.search_incomplete = Some(incomplete.reason);
+            return Err(controller.fail(
                 &mut report,
                 ReflexFailureStage::Match,
                 None,
                 None,
-                error.message,
-            )
-        })?;
+                "template matching work limit exhausted before the result was certified",
+            ));
+        }
+        SearchAdvance::Interrupted(interruption) => {
+            return Ok(interrupted(controller, report, interruption));
+        }
+    };
     report.score = Some(matched.score);
     report.matched_bounds = matched.bounds;
     if let Some(interruption) = check_lease(lease) {
@@ -336,6 +349,131 @@ async fn run_step<P: AutomationPort, A: AuditSink>(
     }
     controller.sync_report(&mut report);
     Ok(advanced(report))
+}
+
+// This is a scheduling quantum, not a fresh matching-work budget. The borrowed
+// search retains its cumulative budget and one immutable frame through all yields.
+const SEARCH_OPERATIONS_PER_BATCH: u32 = 16_384;
+
+#[derive(Debug)]
+enum SearchAdvance {
+    Complete(TemplateSearchComplete),
+    Incomplete(TemplateSearchIncomplete),
+    Interrupted(ReflexInterruption),
+}
+
+/// Matching yields happen after capture has already been charged and audited.
+/// Dropping one must fail the controller without charging any action again.
+struct PendingSearch<'a> {
+    controller: &'a mut ReflexController,
+    report: &'a mut ReflexStepReport,
+    disarmed: bool,
+}
+
+impl PendingSearch<'_> {
+    fn disarm(mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for PendingSearch<'_> {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            self.controller.state = ReflexState::Failed;
+            clear_tracking(self.controller);
+            self.report.outcome = ReflexOutcome::Inactive;
+            self.controller.sync_report(self.report);
+        }
+    }
+}
+
+#[allow(
+    clippy::result_large_err,
+    reason = "failure retains the partial execution report and audit receipts"
+)]
+async fn search(
+    controller: &mut ReflexController,
+    report: &mut ReflexStepReport,
+    frame: &ScreenFrame,
+    region: PixelRect,
+    lease: Option<&ReflexLease>,
+) -> Result<SearchAdvance, ReflexFailure> {
+    let pending = PendingSearch {
+        controller: &mut *controller,
+        report: &mut *report,
+        disarmed: false,
+    };
+    let result = drive_search(
+        &pending.controller.matcher,
+        &mut *pending.report,
+        frame,
+        region,
+        lease,
+    )
+    .await;
+    // Classification and ordinary failure accounting happen without another await.
+    pending.disarm();
+    result.map_err(|error| {
+        controller.fail(report, ReflexFailureStage::Match, None, None, error.message)
+    })
+}
+
+async fn drive_search(
+    matcher: &TemplateMatcher,
+    report: &mut ReflexStepReport,
+    frame: &ScreenFrame,
+    region: PixelRect,
+    lease: Option<&ReflexLease>,
+) -> Result<SearchAdvance, AppError> {
+    if let Some(interruption) = check_lease(lease) {
+        return Ok(SearchAdvance::Interrupted(interruption));
+    }
+    let mut job = matcher.begin_search(frame, Some(region))?;
+    report.search = Some(job.progress());
+    loop {
+        if let Some(interruption) = check_lease(lease) {
+            return Ok(SearchAdvance::Interrupted(interruption));
+        }
+        let next = job.advance(SEARCH_OPERATIONS_PER_BATCH);
+        report.search = Some(job.progress());
+        let interruption = check_lease(lease);
+        // Preserve existing operational-failure precedence over a simultaneous pause.
+        match next? {
+            TemplateSearchStep::Incomplete(incomplete) => {
+                return Ok(SearchAdvance::Incomplete(incomplete));
+            }
+            TemplateSearchStep::Complete(complete) => {
+                return Ok(match interruption {
+                    Some(interruption) => SearchAdvance::Interrupted(interruption),
+                    None => SearchAdvance::Complete(complete),
+                });
+            }
+            TemplateSearchStep::Pending => {
+                if let Some(interruption) = interruption {
+                    return Ok(SearchAdvance::Interrupted(interruption));
+                }
+                yield_search().await;
+                if let Some(interruption) = check_lease(lease) {
+                    return Ok(SearchAdvance::Interrupted(interruption));
+                }
+            }
+        }
+    }
+}
+
+/// A runtime-neutral cooperative yield; no executor or mutex is held here.
+async fn yield_search() {
+    let mut yielded = false;
+    poll_fn(|context| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            context.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
 }
 
 #[derive(Debug)]

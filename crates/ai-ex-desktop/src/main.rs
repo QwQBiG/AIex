@@ -10,6 +10,7 @@ mod character_library;
 #[cfg(test)]
 mod headless_snapshot;
 mod image_appearance;
+mod launch;
 mod memory_panel;
 mod navigation;
 mod portable;
@@ -57,7 +58,7 @@ fn run() -> Result<(), AppError> {
         return Ok(());
     }
     let show_welcome = arguments.is_empty();
-    let mut options = parse_options(arguments.into_iter())?;
+    let mut options = launch::parse_options(arguments.into_iter())?;
     let portable_root = portable::root(&executable).filter(|_| !options.config_explicit);
     if let Some(directory) = &portable_root {
         std::env::set_current_dir(directory).map_err(|error| {
@@ -103,84 +104,4 @@ fn destination_for(choice: welcome::Choice) -> Destination {
         welcome::Choice::Connect => Destination::Connect,
         welcome::Choice::Setup => Destination::Setup,
     }
-}
-
-struct LaunchOptions {
-    config_path: PathBuf,
-    config_explicit: bool,
-    setup: bool,
-    developer: bool,
-    preview: bool,
-    start_service: bool,
-    connect_only: bool,
-    appearance_pack: Option<PathBuf>,
-}
-
-fn parse_options(arguments: impl Iterator<Item = String>) -> Result<LaunchOptions, AppError> {
-    let mut config_path = PathBuf::from("config/ai-ex.local.toml");
-    let mut config_explicit = false;
-    let mut setup = false;
-    let mut developer = false;
-    let mut preview = false;
-    let mut start_service = false;
-    let mut connect_only = false;
-    let mut appearance_pack = None;
-    let mut arguments = arguments;
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--config" => {
-                config_explicit = true;
-                config_path = PathBuf::from(
-                    arguments
-                        .next()
-                        .ok_or_else(|| AppError::configuration("--config requires a path"))?,
-                );
-            }
-            "--setup" => setup = true,
-            "--preview" => preview = true,
-            "--appearance-pack" => {
-                appearance_pack = Some(PathBuf::from(arguments.next().ok_or_else(|| {
-                    AppError::configuration("--appearance-pack requires a manifest path")
-                })?));
-            }
-            "--start-service" => start_service = true,
-            "--connect-only" => connect_only = true,
-            "--developer" | "--dev" => developer = true,
-            "--help" | "-h" => {
-                return Err(AppError::configuration(
-                    "usage: ai-ex-desktop [--config PATH] [--setup] [--developer] [--start-service | --connect-only] [--preview [--appearance-pack PATH]]",
-                ));
-            }
-            _ => {
-                return Err(AppError::configuration(format!(
-                    "unknown desktop argument: {argument}",
-                )));
-            }
-        }
-    }
-    if start_service && connect_only {
-        return Err(AppError::configuration(
-            "--start-service and --connect-only are mutually exclusive",
-        ));
-    }
-    if appearance_pack.is_some() && !preview {
-        return Err(AppError::configuration(
-            "--appearance-pack requires --preview",
-        ));
-    }
-    if preview && (setup || start_service || connect_only) {
-        return Err(AppError::configuration(
-            "--preview cannot be combined with --setup, --start-service, or --connect-only",
-        ));
-    }
-    Ok(LaunchOptions {
-        config_path,
-        config_explicit,
-        setup,
-        developer,
-        preview,
-        start_service,
-        connect_only,
-        appearance_pack,
-    })
 }
