@@ -2,6 +2,8 @@
 
 本文描述 0.8.0-alpha.1 的数字伙伴工作室架构，包含记忆与合成回放工作流。交付范围和验证见[0.8 版本说明](releases/0.8.0-alpha.1.md)；此前基线见[0.7.1 版本说明](releases/0.7.1-alpha.1.md)，迁移进度和注明范围的历史检查点见[Rust 迁移记录](RUST_ONLY_MIGRATION.md)。源码、资源与历史内容的归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，验收入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
 
+原生化验证另有 `ai-ex-model-catalog` 和 `ai-ex-inference` 两个基础模块，分别拥有固定清单/文件校验与受控推理协议/进程生命周期。当前仍处于 M0，实际结果与产品接入门槛见[原生验证证据](NATIVE_M0_EVIDENCE.md)；服务与桌面的装配沿用下述已发布结构。
+
 ## 1. 运行结构与状态归属
 
 ```mermaid

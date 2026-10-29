@@ -29,6 +29,8 @@ members = [
     "crates/ai-ex-audit",
     "crates/ai-ex-vision",
     "crates/ai-ex-migrate",
+    "crates/ai-ex-model-catalog",
+    "crates/ai-ex-inference",
     "crates/ai-ex-service",
 ]
 exclude = ["crates/ai-ex-desktop"]

@@ -34,6 +34,8 @@
 
 ## 历史与迁移资料
 
+- [原生模型与零 Python 迁移](NATIVE_MIGRATION.md)：M0 阻塞门槛、固定后端路线、分版交付、能力覆盖矩阵与验证证据格式。
+- [M0 原生验证证据](NATIVE_M0_EVIDENCE.md)：本机已执行的模型、进程与工程检查，以及尚未通过的门槛。
 - [迁移工具与显式多模态快照](../tools/README.md#显式多模态快照导入)：独立输出、dataclass JSON 数组格式与数据限制。
 - [Chroma 桥接](CHROMA_BRIDGE.md)：显式只读快照、离线导入及原生库验收边界。
 - [完全 Rust 化进展](RUST_ONLY_MIGRATION.md)：离线校验、旧备份与向量迁移、可选语义召回、实体及多模态切片、原子重建、实测基准及剩余迁移合同。
