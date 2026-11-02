@@ -279,7 +279,7 @@ fn native_models_and_voice_pages_render_without_a_window_or_devices() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target")
         .join(format!("native-onboarding-review-{}", Uuid::new_v4()));
-    std::fs::create_dir(&directory).unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
     for (step, name) in [(0, "models"), (1, "devices"), (2, "voices"), (3, "preview")] {
         let mut panel = panel();
         panel.step = step;
