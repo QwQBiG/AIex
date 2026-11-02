@@ -5780,8 +5780,8 @@
           {
             "path": "bge/ai-ex-native-bge-worker.exe",
             "kind": "native_runtime",
-            "bytes": 90528768,
-            "sha256": "a26e964b82080f93bc1edb2f048298acf40592f2e313d167cb9c2ecc2337acc4"
+            "bytes": 11089408,
+            "sha256": "ef4f23f1b8ec634a30dc11a60c11f853db99cf3383268ed40fac216be86dce77"
           },
           {
             "path": "bge/onnxruntime.dll",
@@ -5799,13 +5799,13 @@
             "path": "build-inputs.json",
             "kind": "configuration",
             "bytes": 819,
-            "sha256": "c436b8c21d4f9f954fd09744e76ac433835260361545575966fc7ed263bc5a4f"
+            "sha256": "a406c57d2fb35088d09b8281007e49282baed737ddd4aeb8305777de35414c27"
           },
           {
             "path": "distribution/README.md",
             "kind": "configuration",
-            "bytes": 6789,
-            "sha256": "768678ed17de6d7fb0666e2734a59fe656716f7f60d87d0b8d26ac87d786f21a"
+            "bytes": 6965,
+            "sha256": "757c1d16173c1e0fb59cd62596c0e0405d4c70d0198d76749a9f18f58e6919d6"
           },
           {
             "path": "distribution/materials.json",
@@ -5834,8 +5834,8 @@
           {
             "path": "distribution/rust-workers.json",
             "kind": "configuration",
-            "bytes": 322774,
-            "sha256": "5858abf9d4f88fac7b6697dafad1e66fecad140ac46a0d551aca5e3bf79d6c8c"
+            "bytes": 334488,
+            "sha256": "1561ae5a03848a690a8026aacf0c78621a60f417ba9cf3ff7e8f67ea1f2086b7"
           },
           {
             "path": "distribution/sources.json",
@@ -6694,6 +6694,12 @@
             "kind": "license",
             "bytes": 1043,
             "sha256": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545"
+          },
+          {
+            "path": "materials/licenses/rust/embed-resource-3.0.12/LICENSE.txt",
+            "kind": "license",
+            "bytes": 1081,
+            "sha256": "1abdbbd4e3f95e56c79d4a8af190254c23ddb14db34aadadfafef9c3af041113"
           },
           {
             "path": "materials/licenses/rust/encode_unicode-1.0.0/LICENSE-APACHE.txt",
@@ -7848,6 +7854,18 @@
             "sha256": "36dbd32f27adb0d2477b3d3f6ecbde9ca9ad8d72e24766bebe3ea631d235a7ef"
           },
           {
+            "path": "materials/licenses/rust/rustc_version-0.4.1/LICENSE-APACHE.txt",
+            "kind": "license",
+            "bytes": 10847,
+            "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+          },
+          {
+            "path": "materials/licenses/rust/rustc_version-0.4.1/LICENSE-MIT.txt",
+            "kind": "license",
+            "bytes": 1071,
+            "sha256": "c9a75f18b9ab2927829a208fc6aa2cf4e63b8420887ba29cdb265d6619ae82d5"
+          },
+          {
             "path": "materials/licenses/rust/rustfft-6.4.1/LICENSE-APACHE.txt",
             "kind": "license",
             "bytes": 11358,
@@ -7926,6 +7944,18 @@
             "sha256": "aa72991ac35b4de0034da0afe943e62b48c4092fc2ba13ae47806d8e9a4ad551"
           },
           {
+            "path": "materials/licenses/rust/semver-1.0.28/LICENSE-APACHE.txt",
+            "kind": "license",
+            "bytes": 9723,
+            "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+          },
+          {
+            "path": "materials/licenses/rust/semver-1.0.28/LICENSE-MIT.txt",
+            "kind": "license",
+            "bytes": 1023,
+            "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+          },
+          {
             "path": "materials/licenses/rust/serde-1.0.229/LICENSE-APACHE.txt",
             "kind": "license",
             "bytes": 9723,
@@ -7972,6 +8002,18 @@
             "kind": "license",
             "bytes": 1023,
             "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+          },
+          {
+            "path": "materials/licenses/rust/serde_spanned-1.1.1/LICENSE-APACHE.txt",
+            "kind": "license",
+            "bytes": 11358,
+            "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+          },
+          {
+            "path": "materials/licenses/rust/serde_spanned-1.1.1/LICENSE-MIT.txt",
+            "kind": "license",
+            "bytes": 1062,
+            "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
           },
           {
             "path": "materials/licenses/rust/sha1-0.10.7/LICENSE-APACHE.txt",
@@ -8218,6 +8260,54 @@
             "kind": "license",
             "bytes": 1102,
             "sha256": "0b83dc40cba89b9922bb84b0a9c7d2768ce37c1d7e138b7424fd4549915778c9"
+          },
+          {
+            "path": "materials/licenses/rust/toml-1.1.4+spec-1.1.0/LICENSE-APACHE.txt",
+            "kind": "license",
+            "bytes": 11358,
+            "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+          },
+          {
+            "path": "materials/licenses/rust/toml-1.1.4+spec-1.1.0/LICENSE-MIT.txt",
+            "kind": "license",
+            "bytes": 1062,
+            "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+          },
+          {
+            "path": "materials/licenses/rust/toml_datetime-1.1.1+spec-1.1.0/LICENSE-APACHE.txt",
+            "kind": "license",
+            "bytes": 11358,
+            "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+          },
+          {
+            "path": "materials/licenses/rust/toml_datetime-1.1.1+spec-1.1.0/LICENSE-MIT.txt",
+            "kind": "license",
+            "bytes": 1062,
+            "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+          },
+          {
+            "path": "materials/licenses/rust/toml_parser-1.1.3+spec-1.1.0/LICENSE-APACHE.txt",
+            "kind": "license",
+            "bytes": 11358,
+            "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+          },
+          {
+            "path": "materials/licenses/rust/toml_parser-1.1.3+spec-1.1.0/LICENSE-MIT.txt",
+            "kind": "license",
+            "bytes": 1062,
+            "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+          },
+          {
+            "path": "materials/licenses/rust/toml_writer-1.1.2+spec-1.1.0/LICENSE-APACHE.txt",
+            "kind": "license",
+            "bytes": 11358,
+            "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+          },
+          {
+            "path": "materials/licenses/rust/toml_writer-1.1.2+spec-1.1.0/LICENSE-MIT.txt",
+            "kind": "license",
+            "bytes": 1062,
+            "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
           },
           {
             "path": "materials/licenses/rust/tracing-0.1.44/LICENSE.txt",
@@ -8602,6 +8692,12 @@
             "kind": "license",
             "bytes": 1141,
             "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+          },
+          {
+            "path": "materials/licenses/rust/winnow-1.0.4/LICENSE-MIT.txt",
+            "kind": "license",
+            "bytes": 1023,
+            "sha256": "cb5aedb296c5246d1f22e9099f925a65146f9f0d6b4eebba97fd27a6cdbbab2d"
           },
           {
             "path": "materials/licenses/rust/writeable-0.6.4/LICENSE.txt",
@@ -8996,8 +9092,8 @@
           {
             "path": "qwen/ai-ex-native-qwen-worker.exe",
             "kind": "native_runtime",
-            "bytes": 15957504,
-            "sha256": "87497d423c8d20f00b245de79dfabac7fd3c1c46f28205d1c2260f3ed5de3fbf"
+            "bytes": 15953920,
+            "sha256": "b0d7fa3253584714069195fb211e338016376910c4c09ed59be475723eb91d5f"
           },
           {
             "path": "qwen/onnxruntime.dll",
@@ -9014,8 +9110,8 @@
           {
             "path": "sherpa/ai-ex-native-sherpa-worker.exe",
             "kind": "native_runtime",
-            "bytes": 31604224,
-            "sha256": "3aeab8524cf325d18a5d7410f51a85805b5f312ec8095c777540f1f029106294"
+            "bytes": 3735552,
+            "sha256": "897f67fc14f73e5a664a1bf9e3ccef569ea9b6d63759d69058141eacb39998ad"
           },
           {
             "path": "sherpa/onnxruntime.dll",
@@ -9040,6 +9136,12 @@
             "kind": "native_runtime",
             "bytes": 259584,
             "sha256": "02ca46060f65d7d50f3448e7e67e608b0547c9acb274cba2f5cc6936521352b0"
+          },
+          {
+            "path": "sources/corresponding-sources.zip",
+            "kind": "source_archive",
+            "bytes": 148287163,
+            "sha256": "a42d05d404890f56e237a2dcbf7de847dda31169183ce9e19f6ca7171966b6bc"
           }
         ],
         "licenses": [
@@ -9410,6 +9512,10 @@
           {
             "id": "rust-either-1.19.0",
             "source_url": "https://static.crates.io/crates/either/either-1.19.0.crate"
+          },
+          {
+            "id": "rust-embed-resource-3.0.12",
+            "source_url": "https://static.crates.io/crates/embed-resource/embed-resource-3.0.12.crate"
           },
           {
             "id": "rust-encode_unicode-1.0.0",
@@ -9808,6 +9914,10 @@
             "source_url": "https://static.crates.io/crates/rubato/rubato-2.0.0.crate"
           },
           {
+            "id": "rust-rustc_version-0.4.1",
+            "source_url": "https://static.crates.io/crates/rustc_version/rustc_version-0.4.1.crate"
+          },
+          {
             "id": "rust-rustfft-6.4.1",
             "source_url": "https://static.crates.io/crates/rustfft/rustfft-6.4.1.crate"
           },
@@ -9836,6 +9946,10 @@
             "source_url": "https://static.crates.io/crates/schannel/schannel-0.1.30.crate"
           },
           {
+            "id": "rust-semver-1.0.28",
+            "source_url": "https://static.crates.io/crates/semver/semver-1.0.28.crate"
+          },
+          {
             "id": "rust-serde-1.0.229",
             "source_url": "https://static.crates.io/crates/serde/serde-1.0.229.crate"
           },
@@ -9850,6 +9964,10 @@
           {
             "id": "rust-serde_json-1.0.154",
             "source_url": "https://static.crates.io/crates/serde_json/serde_json-1.0.154.crate"
+          },
+          {
+            "id": "rust-serde_spanned-1.1.1",
+            "source_url": "https://static.crates.io/crates/serde_spanned/serde_spanned-1.1.1.crate"
           },
           {
             "id": "rust-sha1-0.10.7",
@@ -9954,6 +10072,22 @@
           {
             "id": "rust-tokio-macros-2.7.2",
             "source_url": "https://static.crates.io/crates/tokio-macros/tokio-macros-2.7.2.crate"
+          },
+          {
+            "id": "rust-toml-1.1.4+spec-1.1.0",
+            "source_url": "https://static.crates.io/crates/toml/toml-1.1.4+spec-1.1.0.crate"
+          },
+          {
+            "id": "rust-toml_datetime-1.1.1+spec-1.1.0",
+            "source_url": "https://static.crates.io/crates/toml_datetime/toml_datetime-1.1.1+spec-1.1.0.crate"
+          },
+          {
+            "id": "rust-toml_parser-1.1.3+spec-1.1.0",
+            "source_url": "https://static.crates.io/crates/toml_parser/toml_parser-1.1.3+spec-1.1.0.crate"
+          },
+          {
+            "id": "rust-toml_writer-1.1.2+spec-1.1.0",
+            "source_url": "https://static.crates.io/crates/toml_writer/toml_writer-1.1.2+spec-1.1.0.crate"
           },
           {
             "id": "rust-tracing-0.1.44",
@@ -10072,6 +10206,10 @@
             "source_url": "https://static.crates.io/crates/windows-sys/windows-sys-0.61.2.crate"
           },
           {
+            "id": "rust-winnow-1.0.4",
+            "source_url": "https://static.crates.io/crates/winnow/winnow-1.0.4.crate"
+          },
+          {
             "id": "rust-writeable-0.6.4",
             "source_url": "https://static.crates.io/crates/writeable/writeable-0.6.4.crate"
           },
@@ -10149,7 +10287,7 @@
           },
           {
             "id": "project-MIT",
-            "source_url": "https://github.com/QwQBiG/AIex/blob/7f3547f363a03469910b8503ad965e5089d41792/LICENSE"
+            "source_url": "https://github.com/QwQBiG/AIex/blob/d32feac5ef1c5b3eb7f47a3c547d4ba95c7aca74/LICENSE"
           }
         ],
         "workers": [
@@ -10179,8 +10317,8 @@
       "source": {
         "type": "archive",
         "url": "https://github.com/QwQBiG/AIex/releases/download/v0.9.0-alpha.1/AIex-native-cpu-0.9.0-alpha.1-windows-x64.zip",
-        "bytes": 87731129,
-        "sha256": "f3322f107332669cf6dcb2cc242b9b062069fb80db6364d30b2cf61fa2f6bc03"
+        "bytes": 206546614,
+        "sha256": "035e49d14cd0851ff8c3035c5196a89ad5eb81df72847ef8aef4f9ec60a0ea36"
       }
     }
   ]

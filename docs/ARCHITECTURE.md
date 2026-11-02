@@ -1,6 +1,6 @@
 # 当前架构与扩展边界
 
-本文描述当前 0.9.0-alpha.1 开发候选的数字伙伴架构，保留 0.8 的记忆、人物和合成回放，并增加服务持有的原生模型准备与推理。0.9 尚未发布，范围和验证见[待发布说明](releases/0.9.0-alpha.1.md)；已发布基线见[0.8 版本说明](releases/0.8.0-alpha.1.md)。源码和资源归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，操作入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
+本文描述当前 0.9.0-alpha.1 的数字伙伴架构，保留 0.8 的记忆、人物和合成回放，并增加服务持有的原生模型准备与推理。交付范围和验证见[版本说明](releases/0.9.0-alpha.1.md)；迁移基线见[0.8 版本说明](releases/0.8.0-alpha.1.md)。源码和资源归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，操作入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
 
 M0 的 Windows CPU 文件链路已通过，产品接入及未测范围单独记录在[原生验证证据](NATIVE_M0_EVIDENCE.md)。0.9 接入不表示 0.10 的真实 Windows 动作、旧记忆完整迁移或 1.0 的 Python 退役已经完成。
 
