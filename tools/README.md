@@ -31,7 +31,7 @@
 | [check_architecture.ps1](check_architecture.ps1) | 读取核心工作区与独立桌面的 Cargo 元数据，校验内部依赖方向与包登记。无参数执行正常检查；`-ProbeViolation` 在内存中注入违规依赖，预期退出码为 1，不改写 Cargo 文件。 |
 | [create_control_token.ps1](create_control_token.ps1) | 生成随机控制令牌并写入 UTF-8 文件。`-Path` 指定文件，默认 `config/control.token`；目标存在时拒绝覆盖，只有明确轮换令牌才使用 `-Force`。 |
 | [package_windows.ps1](package_windows.ps1) | 在 Windows 上构建并打包桌面、服务、迁移器与分发模板，检查可执行文件与版本，生成 ZIP 和 SHA256。支持 `-OutputDirectory`、`-SkipBuild`、`-Offline`；已存在的输出拒绝覆盖。 |
-| [verify_windows_portable.ps1](verify_windows_portable.ps1) | 验证已有 ZIP 的文件、版本、迁移路径和无窗口运行；兼容旧五文件包，0.8 起要求包含迁移器的六文件包。`-ArchivePath` 必需；`-EvidenceDirectory` 可选，指定证据父目录，默认 `target`。每次创建独立子目录并输出 JSON 摘要，不调用 Cargo。 |
+| [verify_windows_portable.ps1](verify_windows_portable.ps1) | 验证 ZIP 文件、版本、中文/空格路径与无窗口运行；兼容旧版布局，0.10 要求平台助手和专用画布入口在内的十文件包。`-ArchivePath` 必需；`-EvidenceDirectory` 指定证据父目录，默认 `target`。每次创建独立子目录并输出 JSON，不调用 Cargo。 |
 
 架构检查使用离线、锁定依赖的 Cargo 元数据：
 
