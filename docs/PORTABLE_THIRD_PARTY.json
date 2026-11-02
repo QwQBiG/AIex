@@ -1,21 +1,22 @@
 {
   "schema_version": 1,
-  "version": "0.9.0-alpha.1",
+  "version": "0.10.0-alpha.1",
   "target": "x86_64-pc-windows-gnu",
   "scope": "normal and build/procedural-macro dependency closure of portable executables; dev edges excluded",
   "locks": [
     {
       "path": "Cargo.lock",
-      "sha256": "7c1f4fa7f6e43948301a6c23cfc0c69102f740c97a5da506e42e367893ac321d",
+      "sha256": "262bd015b995b43f66560bf72dcf629ee7216b2d0df3da14d49919b6d8a291c2",
       "all_features": true,
       "roots": [
         "ai-ex-service",
-        "ai-ex-migrate"
+        "ai-ex-migrate",
+        "ai-ex-platform-windows"
       ]
     },
     {
       "path": "crates/ai-ex-desktop/Cargo.lock",
-      "sha256": "be89fa49b4f72f182c7753013f8bd5fbee6542e9107729818782e41279e0844e",
+      "sha256": "41d8812ce52af6bf6876026cf7b3f9ca0329d2f686780f67ef792eab9945ea95",
       "all_features": false,
       "roots": [
         "ai-ex-desktop"
@@ -25,7 +26,7 @@
   "first_party": [
     {
       "name": "ai-ex-asr",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -33,7 +34,7 @@
     },
     {
       "name": "ai-ex-audio",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -41,7 +42,7 @@
     },
     {
       "name": "ai-ex-audit",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -49,7 +50,7 @@
     },
     {
       "name": "ai-ex-automation",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -57,7 +58,7 @@
     },
     {
       "name": "ai-ex-bilibili",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -65,7 +66,7 @@
     },
     {
       "name": "ai-ex-capture",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -73,7 +74,7 @@
     },
     {
       "name": "ai-ex-config",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -81,7 +82,7 @@
     },
     {
       "name": "ai-ex-control",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -89,7 +90,7 @@
     },
     {
       "name": "ai-ex-core",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -97,7 +98,7 @@
     },
     {
       "name": "ai-ex-deepseek",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -105,7 +106,7 @@
     },
     {
       "name": "ai-ex-desktop",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -113,7 +114,7 @@
     },
     {
       "name": "ai-ex-domain",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -121,7 +122,7 @@
     },
     {
       "name": "ai-ex-duplex",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -129,7 +130,7 @@
     },
     {
       "name": "ai-ex-event-bus",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -137,7 +138,7 @@
     },
     {
       "name": "ai-ex-inference",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -145,7 +146,7 @@
     },
     {
       "name": "ai-ex-koboldcpp",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -153,7 +154,7 @@
     },
     {
       "name": "ai-ex-memory",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -161,7 +162,7 @@
     },
     {
       "name": "ai-ex-migrate",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -169,7 +170,7 @@
     },
     {
       "name": "ai-ex-model-catalog",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -177,7 +178,7 @@
     },
     {
       "name": "ai-ex-model-manager",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -185,7 +186,7 @@
     },
     {
       "name": "ai-ex-native-models",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -193,7 +194,7 @@
     },
     {
       "name": "ai-ex-observability",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -201,7 +202,7 @@
     },
     {
       "name": "ai-ex-ollama",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -209,7 +210,7 @@
     },
     {
       "name": "ai-ex-platform-windows",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -217,7 +218,7 @@
     },
     {
       "name": "ai-ex-plugin",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -225,7 +226,7 @@
     },
     {
       "name": "ai-ex-protocol",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -233,7 +234,7 @@
     },
     {
       "name": "ai-ex-safety",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -241,7 +242,7 @@
     },
     {
       "name": "ai-ex-service",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -249,7 +250,7 @@
     },
     {
       "name": "ai-ex-stage",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -257,7 +258,7 @@
     },
     {
       "name": "ai-ex-stage-obs",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -265,7 +266,7 @@
     },
     {
       "name": "ai-ex-text",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -273,7 +274,7 @@
     },
     {
       "name": "ai-ex-tts",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -281,7 +282,7 @@
     },
     {
       "name": "ai-ex-ui-model",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -289,7 +290,7 @@
     },
     {
       "name": "ai-ex-vision",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -297,7 +298,7 @@
     },
     {
       "name": "ai-ex-vts",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license": "MIT",
       "roles": [
         "runtime"
@@ -8925,6 +8926,6 @@
   ],
   "unresolved": [],
   "notice_file": "PORTABLE_THIRD_PARTY.txt",
-  "notice_bytes": 3023799,
-  "notice_sha256": "8e6e7a4910b2234d4c1afff4949fa6d44631b363fba6c3a8d603ec22349c5345"
+  "notice_bytes": 3023824,
+  "notice_sha256": "0f138a4dc5eb094f746fb3b6ae5079a6888ad5a834cafa89c7fb9067307de9bb"
 }

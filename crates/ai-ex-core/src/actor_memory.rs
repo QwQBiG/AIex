@@ -32,6 +32,9 @@ where
                         "memory management is in progress; wait for it to complete",
                     );
                     match next {
+                        Some(RuntimeCommand::CancelProactive { response }) => {
+                            let _ignored = response.send(Ok(()));
+                        }
                         Some(RuntimeCommand::Interrupt { reason, response }) => {
                             interrupted = Some(reason.clone());
                             let _ignored = response.send(signal_control(

@@ -1,6 +1,6 @@
 # Windows 便携版
 
-完整解压 `AIex-Windows-x64-0.9.0-alpha.1.zip`，双击文件夹内的 **`AIex.exe`**。无需 Rust、Python 或 VTube Studio；请放在有写入权限的普通文件夹中。
+完整解压 `AIex-Windows-x64-0.10.0-alpha.1.zip`，双击文件夹内的 **`AIex.exe`**。无需 Rust、Python 或 VTube Studio；请放在有写入权限的普通文件夹中。
 
 ## 第一次打开
 
@@ -21,6 +21,10 @@
 
 设置页的“合成模板回放”是可选功能，需要单独准备图片清单。它记录 dry-run 动作，支持聊天暂停、手动恢复和停止，不会控制真实游戏或发送键鼠。准备方式见[模板回放说明](TEMPLATE_GAME.md)。
 
+“专用窗口操作”是独立的真实 Windows 入口，默认无许可。由你运行 `AIex-Test-Window.cmd` 打开专用画布，按[原生操作说明](NATIVE_DESKTOP.md)授权精确程序路径，保存手动单步或视觉目标，再切回画布用快捷键执行。不要把合成回放配置当作真实许可。
+
+运行设置独立保存主动输出、冷却、免打扰、静音时段、快捷键和字幕开关。快捷键默认不注册，每次重启后需显式应用；悬浮字幕只跟随实际播放。导出诊断创建新文件，不导出原始对话日志。
+
 本地向导管理自己的 Ollama 实例及模型，首次下载和冷加载需等待。声音、识别和中文记忆检索按需准备；专属音色接受清晰 WAV 与对应文本，保存私人副本。模型缺失不影响外形及设置，下载需确认，试听需另点播放。完整操作见[本地向导验收](MANUAL_TEST_PLAN.md)。
 
 原有外部连接入口需要云端服务的个人密钥，或正在运行且已安装模型的 Ollama / KoboldCpp。云端密钥不会保存到配置文件；未设置对应环境变量时，下次启动会再次进入设置。连通性检查只证明地址可达，实际鉴权和回答以服务结果为准。
@@ -30,10 +34,12 @@
 ## 程序与数据
 
 ```text
-AIex-Windows-x64-0.9.0-alpha.1/
+AIex-Windows-x64-0.10.0-alpha.1/
 ├── AIex.exe
 ├── ai-ex-service.exe
 ├── ai-ex-migrate.exe
+├── ai-ex-platform-helper.exe
+├── AIex-Test-Window.cmd
 ├── AIex.portable
 ├── 开始使用.txt
 ├── LICENSE.txt
@@ -48,6 +54,8 @@ AIex-Windows-x64-0.9.0-alpha.1/
 保留整个文件夹，不要只复制桌面 EXE，也不要在压缩包内直接运行。程序根据自己的位置寻找配置，从快捷方式或其他工作目录启动也适用。默认控制端口为 17878。
 
 本地向导另建 `data/native-bootstrap.toml`、`data/native-v1.toml`、控制令牌和 `native-memory.jsonl`，不覆盖原连接配置。默认 `data/native/` 下分别存放组件、私人声音和临时作业。本地控制端口由向导分配；运行组件 ZIP 及模型由应用确认后下载，不内置在轻量程序包中。
+
+0.10 继续使用已发布且固定摘要的 0.9 CPU Runtime 与对应源码，已有组件无需重新下载。`desktop-runtime-v1.json` 位于当前服务配置旁，字幕的窗口样式另存在桌面偏好中；原生审计写入配置审计文件旁的 `*.native.jsonl`。
 
 `ai-ex-migrate.exe` 用于显式旧数据导入，日常启动仍双击 `AIex.exe`。迁移前保留输入副本，使用新输出文件；参数和模式可通过 `ai-ex-migrate.exe --help` 查看，完整说明见[迁移工具](../tools/README.md)。
 

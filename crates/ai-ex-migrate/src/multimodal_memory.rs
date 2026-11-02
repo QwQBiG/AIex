@@ -42,6 +42,8 @@ fn default_importance() -> f64 {
 
 #[derive(Serialize)]
 struct ImportedSnapshot {
+    schema_version: u32,
+    record_type: &'static str,
     #[serde(flatten)]
     entry: MemoryEntry,
     knowledge: MemoryKnowledge,
@@ -125,6 +127,8 @@ fn convert_snapshot(content: &[u8], profile: &str) -> Result<Vec<u8>, AppError> 
         };
         media.validate().map_err(|error| fail(&error.message))?;
         let imported = ImportedSnapshot {
+            schema_version: 2,
+            record_type: "memory",
             entry: MemoryEntry {
                 id,
                 profile_id: profile.to_owned(),

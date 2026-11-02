@@ -64,7 +64,7 @@ foreach ($path in @($destination, $archive, $checksum)) {
 if (-not $SkipBuild) {
     $buildArgs = @('build', '--release', '--locked')
     if ($Offline) { $buildArgs += '--offline' }
-    & cargo @buildArgs --manifest-path (Join-Path $repository 'Cargo.toml') -p ai-ex-service -p ai-ex-migrate --all-features
+    & cargo @buildArgs --manifest-path (Join-Path $repository 'Cargo.toml') -p ai-ex-service -p ai-ex-migrate -p ai-ex-platform-windows --all-features
     if ($LASTEXITCODE -ne 0) { throw 'Core executable release build failed.' }
     & cargo @buildArgs --manifest-path (Join-Path $repository 'crates/ai-ex-desktop/Cargo.toml')
     if ($LASTEXITCODE -ne 0) { throw 'Desktop release build failed.' }
@@ -74,6 +74,7 @@ $binaries = @{
     'AIex.exe' = Join-Path $desktop.target_directory 'release/ai-ex-desktop.exe'
     'ai-ex-service.exe' = Join-Path $core.target_directory 'release/ai-ex-service.exe'
     'ai-ex-migrate.exe' = Join-Path $core.target_directory 'release/ai-ex-migrate.exe'
+    'ai-ex-platform-helper.exe' = Join-Path $core.target_directory 'release/ai-ex-platform-helper.exe'
 }
 foreach ($path in $binaries.Values) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Release executable missing: $path" }
@@ -103,6 +104,8 @@ Copy-Item -LiteralPath (Join-Path $repository 'config/ai-ex.portable.example.tom
 Copy-Item -LiteralPath (Join-Path $repository 'docs/PORTABLE_START.txt') -Destination (Join-Path $destination '开始使用.txt')
 Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination (Join-Path $destination 'LICENSE.txt')
 Copy-Item -LiteralPath (Join-Path $repository 'docs/PORTABLE_THIRD_PARTY.txt') -Destination (Join-Path $destination 'THIRD-PARTY-LICENSES.txt')
+$testWindow = "@echo off`r`nsetlocal`r`nstart `"`" `"%~dp0ai-ex-platform-helper.exe`" --test-window`r`n"
+[IO.File]::WriteAllText((Join-Path $destination 'AIex-Test-Window.cmd'), $testWindow, [Text.UTF8Encoding]::new($false))
 
 $check = Invoke-PackageCheck (Join-Path $destination 'AIex.exe') '--check-install'
 $status = $check | ConvertFrom-Json
@@ -115,6 +118,8 @@ $migratorVersion = Invoke-PackageCheck (Join-Path $destination 'ai-ex-migrate.ex
 if ($migratorVersion.Trim() -ne "ai-ex-migrate $version") {
     throw 'Packaged migrator version check failed.'
 }
+$helperVersion = Invoke-PackageCheck (Join-Path $destination 'ai-ex-platform-helper.exe') '--version'
+if ($helperVersion.Trim() -ne "ai-ex-platform-helper $version") { throw 'Packaged platform helper version check failed.' }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($destination, $archive, [IO.Compression.CompressionLevel]::Optimal, $true)

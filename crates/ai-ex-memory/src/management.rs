@@ -120,12 +120,15 @@ impl MemoryStore {
     }
 
     pub(super) async fn replace_records(&self, records: Vec<MemoryRecord>) -> Result<(), AppError> {
-        let content = serialize_records(&records)?;
+        let mut provenance = self.inner.provenance.read().await.clone();
+        provenance.reconcile(&self.inner.records.read().await, &records);
+        let content = provenance::serialize_document(&records, &provenance)?;
         if let Some(parent) = self.inner.path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|error| AppError::unavailable(error.to_string()))?;
         }
+        self.prepare_format_backup().await?;
         let temporary = self
             .inner
             .path
@@ -137,7 +140,11 @@ impl MemoryStore {
             let _ = tokio::fs::remove_file(&temporary).await;
             return Err(AppError::unavailable(error.to_string()));
         }
-        *self.inner.records.write().await = records;
+        let mut current = self.inner.records.write().await;
+        let mut current_provenance = self.inner.provenance.write().await;
+        *current = records;
+        *current_provenance = provenance;
+        self.inner.legacy_format.store(false, Ordering::Release);
         Ok(())
     }
 }

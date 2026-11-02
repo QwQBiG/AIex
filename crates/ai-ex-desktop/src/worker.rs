@@ -12,6 +12,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 const HEALTH_REFRESH_TICKS: u8 = 40;
 
+#[path = "worker_desktop.rs"]
+mod desktop;
 #[path = "worker_native.rs"]
 mod native;
 #[cfg(test)]
@@ -25,6 +27,14 @@ pub struct WorkerSettings {
 }
 
 pub enum WorkerCommand {
+    DesktopRuntime {
+        request_id: u64,
+        request: ai_ex_domain::DesktopRuntimeRequest,
+    },
+    NativeDesktop {
+        request_id: u64,
+        request: ai_ex_domain::NativeDesktopRequest,
+    },
     Native {
         request_id: u64,
         request: ai_ex_domain::NativeRequest,
@@ -44,6 +54,14 @@ pub enum WorkerCommand {
 }
 
 pub enum WorkerEvent {
+    DesktopRuntime {
+        request_id: u64,
+        result: Result<ai_ex_domain::DesktopRuntimeReply, AppError>,
+    },
+    NativeDesktop {
+        request_id: u64,
+        result: Result<ai_ex_domain::NativeDesktopReply, AppError>,
+    },
     Native {
         request_id: u64,
         result: Result<ai_ex_domain::NativeReply, AppError>,
@@ -159,6 +177,14 @@ struct QueuedCommand {
 
 fn reject_command(events: &Sender<WorkerEvent>, command: WorkerCommand, message: &str) -> bool {
     let event = match command {
+        WorkerCommand::DesktopRuntime { request_id, .. } => WorkerEvent::DesktopRuntime {
+            request_id,
+            result: Err(AppError::unavailable(message)),
+        },
+        WorkerCommand::NativeDesktop { request_id, .. } => WorkerEvent::NativeDesktop {
+            request_id,
+            result: Err(AppError::unavailable(message)),
+        },
         WorkerCommand::Native { request_id, .. } => WorkerEvent::Native {
             request_id,
             result: Err(AppError::unavailable(message)),
@@ -604,6 +630,11 @@ async fn send_command(
                 "native setup uses a dedicated reply channel",
             ));
         }
+        WorkerCommand::DesktopRuntime { .. } | WorkerCommand::NativeDesktop { .. } => {
+            return Err(AppError::protocol(
+                "desktop control requires its dedicated lane",
+            ));
+        }
         WorkerCommand::SetPersona(profile) => (
             ControlCommand::SetPersona {
                 profile: profile.clone(),
@@ -759,11 +790,44 @@ pub(crate) async fn run_commands(
     let (native_commands, native_rx) = tokio::sync::mpsc::channel(16);
     let (native_status, native_status_rx) = tokio::sync::mpsc::channel(16);
     let (native_urgent, native_urgent_rx) = tokio::sync::mpsc::channel(2);
+    let (desktop_commands, desktop_rx) = tokio::sync::mpsc::channel(32);
     let epoch = AtomicU64::new(0);
     let native_epoch = AtomicU64::new(0);
+    let desktop_epoch = AtomicU64::new(0);
     let router = async {
         while let Some(command) = commands.recv().await {
             let command = match command {
+                command @ (WorkerCommand::DesktopRuntime { .. }
+                | WorkerCommand::NativeDesktop { .. }) => {
+                    if matches!(
+                        &command,
+                        WorkerCommand::NativeDesktop {
+                            request: ai_ex_domain::NativeDesktopRequest::Pause { .. }
+                                | ai_ex_domain::NativeDesktopRequest::Stop { .. },
+                            ..
+                        }
+                    ) {
+                        let _previous = desktop_epoch.fetch_update(
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                            |value| value.checked_add(1),
+                        );
+                    }
+                    let queued = desktop::Queued {
+                        command,
+                        epoch: desktop_epoch.load(Ordering::Acquire),
+                    };
+                    if let Err(error) = desktop_commands.try_send(queued)
+                        && !reject_command(
+                            events,
+                            error.into_inner().command,
+                            "desktop control queue full or stopped",
+                        )
+                    {
+                        return;
+                    }
+                    continue;
+                }
                 WorkerCommand::Native {
                     request_id,
                     request,
@@ -782,6 +846,10 @@ pub(crate) async fn run_commands(
                 command => command,
             };
             if matches!(&command, WorkerCommand::EmergencyStop) {
+                let _previous =
+                    desktop_epoch.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                        value.checked_add(1)
+                    });
                 let _previous =
                     native_epoch.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
                         value.checked_add(1)
@@ -854,6 +922,7 @@ pub(crate) async fn run_commands(
         _ = async {
             tokio::join!(
                 run_ordinary_commands(client, ordinary_rx, events, persona_epoch),
+                desktop::run(client, desktop_rx, events, &desktop_epoch),
                 execute_automation(client, regular_rx, events, Some(&epoch)),
                 execute_automation(client, pause_rx, events, None),
                 execute_automation(client, stop_rx, events, None),

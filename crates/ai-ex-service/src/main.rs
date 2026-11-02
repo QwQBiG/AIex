@@ -4,8 +4,12 @@ mod args;
 mod automation_replay;
 mod control_snapshot;
 mod conversation_activity;
+mod desktop_runtime;
+mod desktop_runtime_actions;
 mod events;
 mod lifecycle;
+mod native_desktop;
+mod native_desktop_port;
 mod native_ports;
 mod native_runtime;
 mod playback;
@@ -339,23 +343,34 @@ async fn run() -> Result<(), AppError> {
     if let Some(native) = &native {
         native.attach_preview(speech.clone(), player.clone(), event_hub.clone());
     }
-    let mut automation = TemplateHost::new(
-        event_hub
-            .current()
-            .instance_id
-            .ok_or_else(|| AppError::unavailable("service instance identity is unavailable"))?,
-        speech_activity,
-        Arc::clone(&safety),
-    )?;
-    if config.vision.enabled {
+    let instance_id = event_hub
+        .current()
+        .instance_id
+        .ok_or_else(|| AppError::unavailable("service instance identity is unavailable"))?;
+    let strategy_factory: Option<strategy_loop::StrategyProviderFactory> = if config.vision.enabled
+    {
         let settings = OllamaVisionSettings {
             base_url: config.vision.base_url.clone(),
             model: config.vision.model.clone(),
             timeout: Duration::from_secs(config.vision.timeout_seconds),
         };
-        automation = automation.with_strategy_factory(Arc::new(move || {
+        Some(Arc::new(move || {
             Ok(Box::new(OllamaVisionClient::new(settings.clone())?) as Box<dyn VisionAnalyzerPort>)
-        }));
+        }))
+    } else {
+        None
+    };
+    let native_desktop = native_desktop::create(
+        instance_id,
+        &config,
+        speech_activity.clone(),
+        safety.clone(),
+        strategy_factory.clone(),
+    )?;
+    let mut automation = TemplateHost::new(instance_id, speech_activity, Arc::clone(&safety))?
+        .with_native_activity(native_desktop.activity());
+    if let Some(factory) = strategy_factory {
+        automation = automation.with_strategy_factory(factory);
     }
     let health_snapshot = Arc::new(RwLock::new(startup_health));
     publish_health_snapshot(&health_snapshot, &event_hub).await;
@@ -373,7 +388,7 @@ async fn run() -> Result<(), AppError> {
 
     let mut stage_router = StageRouter::new();
     stage_router.push(speech);
-    stage_router.push(vts);
+    stage_router.push(vts.clone());
     stage_router.push_box(obs_runtime.stage);
     let stage_output = StageOutput::new(stage_router);
     let speech_port = stage_output.speech();
@@ -412,6 +427,7 @@ async fn run() -> Result<(), AppError> {
             task.abort();
         }
         let automation_result = automation.shutdown().await;
+        let native_desktop_result = native_desktop.shutdown().await;
         let runtime_result = runtime.shutdown().await;
         let native_result = match &native {
             Some(native) => native.shutdown().await,
@@ -421,6 +437,7 @@ async fn run() -> Result<(), AppError> {
         let speech_result = join_speech_worker(speech_task).await;
         prompt_result?;
         automation_result?;
+        native_desktop_result?;
         runtime_result?;
         native_result?;
         return speech_result;
@@ -446,6 +463,32 @@ async fn run() -> Result<(), AppError> {
         bilibili_runtime.health_handle.clone(),
         event_hub.clone(),
     );
+    let desktop_runtime = match desktop_runtime_actions::create(
+        instance_id,
+        &args.config,
+        &config,
+        runtime.clone(),
+        safety.clone(),
+        automation.clone(),
+        native_desktop.clone(),
+        native.clone(),
+        vts,
+    ) {
+        Ok(runtime) => Some(runtime),
+        Err(error) => {
+            tracing::warn!(%error, "desktop behavior settings unavailable");
+            update_component_health(
+                &mut *health_snapshot.write().await,
+                ComponentHealth::unavailable(
+                    "desktop-behavior",
+                    "desktop-runtime-v1.json needs correction",
+                ),
+                &event_hub,
+            );
+            None
+        }
+    };
+    let desktop_runtime_task = desktop_runtime.as_ref().map(|runtime| runtime.spawn());
     let control_task = spawn_control(
         &config,
         ControlResources {
@@ -456,6 +499,8 @@ async fn run() -> Result<(), AppError> {
             stage: stage_output.journal(),
             automation: automation.clone(),
             native: native.clone(),
+            native_desktop: Some(native_desktop.clone()),
+            desktop_runtime: desktop_runtime.clone(),
         },
     )
     .await?;
@@ -471,7 +516,15 @@ async fn run() -> Result<(), AppError> {
     let session_result = if args.serve || args.managed {
         lifecycle::wait_for_shutdown(args.managed).await
     } else {
-        run_interactive(&runtime, &event_hub, &safety, &automation).await
+        run_interactive(
+            &runtime,
+            &event_hub,
+            &safety,
+            &automation,
+            &native_desktop,
+            desktop_runtime.as_ref(),
+        )
+        .await
     };
     if let Some(task) = bilibili_runtime.task {
         task.abort();
@@ -486,6 +539,14 @@ async fn run() -> Result<(), AppError> {
         task.abort();
     }
     let automation_result = automation.shutdown().await;
+    if let Some(task) = desktop_runtime_task {
+        task.abort();
+    }
+    let desktop_runtime_result = match &desktop_runtime {
+        Some(runtime) => runtime.stop().await,
+        None => Ok(()),
+    };
+    let native_desktop_result = native_desktop.shutdown().await;
     let shutdown_result = runtime.shutdown().await;
     let native_result = match &native {
         Some(native) => native.shutdown().await,
@@ -495,6 +556,8 @@ async fn run() -> Result<(), AppError> {
     let speech_result = join_speech_worker(speech_task).await;
     session_result?;
     automation_result?;
+    desktop_runtime_result?;
+    native_desktop_result?;
     shutdown_result?;
     native_result?;
     speech_result
@@ -505,6 +568,8 @@ async fn run_interactive(
     event_hub: &EventHub,
     safety: &SafetyGate,
     automation: &TemplateHost,
+    native_desktop: &native_desktop::NativeDesktopHost,
+    desktop_runtime: Option<&desktop_runtime::DesktopRuntime>,
 ) -> Result<(), AppError> {
     println!("AIex Rust interactive mode. Commands: /status, /interrupt, /emergency-stop, /quit.",);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -535,12 +600,20 @@ async fn run_interactive(
         }
         if line == "/emergency-stop" {
             safety.trigger_emergency_stop();
-            automation.emergency_stop()?;
+            let native = native_desktop.stop_current("interactive emergency stop", true);
+            let proactive = match desktop_runtime {
+                Some(runtime) => runtime.suspend_proactive().await,
+                None => Ok(()),
+            };
+            let automation = automation.emergency_stop();
             if let Err(error) = runtime.interrupt("emergency stop").await
                 && error.kind != ErrorKind::InvalidTransition
             {
                 eprintln!("emergency interrupt failed: {error}");
             }
+            native?;
+            proactive?;
+            automation?;
             println!("Emergency stop is active until the service restarts.");
             continue;
         }
@@ -1408,6 +1481,8 @@ struct ServiceControl {
     automation: TemplateHost,
     persona: Arc<RwLock<PersonaSnapshot>>,
     native: Option<Arc<NativeRuntime>>,
+    native_desktop: Option<native_desktop::NativeDesktopHost>,
+    desktop_runtime: Option<desktop_runtime::DesktopRuntime>,
     interaction: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -1452,6 +1527,9 @@ impl ControlBackend for ServiceControl {
                     request,
                     NativeRequest::PreviewVoice { .. } | NativeRequest::Remove { .. }
                 ) {
+                    if let Some(host) = &self.native_desktop {
+                        host.stop_current("native voice operation", false)?;
+                    }
                     if matches!(request, NativeRequest::Remove { .. }) {
                         self.stop_native_preview().await;
                     }
@@ -1465,9 +1543,52 @@ impl ControlBackend for ServiceControl {
                 reply.validate()?;
                 Ok(ControlPayload::Native(Box::new(reply)))
             }
-            ControlCommand::Automation { request } => Ok(ControlPayload::Automation(Box::new(
-                self.automation.execute(request).await?,
-            ))),
+            ControlCommand::DesktopRuntime { request } => {
+                let runtime = self.desktop_runtime.as_ref().ok_or_else(|| {
+                    AppError::unavailable("desktop behavior settings are unavailable")
+                })?;
+                Ok(ControlPayload::DesktopRuntime(Box::new(
+                    runtime.handle(request).await?,
+                )))
+            }
+            ControlCommand::NativeDesktop { request } => {
+                let host = self
+                    .native_desktop
+                    .as_ref()
+                    .ok_or_else(|| AppError::unavailable("native desktop is unavailable"))?;
+                let start = matches!(
+                    &request,
+                    ai_ex_domain::NativeDesktopRequest::StartNative { .. }
+                );
+                let reply = host.request(request).await?;
+                if start {
+                    let status = self
+                        .automation
+                        .execute(ai_ex_domain::AutomationRequest::Status)
+                        .await?;
+                    if let Some(session) = status.session {
+                        self.automation
+                            .execute(ai_ex_domain::AutomationRequest::Stop {
+                                instance_id: status.instance_id,
+                                expected_revision: status.revision,
+                                session_id: session.session_id,
+                            })
+                            .await?;
+                    }
+                }
+                Ok(ControlPayload::NativeDesktop(Box::new(reply)))
+            }
+            ControlCommand::Automation { request } => {
+                let start = matches!(
+                    &request,
+                    ai_ex_domain::AutomationRequest::StartTemplate { .. }
+                );
+                let snapshot = self.automation.execute(request).await?;
+                if start && let Some(host) = &self.native_desktop {
+                    host.stop_current("synthetic replay selected", true)?;
+                }
+                Ok(ControlPayload::Automation(Box::new(snapshot)))
+            }
             ControlCommand::Submit { text } => {
                 let text = text.trim();
                 if text.is_empty() {
@@ -1509,6 +1630,9 @@ impl ControlBackend for ServiceControl {
             }
             ControlCommand::SetPersona { profile } => {
                 profile.validate()?;
+                if let Some(host) = &self.native_desktop {
+                    host.stop_current("persona changed", true)?;
+                }
                 // Serialize identity updates and snapshots across the actor acknowledgement.
                 let mut current = self.persona.write().await;
                 self.runtime
@@ -1547,14 +1671,26 @@ impl ControlBackend for ServiceControl {
             }
             ControlCommand::EmergencyStop => {
                 self.safety.trigger_emergency_stop();
+                let native_desktop = self
+                    .native_desktop
+                    .as_ref()
+                    .map(|host| host.stop_current("emergency stop", true))
+                    .unwrap_or(Ok(()));
+                let proactive = match &self.desktop_runtime {
+                    Some(runtime) => runtime.suspend_proactive().await,
+                    None => Ok(()),
+                };
                 self.stop_native_preview().await;
                 let automation_result = self.automation.emergency_stop();
-                if let Err(error) = self.runtime.interrupt("emergency stop").await
+                let conversation = self.runtime.interrupt("emergency stop").await;
+                native_desktop?;
+                proactive?;
+                automation_result?;
+                if let Err(error) = conversation
                     && error.kind != ErrorKind::InvalidTransition
                 {
                     return Err(error);
                 }
-                automation_result?;
                 Ok(ControlPayload::Accepted)
             }
         }
@@ -1581,6 +1717,8 @@ struct ControlResources {
     stage: StageJournal,
     automation: TemplateHost,
     native: Option<Arc<NativeRuntime>>,
+    native_desktop: Option<native_desktop::NativeDesktopHost>,
+    desktop_runtime: Option<desktop_runtime::DesktopRuntime>,
 }
 
 async fn spawn_control(
@@ -1623,6 +1761,8 @@ async fn spawn_control(
         stage,
         automation,
         native,
+        native_desktop,
+        desktop_runtime,
     } = resources;
     let backend = Arc::new(ServiceControl {
         runtime,
@@ -1633,6 +1773,8 @@ async fn spawn_control(
         stage,
         automation,
         native,
+        native_desktop,
+        desktop_runtime,
         interaction: Arc::new(tokio::sync::Mutex::new(())),
     });
     tracing::info!(%address, "local control server ready");

@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "date": "2026-11-01",
+  "date": "2026-11-02",
   "target": "x86_64-pc-windows-gnu",
   "manifest": "native-workers/Cargo.toml",
   "lockfile": "native-workers/Cargo.lock",
-  "lockfile_sha256": "97eedfd42e7b7135512c5d906c6e78db21824d8704b5909cdebf54c0917bdb23",
+  "lockfile_sha256": "5b4c7aab7cb9ed8cc0ea03f98f10f784034624516f52f665b105d15d1b953fee",
   "metadata_command": "cargo metadata --manifest-path native-workers/Cargo.toml --format-version 1 --locked --offline --filter-platform x86_64-pc-windows-gnu",
   "roots": [
     "ai-ex-native-bge-worker",
@@ -16,7 +16,7 @@
   "first_party": [
     {
       "name": "ai-ex-domain",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license_declaration": "MIT",
       "path": "crates/ai-ex-domain",
       "roles": [
@@ -28,7 +28,7 @@
     },
     {
       "name": "ai-ex-inference",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license_declaration": "MIT",
       "path": "crates/ai-ex-inference",
       "roles": [
@@ -40,7 +40,7 @@
     },
     {
       "name": "ai-ex-model-catalog",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license_declaration": "MIT",
       "path": "crates/ai-ex-model-catalog",
       "roles": [
@@ -52,7 +52,7 @@
     },
     {
       "name": "ai-ex-native-bge-worker",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license_declaration": "MIT",
       "path": "native-workers/bge",
       "roles": [
@@ -64,7 +64,7 @@
     },
     {
       "name": "ai-ex-native-qwen-worker",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license_declaration": "MIT",
       "path": "native-workers/qwen",
       "roles": [
@@ -76,7 +76,7 @@
     },
     {
       "name": "ai-ex-native-sherpa-worker",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license_declaration": "MIT",
       "path": "native-workers/sherpa",
       "roles": [
@@ -88,7 +88,7 @@
     },
     {
       "name": "ai-ex-native-worker-support",
-      "version": "0.9.0-alpha.1",
+      "version": "0.10.0-alpha.1",
       "license_declaration": "MIT",
       "path": "native-workers/support",
       "roles": [

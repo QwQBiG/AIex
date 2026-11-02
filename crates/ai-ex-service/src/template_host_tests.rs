@@ -174,6 +174,48 @@ async fn queued_speech_and_in_worker_synthesis_hold_resume_after_turn_completion
     assert_eq!(control.snapshot().unwrap().mode, ReflexControlMode::Running);
 }
 
+#[tokio::test]
+async fn proactive_reservation_refuses_user_admissions_and_remaining_real_audio() {
+    let (host, _clock, mut speech, mut receiver) = fixture();
+    let user = host.begin_chat().unwrap();
+    assert!(host.begin_proactive().is_err());
+    assert_eq!(host.pending_chat_count().unwrap(), 1);
+    drop(user);
+    speech
+        .enqueue(TurnId::new(), "remaining real queued audio".into())
+        .await
+        .unwrap();
+    assert!(host.begin_proactive().is_err());
+    assert_eq!(host.pending_chat_count().unwrap(), 0);
+    let _active = receiver.receive().await.unwrap();
+    assert!(
+        host.begin_proactive().is_err(),
+        "active synthesis/playback is also busy"
+    );
+    speech.interrupt().await.unwrap();
+    assert!(
+        host.begin_proactive().is_err(),
+        "cancellation must finish worker cleanup first"
+    );
+    let mut next = Box::pin(receiver.receive());
+    std::future::poll_fn(|context| {
+        assert!(next.as_mut().poll(context).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(next);
+    let proactive = host.begin_proactive().unwrap();
+    assert_eq!(host.pending_chat_count().unwrap(), 1);
+    assert!(host.begin_proactive().is_err());
+    drop(proactive);
+    assert_eq!(host.pending_chat_count().unwrap(), 0);
+    drop(receiver);
+    assert!(
+        host.begin_proactive().is_err(),
+        "unknown playback state never admits proactive output"
+    );
+}
+
 #[test]
 fn manual_pause_revokes_owned_deadline_and_only_explicit_idle_resume_restarts() {
     let (host, clock, _speech, _receiver) = fixture();

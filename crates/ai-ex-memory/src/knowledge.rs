@@ -1,7 +1,8 @@
 use super::*;
 use ai_ex_domain::{
-    MemoryEntity, MemoryEntityEvidence, MemoryEntityGroup, MemoryEntityPage, MemoryMedia,
-    MemoryModality, MemoryRequest, MemoryResponse,
+    MemoryEntity, MemoryEntityEvidence, MemoryEntityGroup, MemoryEntityOrigin, MemoryEntityPage,
+    MemoryEntitySourceStatus, MemoryEntitySubject, MemoryMedia, MemoryModality, MemoryRequest,
+    MemoryResponse,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -123,8 +124,10 @@ impl MemoryStore {
                 ..
             } => {
                 let records = self.inner.records.read().await;
+                let provenance = self.inner.provenance.read().await;
                 let page = entity_page(
                     &records,
+                    &provenance,
                     profile_id,
                     self.inner.enabled,
                     query,
@@ -137,16 +140,23 @@ impl MemoryStore {
                 key, offset, limit, ..
             } => {
                 let records = self.inner.records.read().await;
+                let provenance = self.inner.provenance.read().await;
+                let imported_ids = imported_entities::source_ids(&provenance, profile_id, key);
                 let mut matches: Vec<_> = records
                     .iter()
                     .enumerate()
                     .filter(|(_, record)| {
                         record.profile_id == profile_id
-                            && record
-                                .knowledge
-                                .entities
-                                .iter()
-                                .any(|entity| entity.key == *key)
+                            && imported_ids.as_ref().map_or_else(
+                                || {
+                                    record
+                                        .knowledge
+                                        .entities
+                                        .iter()
+                                        .any(|entity| entity.key == *key)
+                                },
+                                |ids| ids.contains(&record.id),
+                            )
                     })
                     .collect();
                 matches.sort_by_key(|(index, record)| {
@@ -213,6 +223,7 @@ impl MemoryStore {
 
 fn entity_page(
     records: &[MemoryRecord],
+    provenance: &provenance::Provenance,
     profile_id: &str,
     enabled: bool,
     query: &str,
@@ -274,6 +285,9 @@ fn entity_page(
                     source: record.source,
                     value: entity.value.clone(),
                     confidence: entity.confidence,
+                    source_status: MemoryEntitySourceStatus::Active,
+                    imported_entity_id: None,
+                    legacy_memory_id: None,
                 })
                 .collect();
             MemoryEntityGroup {
@@ -285,9 +299,14 @@ fn entity_page(
                 last_updated_ms: last.min(u64::MAX as u128) as u64,
                 total_mentions,
                 evidence,
+                subject: MemoryEntitySubject::SelfUser,
+                origin: MemoryEntityOrigin::Extracted,
             }
         })
         .collect();
+    groups.extend(imported_entities::groups(
+        provenance, records, profile_id, &query,
+    ));
     groups.sort_by(|a, b| {
         b.last_updated_ms
             .cmp(&a.last_updated_ms)

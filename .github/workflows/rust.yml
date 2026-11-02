@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+
 jobs:
   core:
     name: Core workspace

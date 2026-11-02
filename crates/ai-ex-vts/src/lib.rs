@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 
+mod discovery;
+#[cfg(test)]
+mod discovery_tests;
 mod protocol;
+pub use discovery::VtsHotkey;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -12,7 +16,7 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
 #[derive(Debug, Clone)]
@@ -29,8 +33,10 @@ pub struct VtsSettings {
 enum Command {
     Mouth(f64),
     Hotkey(String),
+    DiscoverHotkeys(oneshot::Sender<Result<Vec<VtsHotkey>, AppError>>),
 }
 
+#[derive(Clone)]
 pub struct VtsClient {
     sender: Option<mpsc::Sender<Command>>,
     health: ComponentHealth,
@@ -83,6 +89,26 @@ impl VtsClient {
 
     pub async fn trigger_hotkey(&self, id: impl Into<String>) -> Result<(), AppError> {
         self.send(Command::Hotkey(id.into())).await
+    }
+
+    /// Reads the current model's hotkeys without triggering any action.
+    pub async fn discover_hotkeys(&self) -> Result<Vec<VtsHotkey>, AppError> {
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| AppError::unavailable("VTS is not connected"))?;
+        let (reply, result) = oneshot::channel();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            sender
+                .send(Command::DiscoverHotkeys(reply))
+                .await
+                .map_err(|_| AppError::unavailable("VTS actor stopped"))?;
+            result
+                .await
+                .map_err(|_| AppError::unavailable("VTS closed during hotkey discovery"))?
+        })
+        .await
+        .map_err(|_| AppError::connectivity("VTS hotkey discovery timed out"))?
     }
 
     async fn send(&self, command: Command) -> Result<(), AppError> {
@@ -188,6 +214,8 @@ async fn authenticate_response(socket: &mut Socket) -> Result<(), AppError> {
 
 async fn run_actor(socket: Socket, mut receiver: mpsc::Receiver<Command>) {
     let (mut writer, mut reader) = socket.split();
+    let mut pending = BTreeMap::<String, oneshot::Sender<Result<Vec<VtsHotkey>, AppError>>>::new();
+    let mut cleanup = tokio::time::interval(std::time::Duration::from_secs(1));
     loop {
         tokio::select! {
             command = receiver.recv() =>
@@ -200,6 +228,17 @@ async fn run_actor(socket: Socket, mut receiver: mpsc::Receiver<Command>) {
                 {
                     Command::Mouth(value) => protocol::mouth_open(value),
                     Command::Hotkey(id) => protocol::trigger_hotkey(&id),
+                    Command::DiscoverHotkeys(reply) => {
+                        pending.retain(|_, reply| !reply.is_closed());
+                        if pending.len() >= 64 {
+                            let _ignored = reply.send(Err(AppError::unavailable("VTS hotkey discovery queue is full")));
+                            continue;
+                        }
+                        let request = protocol::discover_hotkeys();
+                        let id = request["requestID"].as_str().expect("request ID").to_owned();
+                        pending.insert(id, reply);
+                        request
+                    },
                 };
                 if writer.send(Message::Text(request.to_string().into())).await.is_err()
                 {
@@ -211,11 +250,19 @@ async fn run_actor(socket: Socket, mut receiver: mpsc::Receiver<Command>) {
                 match message
                 {
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(response) = serde_json::from_str::<Value>(&text)
+                            && let Some(id) = response.get("requestID").and_then(Value::as_str)
+                            && let Some(reply) = pending.remove(id) {
+                            let _ignored = reply.send(discovery::hotkeys(&response));
+                        }
+                    },
                     _ =>
                     {
                     }
                 }
             }
+            _ = cleanup.tick() => pending.retain(|_, reply| !reply.is_closed()),
         }
     }
 }

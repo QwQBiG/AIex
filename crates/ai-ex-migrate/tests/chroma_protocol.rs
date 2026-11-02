@@ -256,7 +256,7 @@ async fn paged_read_only_export_preserves_raw_archive_and_import_reopens_in_one_
     let snapshot: Value = serde_json::from_slice(&archive).unwrap();
     assert_eq!(snapshot, expected);
     assert_eq!(snapshot["entities"]["records"][0]["id"], "entity_like_tea");
-    assert!(String::from_utf8_lossy(&exported.stdout).contains("archived only"));
+    assert!(String::from_utf8_lossy(&exported.stdout).contains("archived with original metadata"));
 
     assert_rejected(
         &files.import(&["--utc-offset-minutes", "480"]),
@@ -268,10 +268,23 @@ async fn paged_read_only_export_preserves_raw_archive_and_import_reopens_in_one_
     let extra = ["--utc-offset-minutes", "480", "--embedding-space", SPACE];
     let imported = files.import(&extra);
     assert_success(&imported);
-    assert!(String::from_utf8_lossy(&imported.stdout).contains("archived only"));
+    assert!(
+        String::from_utf8_lossy(&imported.stdout).contains("unknown subjects remain unconfirmed")
+    );
     let output = fs::read(files.output()).unwrap();
     let entries = read_jsonl(&files.output());
-    assert_eq!(entries.len(), 257, "entity records stay archived");
+    assert_eq!(
+        entries.len(),
+        258,
+        "unparsed entity remains an independent candidate"
+    );
+    let imported_entity = &entries[257]["candidate"];
+    assert_eq!(
+        imported_entity["legacy_record"],
+        expected["entities"]["records"][0]
+    );
+    assert_eq!(imported_entity["subject"], json!({"type":"unknown"}));
+    assert_eq!(imported_entity["entity"], Value::Null);
     for (entry, original) in entries
         .iter()
         .zip(expected["main"]["records"].as_array().unwrap())
@@ -594,6 +607,83 @@ fn invalid_snapshot_envelopes_counts_record_ids_and_collection_identity_are_reje
         files.assert_no_output();
         assert_eq!(fs::read(files.snapshot()).unwrap(), original);
     }
+}
+
+#[tokio::test]
+async fn entity_import_retains_declared_sources_subjects_and_unresolved_metadata() {
+    let files = Files::new();
+    let mut snapshot = fixture();
+    let original_id = snapshot["main"]["records"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let missing = Uuid::new_v4().to_string();
+    snapshot["entities"]["records"][0]["metadata"] = json!({
+        "name":"茶", "entity_type":"PREFERENCE", "value":"绿茶", "confidence":0.912345,
+        "first_mentioned":"1970-01-01T00:00:01Z", "last_updated":"1970-01-01T00:00:02Z",
+        "related_memories":serde_json::to_string(&[original_id.clone(), missing.clone(), "old-non-uuid".into(), original_id]).unwrap()
+    });
+    let mut third = snapshot["entities"]["records"][0].clone();
+    third["id"] = json!("third-party-tea");
+    third["metadata"]["subject_kind"] = json!("third_party");
+    third["metadata"]["subject_id"] = json!("friend-1");
+    third["metadata"]["subject_name"] = json!("朋友");
+    snapshot["entities"]["records"]
+        .as_array_mut()
+        .unwrap()
+        .push(third);
+    snapshot["entities"]["record_count"] = json!(2);
+    let archive = files.write_snapshot(&snapshot);
+    assert_success(&files.import(&["--utc-offset-minutes", "480", "--embedding-space", SPACE]));
+    let rows = read_jsonl(&files.output());
+    let candidates: Vec<_> = rows
+        .iter()
+        .filter(|row| row["record_type"] == "entity_candidate")
+        .collect();
+    assert_eq!(candidates.len(), 2);
+    assert_ne!(
+        candidates[0]["candidate"]["id"],
+        candidates[1]["candidate"]["id"]
+    );
+    assert_eq!(candidates[0]["candidate"]["subject"]["type"], "unknown");
+    assert_eq!(candidates[1]["candidate"]["subject"]["type"], "third_party");
+    assert_eq!(candidates[0]["candidate"]["entity"]["confidence"], 912);
+    assert_eq!(
+        candidates[0]["candidate"]["legacy_record"],
+        snapshot["entities"]["records"][0]
+    );
+    assert_eq!(candidates[0]["candidate"]["first_mentioned_ms"], 1000);
+    let sources: Vec<_> = rows
+        .iter()
+        .filter(|row| row["record_type"] == "entity_source")
+        .collect();
+    assert_eq!(sources.len(), 6);
+    for status in ["active", "missing", "unresolved"] {
+        assert_eq!(
+            sources
+                .iter()
+                .filter(|row| row["source"]["status"] == status)
+                .count(),
+            2
+        );
+    }
+    let mut store = MemoryStore::open(files.output()).await.unwrap();
+    store.select_profile("character-a").await.unwrap();
+    let response = store
+        .manage(ai_ex_domain::MemoryRequest::Entities {
+            profile_id: "character-a".into(),
+            query: String::new(),
+            offset: 0,
+            limit: 20,
+        })
+        .await
+        .unwrap();
+    let ai_ex_domain::MemoryResponse::Entities(page) = response else {
+        panic!("entities")
+    };
+    assert_eq!(page.entities.len(), 2);
+    assert!(page.entities.iter().all(|group| group.total_mentions == 3));
+    assert_eq!(fs::read(files.snapshot()).unwrap(), archive);
 }
 
 #[test]

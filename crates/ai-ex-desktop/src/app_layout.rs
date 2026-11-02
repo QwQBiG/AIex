@@ -375,6 +375,14 @@ impl DesktopApp {
         self.show_health(ui);
         self.show_model_panel(ui);
         self.show_policy_panel(ui);
+        self.synchronize_desktop_controls();
+        for command in self.desktop_runtime.show(ui) {
+            self.send_desktop_control(command);
+        }
+        self.subtitle_overlay.show_controls(ui);
+        for command in self.native_desktop.show(ui) {
+            self.send_desktop_control(command);
+        }
         self.show_automation_panel(ui);
         ui.separator();
         ui.checkbox(&mut self.show_developer, "显示详细诊断");

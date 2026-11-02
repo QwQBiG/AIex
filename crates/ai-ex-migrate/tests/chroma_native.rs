@@ -65,7 +65,7 @@ async fn native_database_copy_exports_and_imports_without_touching_the_stopped_o
             .await,
             json!(RECORD_COUNT)
         );
-        // Reading explicit vectors materializes the native persistent segment without an EF/query.
+        // Fixture preparation uses only supplied vectors, without an embedding model.
         let materialized = api(
             &client,
             Method::POST,
@@ -74,6 +74,31 @@ async fn native_database_copy_exports_and_imports_without_touching_the_stopped_o
         )
         .await;
         assert_eq!(materialized["ids"].as_array().unwrap().len(), RECORD_COUNT);
+        let queried = api(
+            &client,
+            Method::POST,
+            &format!("{url}{COLLECTIONS}/{main_id}/query"),
+            Some(json!({"query_embeddings":[[1.0,0.0,-0.5]], "n_results":1,"include":[]})),
+        )
+        .await;
+        assert_eq!(queried["ids"][0].as_array().unwrap().len(), 1);
+        let persisted_deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let mut files = Vec::new();
+            checked_files(&source, &source, &mut files).unwrap();
+            if files
+                .iter()
+                .any(|path| path.file_name().is_some_and(|name| name == "header.bin"))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < persisted_deadline,
+                "native HNSW persistence timed out; files: {files:?}"
+            );
+            server.assert_alive();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
         server.assert_alive();
         server.stop();
     }
@@ -90,43 +115,32 @@ async fn native_database_copy_exports_and_imports_without_touching_the_stopped_o
             "native fixture must contain persisted HNSW {name}"
         );
     }
-    copy_fixture_database(&fixture.root, &source, &copied).unwrap();
-    assert_eq!(file_inventory(&copied).unwrap(), original_files);
-
-    let (main_descriptor, entity_descriptor);
-    {
-        let (mut server, url) = start_native(&binary, &copied, &fixture, "copy").await;
-        main_descriptor = api(
-            &client,
-            Method::GET,
-            &format!("{url}{COLLECTIONS}/{MAIN}"),
-            None,
-        )
-        .await;
-        entity_descriptor = api(
-            &client,
-            Method::GET,
-            &format!("{url}{COLLECTIONS}/{ENTITIES}"),
-            None,
-        )
-        .await;
-        let mut command = Command::new(env!("CARGO_BIN_EXE_ai-ex-migrate"));
-        command
-            .args(["--chroma-export", "--url", &url, "--collection", MAIN])
-            .args([
-                "--tenant",
-                "default_tenant",
-                "--database",
-                "default_database",
-            ])
-            .arg("--output")
-            .arg(&snapshot)
-            .args(["--entity-collection", ENTITIES]);
-        let stdout = run_cli(command, &fixture, "export").await;
-        assert!(stdout.contains("archived only"), "{stdout}");
-        server.assert_alive();
-        server.stop();
-    }
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ai-ex-migrate"));
+    command
+        .args(["--chroma-copy-export", "--source"])
+        .arg(&source)
+        .arg("--working-copy")
+        .arg(&copied)
+        .arg("--native-server")
+        .arg(&binary)
+        .args([
+            "--server-sha256",
+            NATIVE_SHA256,
+            "--collection",
+            MAIN,
+            "--tenant",
+            "default_tenant",
+            "--database",
+            "default_database",
+        ])
+        .arg("--output")
+        .arg(&snapshot)
+        .args(["--entity-collection", ENTITIES]);
+    let stdout = run_cli(command, &fixture, "copy-export").await;
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["native_server_sha256"], NATIVE_SHA256);
+    assert!(report["source_files"].as_u64().unwrap() > 0);
+    assert!(copied.join("chroma.sqlite3").is_file());
     assert_eq!(file_inventory(&source).unwrap(), original_files);
     let snapshot_bytes = fs::read(&snapshot).unwrap();
     let exported: Value = serde_json::from_slice(&snapshot_bytes).unwrap();
@@ -136,8 +150,8 @@ async fn native_database_copy_exports_and_imports_without_touching_the_stopped_o
     assert_eq!(exported["reported_version"], "1.0.0");
     assert_eq!(exported["tenant"], "default_tenant");
     assert_eq!(exported["database"], "default_database");
-    assert_eq!(exported["main"]["descriptor"], main_descriptor);
-    assert_eq!(exported["entities"]["descriptor"], entity_descriptor);
+    assert_eq!(exported["main"]["descriptor"]["name"], MAIN);
+    assert_eq!(exported["entities"]["descriptor"]["name"], ENTITIES);
     assert_eq!(exported["main"]["record_count"], RECORD_COUNT);
     assert_eq!(exported["entities"]["record_count"], 1);
     assert_records(&exported["main"]["records"], &records);
@@ -152,19 +166,27 @@ async fn native_database_copy_exports_and_imports_without_touching_the_stopped_o
         .arg(&output)
         .args(["--profile", PROFILE, "--embedding-space", SPACE]);
     let stdout = run_cli(command, &fixture, "import").await;
-    assert!(stdout.contains("archived only"), "{stdout}");
+    assert!(
+        stdout.contains("unknown subjects remain unconfirmed"),
+        "{stdout}"
+    );
     let imported_bytes = fs::read(&output).unwrap();
     let imported: Vec<Value> = std::str::from_utf8(&imported_bytes)
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(imported.len(), RECORD_COUNT); // The non-UUID entity was archived, not imported.
+    assert_eq!(imported.len(), RECORD_COUNT + 1);
+    assert_eq!(imported[RECORD_COUNT]["record_type"], "entity_candidate");
+    assert_eq!(
+        imported[RECORD_COUNT]["candidate"]["legacy_record"],
+        exported["entities"]["records"][0]
+    );
     let by_id: BTreeMap<_, _> = records
         .iter()
         .map(|record| (record["id"].as_str().unwrap(), record))
         .collect();
-    for memory in &imported {
+    for memory in &imported[..RECORD_COUNT] {
         let expected = by_id[memory["id"].as_str().unwrap()];
         assert_eq!(memory["legacy_metadata"], expected["metadata"]);
         assert_eq!(memory["embedding"]["values"], expected["embedding"]);
@@ -508,8 +530,9 @@ struct FixtureDirectory {
 
 impl FixtureDirectory {
     fn new() -> Self {
-        let temp_parent = fs::canonicalize(std::env::temp_dir()).unwrap();
-        let root = temp_parent.join(format!("aiex-chroma-native-{}", Uuid::new_v4()));
+        let temporary = std::env::temp_dir();
+        let temp_parent = fs::canonicalize(&temporary).unwrap();
+        let root = temporary.join(format!("aiex-chroma-native-{}", Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
         Self { root, temp_parent }
     }
@@ -564,7 +587,7 @@ fn reject_link(metadata: &fs::Metadata) -> io::Result<()> {
 fn checked_files(root: &Path, current: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     let metadata = fs::symlink_metadata(current)?;
     reject_link(&metadata)?;
-    if !fs::canonicalize(current)?.starts_with(root) {
+    if !fs::canonicalize(current)?.starts_with(fs::canonicalize(root)?) {
         return Err(io::Error::other("fixture path escaped its root"));
     }
     if metadata.is_dir() {
@@ -591,41 +614,4 @@ fn file_inventory(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
         .into_iter()
         .map(|path| Ok((path.clone(), fs::read(root.join(path))?)))
         .collect()
-}
-
-fn copy_fixture_database(owned_root: &Path, source: &Path, destination: &Path) -> io::Result<()> {
-    let owned_root = fs::canonicalize(owned_root)?;
-    if fs::canonicalize(source)?.parent() != Some(owned_root.as_path())
-        || destination.parent() != Some(owned_root.as_path())
-        || destination.exists()
-    {
-        return Err(io::Error::other(
-            "database copy must stay inside the new owned fixture",
-        ));
-    }
-    let mut files = Vec::new();
-    checked_files(source, source, &mut files)?;
-    copy_fixture_tree(source, destination)
-}
-
-fn copy_fixture_tree(source: &Path, destination: &Path) -> io::Result<()> {
-    reject_link(&fs::symlink_metadata(source)?)?;
-    fs::create_dir(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let metadata = fs::symlink_metadata(entry.path())?;
-        reject_link(&metadata)?;
-        let target = destination.join(entry.file_name());
-        if target.exists() {
-            return Err(io::Error::other("refusing to overwrite fixture file"));
-        }
-        if metadata.is_dir() {
-            copy_fixture_tree(&entry.path(), &target)?;
-        } else if metadata.is_file() {
-            fs::copy(entry.path(), target)?;
-        } else {
-            return Err(io::Error::other("unsupported fixture file type"));
-        }
-    }
-    Ok(())
 }

@@ -11,6 +11,9 @@ use uuid::Uuid;
 
 use crate::legacy_memory::{LegacyMemory, canonical_json, convert_records};
 
+#[path = "chroma_entities.rs"]
+mod entity_import;
+
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RECORDS: usize = 50_000;
 const PAGE_SIZE: usize = 128;
@@ -56,13 +59,13 @@ struct GetRecords {
     uris: Option<Vec<Option<String>>>,
 }
 
-struct ExportOptions {
-    url: Url,
-    collection: String,
-    tenant: String,
-    database: String,
-    entity_collection: Option<String>,
-    output: PathBuf,
+pub(crate) struct ExportOptions {
+    pub url: Url,
+    pub collection: String,
+    pub tenant: String,
+    pub database: String,
+    pub entity_collection: Option<String>,
+    pub output: PathBuf,
 }
 
 impl ExportOptions {
@@ -138,7 +141,7 @@ fn invalid(message: impl Into<String>) -> AppError {
     AppError::configuration(message)
 }
 
-fn validate_name(value: &str) -> Result<(), AppError> {
+pub(crate) fn validate_name(value: &str) -> Result<(), AppError> {
     if value.trim().is_empty()
         || value.len() > 512
         || matches!(value, "." | "..")
@@ -423,6 +426,26 @@ fn validate_record(record: &Record) -> Result<(), AppError> {
 
 pub async fn export(arguments: impl Iterator<Item = String>) -> Result<(), AppError> {
     let options = ExportOptions::parse(arguments)?;
+    let output = options.output.clone();
+    let snapshot = export_snapshot(options).await?;
+    println!(
+        "Chroma v2 snapshot written to {} ({} main records); reported server version: {}. No models or queries were invoked.",
+        output.display(),
+        snapshot.main.record_count,
+        snapshot.reported_version
+    );
+    report_entities(snapshot.entities.is_some());
+    println!(
+        "Use a quiescent source copy: count checks cannot detect concurrent edits that leave the count unchanged."
+    );
+    Ok(())
+}
+
+pub(crate) async fn export_silently(options: ExportOptions) -> Result<(), AppError> {
+    export_snapshot(options).await.map(|_| ())
+}
+
+async fn export_snapshot(options: ExportOptions) -> Result<Snapshot, AppError> {
     if tokio::fs::try_exists(&options.output)
         .await
         .map_err(|_| invalid("cannot inspect Chroma output path"))?
@@ -473,22 +496,14 @@ pub async fn export(arguments: impl Iterator<Item = String>) -> Result<(), AppEr
         return Err(invalid("Chroma snapshot exceeds 32 MiB"));
     }
     crate::write_new_atomic(&options.output, &content).await?;
-    println!(
-        "Chroma v2 snapshot written to {} ({} main records); reported server version: {}. No models or queries were invoked.",
-        options.output.display(),
-        snapshot.main.record_count,
-        snapshot.reported_version
-    );
-    report_entities(snapshot.entities.is_some());
-    println!(
-        "Use a quiescent source copy: count checks cannot detect concurrent edits that leave the count unchanged."
-    );
-    Ok(())
+    Ok(snapshot)
 }
 
 fn report_entities(present: bool) {
     if present {
-        println!("Entity collection: archived only (not restored by --chroma-snapshot)");
+        println!(
+            "Entity collection: archived with original metadata; snapshot import preserves candidates and declared sources"
+        );
     } else {
         println!("Entity collection: not exported");
     }
@@ -548,7 +563,10 @@ pub fn import_snapshot(
             embedding: record.embedding.map(Value::Array),
         })
     }).collect::<Result<Vec<_>, AppError>>()?;
-    let converted = convert_records(records, profile, utc_offset, embedding_space)?;
-    report_entities(snapshot.entities.is_some());
+    let ids = records.iter().map(|record| record.id).collect();
+    let mut converted = convert_records(records, profile, utc_offset, embedding_space)?;
+    if let Some(entities) = snapshot.entities {
+        entity_import::append(&mut converted, entities, profile, utc_offset, &ids)?;
+    }
     Ok(converted)
 }

@@ -6,7 +6,15 @@
 
 命令示例在仓库根目录的 PowerShell 7 中执行。
 
-普通用户从 `AIex.exe` 的“准备本地伙伴”完成模型准备，无需执行本页命令。原生控制、下载导入及声音向导已接入 0.9 开发候选，尚未发布；实际操作见[整体验收流程](../docs/MANUAL_TEST_PLAN.md)。
+### 构建空间与缓存
+
+日常使用 `./tools/dev.ps1 -Workspace core -Task check`，桌面将 `core` 换为 `desktop`；原生工作进程用 `native`。该入口固定复用根 `target` 和 `crates/ai-ex-desktop/target`，不创建日期化构建目录，构建前默认要求至少 10 GiB 可用空间。`-Plan` 只查看命令和目标，`-Offline` 使用已有依赖，`-Task verify` 顺序执行格式、测试及严格 Clippy。
+
+项目的 dev/test 使用 `debug=1`，保留行号及模块调试信息，减少类型和变量调试信息；需要完整调试时，仅为该次进程设置 `CARGO_PROFILE_DEV_DEBUG=2` 或 `CARGO_PROFILE_TEST_DEBUG=2`。日常 check/build 沿用增量编译，一次性 test/clippy/verify 默认设置 `CARGO_INCREMENTAL=0`；频繁修改测试时可显式加 `-KeepIncremental`。这些设置不改变 release 优化或断言策略。配置含义见 [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html#debug)。
+
+`./tools/manage_build_cache.ps1` 默认只查看五个已登记的增量缓存目录；停止所有 Cargo 构建后加 `-Apply` 才清理。工具先核对全部目录的仓库范围、忽略状态、链接、文件类型及锁，遇到源码、只读文件或活跃构建会拒绝；不清理模型、`deps`、成品、报告或临时验证源码。不要对混合存放这些内容的 `target` 直接执行整目录删除或无差别 `cargo clean`。首次清理后的编译会较慢，后续性能与空间应按实际使用权衡。
+
+普通用户从 `AIex.exe` 的“准备本地伙伴”完成模型准备，无需执行本页命令。原生控制、下载导入及声音向导已随 0.9 发布；实际操作见[整体验收流程](../docs/MANUAL_TEST_PLAN.md)。
 
 | Rust 入口 | 作用与文档 |
 | --- | --- |

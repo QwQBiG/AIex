@@ -7,10 +7,43 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+pub mod desktop;
+pub mod hotkeys;
+
+/// Local wall-clock minute for configured quiet hours, using the OS timezone.
+#[cfg(windows)]
+pub fn local_minute() -> Option<u16> {
+    let mut time = windows_sys::Win32::Foundation::SYSTEMTIME::default();
+    // SAFETY: time is a writable SYSTEMTIME with the documented layout.
+    unsafe { windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut time) };
+    (time.wHour < 24 && time.wMinute < 60).then_some(time.wHour * 60 + time.wMinute)
+}
+
+#[cfg(not(windows))]
+pub fn local_minute() -> Option<u16> {
+    None
+}
+
+#[cfg(windows)]
+pub mod native;
+
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
 pub use windows::OwnedJobProcess;
+
+#[cfg(windows)]
+mod file_identity;
+#[cfg(windows)]
+pub use file_identity::file_link_count;
+
+#[cfg(not(windows))]
+pub fn file_link_count(_file: &std::fs::File) -> std::io::Result<u32> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Windows file identity requires Windows",
+    ))
+}
 
 pub struct ProcessLaunch {
     pub executable: PathBuf,

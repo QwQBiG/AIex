@@ -31,6 +31,10 @@ pub fn trigger_hotkey(hotkey_id: &str) -> Value {
     envelope("HotkeyTriggerRequest", json!({ "hotkeyID": hotkey_id }))
 }
 
+pub fn discover_hotkeys() -> Value {
+    envelope("HotkeysInCurrentModelRequest", json!({}))
+}
+
 pub fn authenticated(response: &Value) -> bool {
     response
         .get("data")

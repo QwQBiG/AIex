@@ -4,7 +4,7 @@ default-members = ["support", "bge"]
 resolver = "2"
 
 [workspace.package]
-version = "0.9.0-alpha.1"
+version = "0.10.0-alpha.1"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"

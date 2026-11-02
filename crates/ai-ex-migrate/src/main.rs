@@ -1,15 +1,17 @@
 #![forbid(unsafe_code)]
 
-mod chroma_bridge;
+mod jsonl_upgrade;
 mod legacy;
-mod legacy_memory;
-mod multimodal_memory;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ai_ex_domain::AppError;
+use ai_ex_migrate::{
+    chroma_bridge, chroma_copy, legacy_memory, multimodal_memory, write_new_atomic,
+};
 use legacy::LegacyConfig;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
+#[cfg(test)]
 use uuid::Uuid;
 
 #[tokio::main]
@@ -26,9 +28,39 @@ async fn run() -> Result<(), AppError> {
         println!("ai-ex-migrate {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    let upgrades = arguments
+        .iter()
+        .filter(|argument| *argument == "--upgrade-memory")
+        .count();
+    if upgrades > 0 {
+        if upgrades != 1
+            || arguments.iter().any(|argument| {
+                matches!(
+                    argument.as_str(),
+                    "--memory-backup"
+                        | "--multimodal-memory"
+                        | "--chroma-export"
+                        | "--chroma-copy-export"
+                        | "--chroma-snapshot"
+                )
+            })
+        {
+            return Err(AppError::configuration(
+                "migration modes are mutually exclusive and must not be repeated",
+            ));
+        }
+        arguments.retain(|argument| argument != "--upgrade-memory");
+        return jsonl_upgrade::run(arguments).await;
+    }
     if arguments == ["--help"] || arguments == ["-h"] {
         println!(
-            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nMultimodal dataclass snapshot: ai-ex-migrate --multimodal-memory --input SNAPSHOT.json --output NEW.jsonl --profile ID\nThis mode accepts explicitly exported dataclass JSON arrays, not an existing legacy backup format.\nChroma export: ai-ex-migrate --chroma-export --url URL --collection NAME --tenant TENANT --database DATABASE --output SNAPSHOT.json [--entity-collection NAME]\nChroma snapshot: ai-ex-migrate --chroma-snapshot --input SNAPSHOT.json --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nThe Chroma bridge uses the read-only v2 API. Entity collections are archived only; their source graph is not restored.\nOutputs must be new files. Sources and complete metadata are retained. Backups with vectors require an explicit embedding space."
+            "Memory format upgrade: ai-ex-migrate --upgrade-memory --input OLD.jsonl (--preview | --output NEW.jsonl). Input, identities and vector spaces are preserved; an existing output is rejected."
+        );
+        println!(
+            "Closed Chroma snapshot copy: ai-ex-migrate --chroma-copy-export --source CLOSED_SNAPSHOT --working-copy NEW_DIR --native-server CHROMA.EXE --server-sha256 SHA256 --collection NAME --tenant TENANT --database DATABASE --output NEW_SNAPSHOT.json [--entity-collection NAME]. The pinned native server opens only the working copy; source files stay read-locked and unchanged. Close the legacy application first."
+        );
+        println!(
+            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nMultimodal dataclass snapshot: ai-ex-migrate --multimodal-memory --input SNAPSHOT.json --output NEW.jsonl --profile ID\nThis mode accepts explicitly exported dataclass JSON arrays, not an existing legacy backup format.\nChroma export: ai-ex-migrate --chroma-export --url URL --collection NAME --tenant TENANT --database DATABASE --output SNAPSHOT.json [--entity-collection NAME]\nChroma snapshot: ai-ex-migrate --chroma-snapshot --input SNAPSHOT.json --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nThe Chroma bridge uses the read-only v2 API. Entity candidates retain declared source associations and unknown subjects remain unconfirmed.\nOutputs must be new files. Sources and complete metadata are retained. Backups with vectors require an explicit embedding space."
         );
         return Ok(());
     }
@@ -40,6 +72,7 @@ async fn run() -> Result<(), AppError> {
             "--multimodal-memory" => Some((index, MemoryImportKind::Multimodal)),
             "--chroma-snapshot" => Some((index, MemoryImportKind::ChromaSnapshot)),
             "--chroma-export" => Some((index, MemoryImportKind::ChromaExport)),
+            "--chroma-copy-export" => Some((index, MemoryImportKind::ChromaCopyExport)),
             _ => None,
         })
         .collect();
@@ -52,6 +85,16 @@ async fn run() -> Result<(), AppError> {
         arguments.remove(index);
         if mode == MemoryImportKind::ChromaExport {
             return chroma_bridge::export(arguments.into_iter()).await;
+        }
+        if mode == MemoryImportKind::ChromaCopyExport {
+            let options = chroma_copy::ChromaCopyExportOptions::parse(arguments.into_iter())?;
+            let report = chroma_copy::copy_export(options).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| AppError::protocol(error.to_string()))?
+            );
+            return Ok(());
         }
         return migrate_memory(arguments.into_iter(), mode).await;
     }
@@ -118,54 +161,13 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> Result<(PathBuf, PathB
     Ok((input, output))
 }
 
-async fn write_new_atomic(path: &Path, content: &[u8]) -> Result<(), AppError> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            AppError::unavailable(format!("cannot create output directory: {error}"))
-        })?;
-    }
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| AppError::configuration("output path requires a valid file name"))?;
-    let temporary = path.with_file_name(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
-    let mut file = tokio::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .await
-        .map_err(|error| {
-            AppError::unavailable(format!("cannot create temporary output: {error}"))
-        })?;
-    let result = async {
-        file.write_all(content).await?;
-        file.flush().await?;
-        file.sync_data().await?;
-        drop(file);
-        // Publish the fully synced file without replacing a concurrent destination.
-        // Both paths are siblings, so they are on the same filesystem.
-        tokio::fs::hard_link(&temporary, path).await
-    }
-    .await;
-    if let Err(error) = result {
-        let _ignored = tokio::fs::remove_file(&temporary).await;
-        return Err(AppError::unavailable(format!(
-            "cannot commit migrated output: {error}"
-        )));
-    }
-    let _ignored = tokio::fs::remove_file(&temporary).await;
-    Ok(())
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MemoryImportKind {
     Backup,
     Multimodal,
     ChromaSnapshot,
     ChromaExport,
+    ChromaCopyExport,
 }
 
 impl MemoryImportKind {
@@ -175,6 +177,7 @@ impl MemoryImportKind {
             Self::Multimodal => "--multimodal-memory",
             Self::ChromaSnapshot => "--chroma-snapshot",
             Self::ChromaExport => "--chroma-export",
+            Self::ChromaCopyExport => "--chroma-copy-export",
         }
     }
 }
@@ -224,7 +227,7 @@ async fn migrate_memory(
         MemoryImportKind::ChromaSnapshot => {
             chroma_bridge::import_snapshot(&input, &profile, utc_offset, embedding_space.as_deref())
         }
-        MemoryImportKind::ChromaExport => {
+        MemoryImportKind::ChromaExport | MemoryImportKind::ChromaCopyExport => {
             Err(AppError::configuration("export is not an import mode"))
         }
     })
@@ -241,10 +244,10 @@ async fn migrate_memory(
             output.display()
         ),
         MemoryImportKind::ChromaSnapshot => println!(
-            "Chroma main memories written to {} with original metadata and available embeddings. The source snapshot is unchanged. Imported records remain automatic, not confirmed facts.",
+            "Chroma main memories and entity candidates written to {} with original metadata and available embeddings. The source snapshot is unchanged. Imported records remain automatic and unknown subjects remain unconfirmed.",
             output.display()
         ),
-        MemoryImportKind::ChromaExport => {
+        MemoryImportKind::ChromaExport | MemoryImportKind::ChromaCopyExport => {
             return Err(AppError::configuration("export is not an import mode"));
         }
     }

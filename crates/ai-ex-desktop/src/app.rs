@@ -89,6 +89,9 @@ pub struct DesktopApp {
     reflex_runtime_ready: bool,
     native: crate::native_panel::NativePanel,
     native_mode: bool,
+    subtitle_overlay: crate::subtitle_overlay::SubtitleOverlay,
+    desktop_runtime: crate::desktop_runtime_panel::DesktopRuntimePanel,
+    native_desktop: crate::native_desktop_panel::NativeDesktopPanel,
 }
 
 impl DesktopApp {
@@ -153,6 +156,9 @@ impl DesktopApp {
             reflex_runtime_ready: false,
             native: Default::default(),
             native_mode: false,
+            subtitle_overlay: crate::subtitle_overlay::SubtitleOverlay::load(storage),
+            desktop_runtime: Default::default(),
+            native_desktop: Default::default(),
         }
     }
 
@@ -190,27 +196,63 @@ impl DesktopApp {
     }
 
     fn export_diagnostics(&mut self) {
-        let path = std::env::current_dir()
-            .unwrap_or_else(|_| std::env::temp_dir())
-            .join("aiex-desktop-diagnostics.log");
-        let content = self.logs.iter().cloned().collect::<Vec<_>>().join("\n");
-        match std::fs::write(&path, content) {
-            Ok(()) => {
-                let message = format!("诊断日志已导出：{}", path.display());
-                self.export_feedback = Some(message.clone());
-                self.push_log(message);
-            }
-            Err(error) => {
-                let message = format!("诊断日志导出失败：{error}");
-                self.export_feedback = Some(message.clone());
-                self.push_log(message);
+        if let Some(command) = self
+            .desktop_runtime
+            .begin(ai_ex_domain::DesktopRuntimeRequest::Diagnostics)
+        {
+            self.send_desktop_control(command);
+            self.export_feedback = Some("正在准备脱敏诊断，可在设置页查看导出结果。".into());
+        }
+    }
+
+    fn synchronize_desktop_controls(&mut self) {
+        let connected = self.state.connection == ConnectionState::Connected
+            && !self.state.needs_resync
+            && self.persona_synced;
+        self.desktop_runtime
+            .synchronize(self.state.runtime.instance_id, connected);
+        self.native_desktop
+            .synchronize(self.state.runtime.instance_id, connected);
+    }
+
+    fn send_desktop_control(&mut self, command: WorkerCommand) {
+        if let Err(error) = self.worker.commands.send(command) {
+            let failure = ai_ex_domain::AppError::unavailable("桌面连接线程已停止。");
+            match error.0 {
+                WorkerCommand::DesktopRuntime { request_id, .. } => {
+                    self.desktop_runtime.receive(request_id, Err(failure))
+                }
+                WorkerCommand::NativeDesktop { request_id, .. } => {
+                    self.native_desktop.receive(request_id, Err(failure))
+                }
+                _ => self.last_error = Some(failure.to_string()),
             }
         }
+    }
+
+    fn poll_desktop_controls(&mut self) {
+        self.synchronize_desktop_controls();
+        if let Some(command) = self.desktop_runtime.poll() {
+            self.send_desktop_control(command);
+        }
+        if let Some(command) = self.native_desktop.poll() {
+            self.send_desktop_control(command);
+        }
+        self.subtitle_overlay
+            .set_confirmed_visible(self.desktop_runtime.captions_visible());
     }
 
     fn drain_events(&mut self) {
         while let Ok(event) = self.worker.events.try_recv() {
             match event {
+                WorkerEvent::DesktopRuntime { request_id, result } => {
+                    self.synchronize_desktop_controls();
+                    self.desktop_runtime.receive(request_id, result);
+                }
+                WorkerEvent::NativeDesktop { request_id, result } => {
+                    self.synchronize_desktop_controls();
+                    self.native_desktop.receive(request_id, result);
+                }
                 WorkerEvent::Native { request_id, result } => {
                     self.native.receive(request_id, result)
                 }
@@ -800,7 +842,7 @@ impl DesktopApp {
         ui.collapsing("开发者诊断日志", |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.small("桌面控制协议与事件流日志；服务端原始日志继续输出到启动终端。");
-                if ui.button("导出日志").clicked() {
+                if ui.button("导出脱敏诊断").clicked() {
                     self.export_diagnostics();
                 }
                 if ui.button("清空").clicked() {
@@ -956,6 +998,18 @@ impl DesktopApp {
 impl eframe::App for DesktopApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.show_contents(ui);
+        self.poll_desktop_controls();
+        if self.persona_synced {
+            self.subtitle_overlay
+                .show_viewport(ui.ctx(), &self.state, &self.active_persona.name);
+        } else {
+            self.subtitle_overlay.hide_until_synchronized();
+        }
+        if self.subtitle_overlay.take_close_request()
+            && let Some(command) = self.desktop_runtime.close_captions()
+        {
+            self.send_desktop_control(command);
+        }
         if (self.resume.dirty || self.character_library.dirty)
             && let Some(storage) = frame.storage_mut()
         {
@@ -969,7 +1023,13 @@ impl eframe::App for DesktopApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.appearance.save(storage);
+        self.subtitle_overlay.save(storage);
         self.save_resume(storage);
         self.save_library(storage);
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // The main workspace paints an opaque background; subtitle corners stay transparent.
+        egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
     }
 }

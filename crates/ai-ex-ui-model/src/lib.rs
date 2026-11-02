@@ -102,6 +102,13 @@ impl UiState {
     fn reduce(&mut self, event: SystemEvent) {
         self.runtime.observe_speech_event(&event);
         match event {
+            SystemEvent::ProactiveStarted { turn_id } => {
+                self.runtime.active_turn = Some(turn_id);
+                self.runtime.turns_started += 1;
+                // Output is presented by subtitles/playback. No user message
+                // or empty chat bubble is invented for a system intent.
+                self.untracked_turn = Some(turn_id);
+            }
             SystemEvent::TurnStarted { turn_id, user_text } => {
                 self.runtime.active_turn = Some(turn_id);
                 self.runtime.turns_started += 1;
@@ -189,6 +196,47 @@ mod tests {
 
     fn item(sequence: u64, event: SystemEvent) -> SequencedEvent {
         SequencedEvent { sequence, event }
+    }
+
+    #[test]
+    fn proactive_output_has_a_playback_generation_without_a_user_bubble() {
+        let mut ui = UiState::new(4).unwrap();
+        let turn_id = TurnId::new();
+        for (index, event) in [
+            SystemEvent::SpeechCancelled,
+            SystemEvent::ProactiveStarted { turn_id },
+            SystemEvent::ModelChunk {
+                turn_id,
+                text: "A quiet greeting.".into(),
+            },
+            SystemEvent::SpeechPlayback {
+                playback: ai_ex_domain::SpeechPlaybackSnapshot {
+                    turn_id: Some(turn_id),
+                    active: true,
+                    mouth_level: 500,
+                    ..Default::default()
+                },
+            },
+            SystemEvent::TurnFinished {
+                turn_id,
+                full_text: "A quiet greeting.".into(),
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                ui.apply_event(item(index as u64 + 1, event)),
+                ApplyOutcome::Applied
+            );
+        }
+        assert!(ui.turns.is_empty());
+        assert!(!ui.needs_resync);
+        assert_eq!(ui.runtime.speech_turn, Some(turn_id));
+        assert!(ui.runtime.playback.active);
+        assert!(!ui.runtime.speech_cancelled);
+        ui.apply_event(item(6, SystemEvent::SpeechCancelled));
+        assert!(!ui.runtime.playback.active);
     }
 
     #[test]

@@ -27,29 +27,40 @@ impl MemoryStore {
                 "memory has another active writer; stop it before editing or rebuilding this store",
             )
         })?;
-        let refreshed = read_records(&self.inner.path).await?;
-        *self.inner.records.write().await = refreshed;
+        let refreshed = document::read(&self.inner.path).await?;
+        let mut records = self.inner.records.write().await;
+        let mut provenance = self.inner.provenance.write().await;
+        *records = refreshed.records;
+        *provenance = refreshed.provenance;
+        self.inner
+            .legacy_format
+            .store(refreshed.legacy, Ordering::Release);
         *lease = Some(file);
         Ok(())
     }
-}
 
-pub(super) async fn read_records(path: &Path) -> Result<Vec<MemoryRecord>, AppError> {
-    let content = match tokio::fs::read_to_string(path).await {
-        Ok(content) => content,
-        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(AppError::unavailable(error.to_string())),
-    };
-    let mut records = Vec::new();
-    for (line_number, line) in content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let mut record: MemoryRecord = serde_json::from_str(line).map_err(|error| {
-            AppError::protocol(format!("invalid memory line {}: {error}", line_number + 1))
-        })?;
-        record.rebuild()?;
-        records.push(record);
+    pub async fn format_backup_path(&self) -> Option<PathBuf> {
+        self.inner.format_backup.read().await.clone()
     }
-    Ok(records)
+
+    /// Only called after an admitted mutation, under the writer lease.
+    pub(super) async fn prepare_format_backup(&self) -> Result<(), AppError> {
+        if !self.inner.legacy_format.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let mut backup = self.inner.format_backup.write().await;
+        if backup.is_none() {
+            let mut path = self.inner.path.as_os_str().to_os_string();
+            path.push(format!(".v1-backup-{}.jsonl", Uuid::new_v4()));
+            let path = PathBuf::from(path);
+            let original = tokio::fs::read(&self.inner.path)
+                .await
+                .map_err(|e| AppError::unavailable(e.to_string()))?;
+            write_new_synced(&path, &original)
+                .await
+                .map_err(|e| AppError::unavailable(format!("memory format backup failed: {e}")))?;
+            *backup = Some(path);
+        }
+        Ok(())
+    }
 }

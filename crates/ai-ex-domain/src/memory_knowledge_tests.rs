@@ -97,8 +97,13 @@ fn knowledge_sidecar_and_entity_evidence_round_trip_with_provenance() {
                 source: MemorySource::UserCorrection,
                 value: entity.value,
                 confidence: entity.confidence,
+                source_status: MemoryEntitySourceStatus::Active,
+                imported_entity_id: None,
+                legacy_memory_id: None,
             }],
             total_mentions: 1,
+            subject: MemoryEntitySubject::SelfUser,
+            origin: MemoryEntityOrigin::Extracted,
         }],
     });
     let json = serde_json::to_value(&response).unwrap();

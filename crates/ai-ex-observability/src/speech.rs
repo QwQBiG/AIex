@@ -7,6 +7,7 @@ impl RuntimeSnapshot {
     pub fn observe_speech_event(&mut self, event: &SystemEvent) {
         match event {
             SystemEvent::TurnStarted { turn_id, .. }
+            | SystemEvent::ProactiveStarted { turn_id }
             | SystemEvent::SpeechPreviewStarted { turn_id } => {
                 self.speech_turn = Some(*turn_id);
                 self.speech_cancelled = false;

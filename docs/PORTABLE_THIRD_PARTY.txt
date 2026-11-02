@@ -1,7 +1,7 @@
 Third-party notices for the Windows x64 portable package
 
-Version: 0.9.0-alpha.1
-Roots: ai-ex-service (all features), ai-ex-migrate, ai-ex-desktop.
+Version: 0.10.0-alpha.1
+Roots: ai-ex-service (all features), ai-ex-migrate, ai-ex-platform-windows, ai-ex-desktop.
 Target: x86_64-pc-windows-gnu. Development/test dependencies are excluded.
 Runtime and build/procedural-macro roles can overlap. Original notices and font terms follow.
 System-installed fonts are read from Windows and are not redistributed in this package.

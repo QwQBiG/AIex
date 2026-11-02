@@ -358,6 +358,8 @@ pub struct AutomationSnapshot {
     /// Orders all published summaries, including progress and command responses.
     pub projection_sequence: u64,
     pub available: bool,
+    #[serde(default = "synthetic_mode")]
+    pub execution_mode: String,
     pub session: Option<AutomationSessionSnapshot>,
 }
 
@@ -369,6 +371,7 @@ impl AutomationSnapshot {
             revision: 0,
             projection_sequence: 0,
             available,
+            execution_mode: synthetic_mode(),
             session: None,
         }
     }
@@ -377,6 +380,11 @@ impl AutomationSnapshot {
         if self.schema_version != AUTOMATION_SCHEMA_VERSION || self.instance_id.is_nil() {
             return Err(AppError::protocol(
                 "automation snapshot requires schema 1 and a service instance identifier",
+            ));
+        }
+        if self.execution_mode != "synthetic" {
+            return Err(AppError::protocol(
+                "synthetic automation snapshots require the synthetic execution mode",
             ));
         }
         if let Some(session) = &self.session {
@@ -391,6 +399,10 @@ impl AutomationSnapshot {
         }
         Ok(())
     }
+}
+
+fn synthetic_mode() -> String {
+    "synthetic".to_owned()
 }
 
 #[cfg(test)]

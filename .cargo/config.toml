@@ -1,2 +1,8 @@
 [alias]
 xtask = "run --package xtask --"
+
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1

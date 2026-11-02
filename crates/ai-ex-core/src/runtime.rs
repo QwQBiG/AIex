@@ -32,6 +32,11 @@ enum GenerationResult {
     Control(RuntimeControl),
 }
 
+pub(crate) enum TurnInput {
+    User(String),
+    Proactive,
+}
+
 pub struct Runtime<M, S, A, N, E>
 where
     M: LanguageModelPort,
@@ -51,6 +56,7 @@ where
     memory_recall_limit: usize,
     speech_emotion: Emotion,
     avatar_healthy: bool,
+    proactive_output: bool,
 }
 
 impl<M, S, A, N, E> Runtime<M, S, A, N, E>
@@ -106,6 +112,7 @@ where
             memory_recall_limit: policy.memory_recall_limit,
             speech_emotion: Emotion::Neutral,
             avatar_healthy: true,
+            proactive_output: false,
         }
     }
 
@@ -158,7 +165,10 @@ where
     }
 
     pub async fn run_turn(&mut self, input: impl Into<String>) -> Result<TurnId, AppError> {
-        match self.run_turn_inner(input.into(), None).await? {
+        match self
+            .run_turn_inner(TurnInput::User(input.into()), None)
+            .await?
+        {
             TurnOutcome::Completed(turn_id) => Ok(turn_id),
             TurnOutcome::Interrupted(_) | TurnOutcome::Shutdown(_) => Err(
                 AppError::invalid_transition("uncontrolled turn ended by control input"),
@@ -171,23 +181,36 @@ where
         input: impl Into<String>,
         control: &mut tokio::sync::mpsc::Receiver<RuntimeControl>,
     ) -> Result<TurnOutcome, AppError> {
-        self.run_turn_inner(input.into(), Some(control)).await
+        self.run_turn_inner(TurnInput::User(input.into()), Some(control))
+            .await
+    }
+
+    pub(crate) async fn run_proactive_controlled(
+        &mut self,
+        control: &mut tokio::sync::mpsc::Receiver<RuntimeControl>,
+    ) -> Result<TurnOutcome, AppError> {
+        self.run_turn_inner(TurnInput::Proactive, Some(control))
+            .await
     }
 
     async fn run_turn_inner(
         &mut self,
-        input: String,
+        input: TurnInput,
         mut control: Option<&mut tokio::sync::mpsc::Receiver<RuntimeControl>>,
     ) -> Result<TurnOutcome, AppError> {
-        let turn_id = self.engine.begin_turn(&input)?;
+        let (turn_id, user_input) = match input {
+            TurnInput::User(input) => (self.engine.begin_turn(&input)?, Some(input)),
+            TurnInput::Proactive => (self.engine.begin_proactive()?, None),
+        };
+        self.proactive_output = user_input.is_none();
         let generated = if let Some(receiver) = control.as_deref_mut() {
             tokio::select! {
                 biased;
                 Some(command) = receiver.recv() => GenerationResult::Control(command),
-                result = self.generate_turn(turn_id, &input) => GenerationResult::Finished(result),
+                result = self.generate_turn(turn_id, user_input.as_deref()) => GenerationResult::Finished(result),
             }
         } else {
-            GenerationResult::Finished(self.generate_turn(turn_id, &input).await)
+            GenerationResult::Finished(self.generate_turn(turn_id, user_input.as_deref()).await)
         };
         match generated {
             GenerationResult::Control(RuntimeControl::Interrupt { reason }) => {
@@ -207,7 +230,11 @@ where
         }
         let assistant = self.engine.finish_turn(turn_id)?;
         // Never drop an in-flight durable write when a control command arrives.
-        let remembered = self.remember_turn(turn_id, input, assistant, control).await;
+        let remembered = if let Some(input) = user_input {
+            self.remember_turn(turn_id, input, assistant, control).await
+        } else {
+            Ok(false)
+        };
         self.dispatch_events().await?;
         Ok(if remembered? {
             TurnOutcome::Shutdown(turn_id)
@@ -216,20 +243,31 @@ where
         })
     }
 
-    async fn generate_turn(&mut self, turn_id: TurnId, input: &str) -> Result<(), AppError> {
+    async fn generate_turn(
+        &mut self,
+        turn_id: TurnId,
+        input: Option<&str>,
+    ) -> Result<(), AppError> {
         self.cancel_speech().await?;
         self.speech_emotion = Emotion::Neutral;
         self.dispatch_events().await?;
-        let memories = self
-            .memory
-            .recall_for_context(input, self.memory_recall_limit)
-            .await?;
+        let memories = if let Some(input) = input {
+            self.memory
+                .recall_for_context(input, self.memory_recall_limit)
+                .await?
+        } else {
+            Vec::new()
+        };
         let mut messages = Vec::new();
         if !self.system_prompt.trim().is_empty() {
             messages.push(Message::new(Role::System, self.system_prompt.clone()));
         }
         messages.extend(memories);
         messages.extend_from_slice(self.engine.history());
+        if input.is_none() {
+            messages.push(Message::new(Role::System,
+                "当前是允许主动说话的空闲时刻。结合已有语境，可以自然地说一句简短的陪伴话语，最多40字。不要虚构用户刚才说了什么，不要声称观察到未提供的环境。如果没有必要说话，请直接结束响应，不输出文字。"));
+        }
         let request = ModelRequest { turn_id, messages };
         let mut stream = self.model.stream(request).await?;
         let mut preamble = ResponsePreamble::default();
@@ -245,6 +283,11 @@ where
                         self.engine.accept_chunk(turn_id, &output.text)?;
                     }
                     self.dispatch_events().await?;
+                    if input.is_none() {
+                        // Buffered system output must still yield to a user
+                        // admission or cancellation before its next chunk.
+                        tokio::task::yield_now().await;
+                    }
                 }
                 Some(Err(error)) => return Err(error),
                 None => {
@@ -264,6 +307,7 @@ where
     }
 
     pub async fn interrupt(&mut self, reason: impl Into<String>) -> Result<(), AppError> {
+        self.proactive_output = false;
         // A control may win before generation has published its initial events.
         // Preserve that identity, but never enqueue undelivered speech during cleanup.
         for event in self.engine.drain_events() {
@@ -286,6 +330,14 @@ where
         speech.and(model)
     }
 
+    pub(crate) async fn cancel_proactive_output(&mut self) -> Result<(), AppError> {
+        if self.proactive_output {
+            self.interrupt("proactive output cancelled").await
+        } else {
+            Ok(())
+        }
+    }
+
     pub async fn stop(&mut self) -> Result<(), AppError> {
         let stopped = self.interrupt("runtime stopped").await;
         self.engine.stop();
@@ -297,7 +349,7 @@ where
         for event in self.engine.drain_events() {
             self.events.publish(event.clone()).await;
             match &event {
-                SystemEvent::TurnStarted { .. } => {
+                SystemEvent::TurnStarted { .. } | SystemEvent::ProactiveStarted { .. } => {
                     self.avatar_output(AvatarAction::Stop).await;
                 }
                 SystemEvent::SentenceReady { turn_id, text } => {

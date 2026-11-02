@@ -19,6 +19,7 @@ $version = $Matches.version
 # Prerelease archives use the layout of their numeric release line.
 $requiresMigrator = [version]($version -replace '[-+].*$', '') -ge [version]'0.8.0'
 $requiresLicense = [version]($version -replace '[-+].*$', '') -ge [version]'0.9.0'
+$requiresPlatform = [version]($version -replace '[-+].*$', '') -ge [version]'0.10.0'
 if (-not $EvidenceDirectory) { $EvidenceDirectory = Join-Path $repository 'target' }
 $evidenceParent = [IO.Path]::GetFullPath($EvidenceDirectory)
 $evidence = Join-Path $evidenceParent ('portable-verification-' + [guid]::NewGuid().ToString('N'))
@@ -70,6 +71,7 @@ $package = Resolve-PackageChild $relocated $name
 $expected = @('AIex.exe', 'ai-ex-service.exe', 'AIex.portable', '开始使用.txt', 'data/ai-ex.local.toml')
 if ($requiresMigrator) { $expected += 'ai-ex-migrate.exe' }
 if ($requiresLicense) { $expected += @('LICENSE.txt', 'THIRD-PARTY-LICENSES.txt') }
+if ($requiresPlatform) { $expected += @('ai-ex-platform-helper.exe', 'AIex-Test-Window.cmd') }
 $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -105,6 +107,12 @@ if ($requiresMigrator) {
     $migratorVersion = Invoke-HeadlessCheck (Join-Path $package 'ai-ex-migrate.exe') @('--version')
     if ($migratorVersion.stdout.Trim() -cne "ai-ex-migrate $version") { throw 'Packaged migrator version check failed.' }
 }
+if ($requiresPlatform) {
+    $helperVersion = Invoke-HeadlessCheck (Join-Path $package 'ai-ex-platform-helper.exe') @('--version')
+    if ($helperVersion.stdout.Trim() -cne "ai-ex-platform-helper $version") { throw 'Packaged helper version check failed.' }
+    [void](Invoke-HeadlessCheck (Join-Path $package 'ai-ex-platform-helper.exe') @('--help'))
+    [void](Invoke-HeadlessCheck (Join-Path $package 'ai-ex-platform-helper.exe') @('--invalid') 1)
+}
 $fixture = Join-Path $repository 'config_examples/stage-replay.jsonl'
 $replay = Invoke-HeadlessCheck (Join-Path $package 'ai-ex-service.exe') @(
     '--config', (Join-Path $package 'data/ai-ex.local.toml'), '--replay-stage', $fixture
@@ -139,6 +147,7 @@ $report = [pscustomobject]@{
     sha256 = $hash
     fileCount = $files.Count
     migratorIncluded = $requiresMigrator
+    platformHelperIncluded = $requiresPlatform
     noDevelopmentPath = $true
     crossDirectory = $true
     unicodePath = $true

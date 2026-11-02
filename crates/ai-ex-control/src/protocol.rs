@@ -30,6 +30,12 @@ pub enum ControlCommand {
     Automation {
         request: AutomationRequest,
     },
+    NativeDesktop {
+        request: ai_ex_domain::NativeDesktopRequest,
+    },
+    DesktopRuntime {
+        request: ai_ex_domain::DesktopRuntimeRequest,
+    },
     Native {
         request: ai_ex_domain::NativeRequest,
     },
@@ -53,6 +59,8 @@ pub enum ControlPayload {
     Persona(PersonaSnapshot),
     Memory(Box<MemoryReply>),
     Automation(Box<AutomationSnapshot>),
+    NativeDesktop(Box<ai_ex_domain::NativeDesktopReply>),
+    DesktopRuntime(Box<ai_ex_domain::DesktopRuntimeReply>),
     Native(Box<ai_ex_domain::NativeReply>),
     Health(Vec<ComponentHealth>),
     Stage(StageSnapshot),

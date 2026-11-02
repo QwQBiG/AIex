@@ -180,17 +180,28 @@ fn service_executable() -> Result<PathBuf, AppError> {
             "build",
             "-p",
             "ai-ex-service",
+            "-p",
+            "ai-ex-platform-windows",
             "--locked",
             "--all-features",
+            "--bin",
+            "ai-ex-service",
+            "--bin",
+            "ai-ex-platform-helper",
             "--manifest-path",
         ])
         .arg(workspace.join("Cargo.toml"))
+        .current_dir(workspace)
         .env("CARGO_TARGET_DIR", workspace.join("target"))
         .stdin(Stdio::null())
         .status()
         .map_err(|error| AppError::unavailable(format!("cannot build ai-ex-service: {error}")))?;
     let executable = workspace.join("target").join("debug").join(name);
-    if !status.success() || !executable.is_file() {
+    let helper = workspace.join("target").join("debug").join(format!(
+        "ai-ex-platform-helper{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    if !status.success() || !executable.is_file() || !helper.is_file() {
         return Err(AppError::unavailable(format!(
             "ai-ex-service build failed: {status}"
         )));

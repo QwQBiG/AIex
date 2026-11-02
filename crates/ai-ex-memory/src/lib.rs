@@ -1,12 +1,17 @@
 #![forbid(unsafe_code)]
 
+mod document;
 mod entities;
+mod imported_entities;
 mod knowledge;
 mod maintenance;
 mod management;
+mod migration;
 pub use knowledge::{MediaStats, observation_media};
 pub use maintenance::MediaMaintenanceReport;
+pub use migration::{MemoryMigrationReport, migrate_jsonl};
 mod policy;
+mod provenance;
 mod record;
 mod retrieval;
 mod writer;
@@ -31,10 +36,10 @@ use ai_ex_domain::{
 };
 use async_trait::async_trait;
 use record::MemoryRecord;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
-use writer::read_records;
 
 #[derive(Clone)]
 pub struct MemoryStore {
@@ -48,6 +53,9 @@ struct MemoryInner {
     profile_id: RwLock<String>,
     path: PathBuf,
     records: RwLock<Vec<MemoryRecord>>,
+    provenance: RwLock<provenance::Provenance>,
+    legacy_format: AtomicBool,
+    format_backup: RwLock<Option<PathBuf>>,
     write_lock: Mutex<()>,
     writer_lease: Mutex<Option<std::fs::File>>,
     enabled: bool,
@@ -58,12 +66,15 @@ struct MemoryInner {
 impl MemoryStore {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, AppError> {
         let path = path.as_ref().to_owned();
-        let records = read_records(&path).await?;
+        let document = document::read(&path).await?;
         Ok(Self {
             inner: Arc::new(MemoryInner {
                 profile_id: RwLock::new(record::default_profile()),
                 path,
-                records: RwLock::new(records),
+                records: RwLock::new(document.records),
+                provenance: RwLock::new(document.provenance),
+                legacy_format: AtomicBool::new(document.legacy),
+                format_backup: RwLock::new(None),
                 write_lock: Mutex::new(()),
                 writer_lease: Mutex::new(None),
                 enabled: true,
@@ -97,6 +108,9 @@ impl MemoryStore {
                 profile_id: RwLock::new(record::default_profile()),
                 path: PathBuf::new(),
                 records: RwLock::new(Vec::new()),
+                provenance: RwLock::new(provenance::Provenance::default()),
+                legacy_format: AtomicBool::new(false),
+                format_backup: RwLock::new(None),
                 write_lock: Mutex::new(()),
                 writer_lease: Mutex::new(None),
                 enabled: false,
@@ -272,25 +286,30 @@ impl MemoryStore {
         });
         record.knowledge.media = media;
         self.enrich(&mut record).await?;
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.inner.path)
-            .await
-            .map_err(|error| AppError::unavailable(error.to_string()))?;
-        let line = serde_json::to_string(&record)
-            .map_err(|error| AppError::protocol(error.to_string()))?;
-        file.write_all(format!("{line}\n").as_bytes())
-            .await
-            .map_err(|error| AppError::unavailable(error.to_string()))?;
-        file.flush()
-            .await
-            .map_err(|error| AppError::unavailable(error.to_string()))?;
-        file.sync_data()
-            .await
-            .map_err(|error| AppError::unavailable(error.to_string()))?;
         let record_id = record.id;
-        self.inner.records.write().await.push(record);
+        if self.inner.legacy_format.load(Ordering::Acquire) {
+            let mut records = self.inner.records.read().await.clone();
+            records.push(record);
+            self.replace_records(records).await?;
+        } else {
+            let mut file = tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.inner.path)
+                .await
+                .map_err(|error| AppError::unavailable(error.to_string()))?;
+            let line = provenance::memory_line(&record)?;
+            file.write_all(format!("{line}\n").as_bytes())
+                .await
+                .map_err(|error| AppError::unavailable(error.to_string()))?;
+            file.flush()
+                .await
+                .map_err(|error| AppError::unavailable(error.to_string()))?;
+            file.sync_data()
+                .await
+                .map_err(|error| AppError::unavailable(error.to_string()))?;
+            self.inner.records.write().await.push(record);
+        }
         let mut recent = self.inner.recent_memory_ids.write().await;
         recent.push((profile_id.clone(), record_id));
         if recent.len() > 20 {
@@ -318,17 +337,21 @@ impl MemoryStore {
         destination: impl AsRef<Path>,
     ) -> Result<usize, AppError> {
         let profile_id = self.inner.profile_id.read().await;
-        let records: Vec<_> = self
-            .inner
-            .records
-            .read()
-            .await
+        let snapshot = self.inner.records.read().await;
+        let records: Vec<_> = snapshot
             .iter()
             .filter(|record| record.profile_id == *profile_id)
             .filter(|record| kind.is_none_or(|expected| record.kind == expected))
             .cloned()
             .collect();
-        let content = serialize_records(&records)?;
+        let provenance = if kind.is_none() {
+            self.inner.provenance.read().await.for_profile(&profile_id)
+        } else {
+            // A kind-specific export must not expose unrelated imported candidates.
+            provenance::Provenance::default()
+        };
+        drop(snapshot);
+        let content = provenance::serialize_document(&records, &provenance)?;
         let destination = destination.as_ref();
         if let Some(parent) = destination.parent() {
             tokio::fs::create_dir_all(parent)
@@ -431,8 +454,7 @@ async fn write_new_synced(path: &Path, content: &[u8]) -> std::io::Result<()> {
 fn serialize_records(records: &[MemoryRecord]) -> Result<String, AppError> {
     let mut content = String::new();
     for record in records {
-        let line =
-            serde_json::to_string(record).map_err(|error| AppError::protocol(error.to_string()))?;
+        let line = provenance::memory_line(record)?;
         content.push_str(&line);
         content.push('\n');
     }

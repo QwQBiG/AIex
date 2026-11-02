@@ -38,7 +38,7 @@ $allowed = @{
     'ai-ex-vision' = @('ai-ex-domain')
     'ai-ex-control' = @('ai-ex-domain', 'ai-ex-observability')
     'ai-ex-ui-model' = @('ai-ex-domain', 'ai-ex-observability')
-    'ai-ex-migrate' = @('ai-ex-config', 'ai-ex-domain', 'ai-ex-memory')
+    'ai-ex-migrate' = @('ai-ex-config', 'ai-ex-domain', 'ai-ex-memory', 'ai-ex-platform-windows')
     'ai-ex-model-catalog' = @('ai-ex-domain')
     'ai-ex-model-manager' = @('ai-ex-domain', 'ai-ex-model-catalog')
     'ai-ex-native-models' = @('ai-ex-core', 'ai-ex-domain', 'ai-ex-duplex', 'ai-ex-config', 'ai-ex-inference', 'ai-ex-model-catalog', 'ai-ex-model-manager')
@@ -55,7 +55,7 @@ $allowed = @{
         'ai-ex-duplex', 'ai-ex-koboldcpp', 'ai-ex-memory', 'ai-ex-observability',
         'ai-ex-model-catalog', 'ai-ex-model-manager', 'ai-ex-native-models', 'ai-ex-inference',
         'ai-ex-ollama',
-        'ai-ex-plugin',
+        'ai-ex-plugin', 'ai-ex-platform-windows',
         'ai-ex-safety', 'ai-ex-stage', 'ai-ex-stage-obs', 'ai-ex-tts', 'ai-ex-vision', 'ai-ex-vts'
     )
 }

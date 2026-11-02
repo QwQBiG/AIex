@@ -8,6 +8,7 @@ pub struct ConversationEngine {
     state: ConversationState,
     active_turn: Option<TurnId>,
     active_history_len: Option<usize>,
+    active_persistent: bool,
     history: Vec<Message>,
     history_message_limit: usize,
     events: VecDeque<SystemEvent>,
@@ -31,6 +32,7 @@ impl ConversationEngine {
             state: ConversationState::Idle,
             active_turn: None,
             active_history_len: None,
+            active_persistent: true,
             history: Vec::new(),
             history_message_limit: history_turn_limit.saturating_mul(2),
             events: VecDeque::new(),
@@ -73,6 +75,7 @@ impl ConversationEngine {
         let turn_id = TurnId::new();
         self.active_turn = Some(turn_id);
         self.active_history_len = Some(self.history.len());
+        self.active_persistent = true;
         self.history.push(Message::new(Role::User, &input));
         self.response.clear();
         self.sentence.clear();
@@ -81,6 +84,24 @@ impl ConversationEngine {
             turn_id,
             user_text: input,
         });
+        Ok(turn_id)
+    }
+
+    pub(crate) fn begin_proactive(&mut self) -> Result<TurnId, AppError> {
+        if !self.state.accepts_input() {
+            return Err(AppError::invalid_transition(
+                "proactive output requires an idle runtime",
+            ));
+        }
+        let turn_id = TurnId::new();
+        self.active_turn = Some(turn_id);
+        self.active_history_len = Some(self.history.len());
+        self.active_persistent = false;
+        self.response.clear();
+        self.sentence.clear();
+        self.transition(ConversationState::Thinking);
+        self.events
+            .push_back(SystemEvent::ProactiveStarted { turn_id });
         Ok(turn_id)
     }
 
@@ -127,7 +148,7 @@ impl ConversationEngine {
     pub fn finish_turn(&mut self, turn_id: TurnId) -> Result<String, AppError> {
         self.flush_sentence(turn_id)?;
         let full_text = self.response.trim().to_owned();
-        if !full_text.is_empty() {
+        if self.active_persistent && !full_text.is_empty() {
             self.history.push(Message::new(Role::Assistant, &full_text));
         } else {
             self.rollback_active_history();

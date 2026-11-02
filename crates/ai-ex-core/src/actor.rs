@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use ai_ex_domain::{AppError, MemoryRequest, MemoryResponse};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::runtime::TurnInput;
 use crate::{
     AvatarPort, EventSink, LanguageModelPort, MemoryPort, Runtime, RuntimeControl, SpeechPort,
     TurnOutcome,
@@ -17,12 +18,15 @@ enum RuntimeCommand {
         response: oneshot::Sender<Result<MemoryResponse, AppError>>,
     },
     Submit {
-        input: String,
+        input: TurnInput,
         response: oneshot::Sender<Result<TurnOutcome, AppError>>,
         admission: Option<oneshot::Sender<Result<(), AppError>>>,
     },
     Interrupt {
         reason: String,
+        response: oneshot::Sender<Result<(), AppError>>,
+    },
+    CancelProactive {
         response: oneshot::Sender<Result<(), AppError>>,
     },
     SetSystemPrompt {
@@ -44,7 +48,8 @@ pub struct RuntimeHandle {
     sender: mpsc::Sender<RuntimeCommand>,
 }
 
-/// An admitted turn whose generation can be awaited separately from enqueueing.
+/// An owned completion. User enqueue acknowledges admission before returning;
+/// a proactive intent can instead be rejected when its idle check is processed.
 pub struct PendingTurn(oneshot::Receiver<Result<TurnOutcome, AppError>>);
 
 impl PendingTurn {
@@ -77,7 +82,7 @@ impl RuntimeHandle {
         let (admission, admitted) = oneshot::channel();
         self.sender
             .send(RuntimeCommand::Submit {
-                input: input.into(),
+                input: TurnInput::User(input.into()),
                 response,
                 admission: Some(admission),
             })
@@ -87,6 +92,39 @@ impl RuntimeHandle {
             .await
             .map_err(|_| AppError::unavailable("runtime admission dropped"))??;
         Ok(PendingTurn(receiver))
+    }
+
+    /// Atomically reserve only an idle actor. Proactive output is never queued
+    /// behind user work and never enters user history or durable memory.
+    pub async fn proactive(&self) -> Result<TurnOutcome, AppError> {
+        self.start_proactive()?.wait().await
+    }
+
+    /// Submit the typed intent synchronously so its independent owner can
+    /// observe cancellation without starting an unpolled intent afterwards.
+    pub fn start_proactive(&self) -> Result<PendingTurn, AppError> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .try_send(RuntimeCommand::Submit {
+                input: TurnInput::Proactive,
+                response,
+                admission: None,
+            })
+            .map_err(|_| AppError::unavailable("runtime is busy or stopped"))?;
+        Ok(PendingTurn(receiver))
+    }
+
+    /// Cancel system-initiated generation only. An intervening user turn is
+    /// never interrupted by this command.
+    pub async fn cancel_proactive(&self) -> Result<(), AppError> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(RuntimeCommand::CancelProactive { response })
+            .await
+            .map_err(|_| AppError::unavailable("runtime actor stopped"))?;
+        receiver
+            .await
+            .map_err(|_| AppError::unavailable("proactive cancellation response dropped"))?
     }
 
     pub async fn interrupt(&self, reason: impl Into<String>) -> Result<(), AppError> {
@@ -189,9 +227,19 @@ async fn run_actor<M, S, A, N, E>(
         match command {
             RuntimeCommand::Submit {
                 input,
-                response,
+                mut response,
                 admission,
             } => {
+                let proactive = matches!(&input, TurnInput::Proactive);
+                if proactive && response.is_closed() {
+                    continue;
+                }
+                if proactive && (!pending.is_empty() || !receiver.is_empty()) {
+                    let _ignored = response.send(Err(AppError::invalid_transition(
+                        "proactive output requires an idle runtime",
+                    )));
+                    continue;
+                }
                 if let Some(admission) = admission
                     && admission.send(Ok(())).is_err()
                 {
@@ -201,10 +249,32 @@ async fn run_actor<M, S, A, N, E>(
                 let mut deferred_interrupt = None;
                 {
                     let (control, mut control_receiver) = mpsc::channel(4);
-                    let turn = runtime.run_turn_controlled(input, &mut control_receiver);
+                    let turn = async {
+                        match input {
+                            TurnInput::User(input) => {
+                                runtime
+                                    .run_turn_controlled(input, &mut control_receiver)
+                                    .await
+                            }
+                            TurnInput::Proactive => {
+                                runtime
+                                    .run_proactive_controlled(&mut control_receiver)
+                                    .await
+                            }
+                        }
+                    };
                     tokio::pin!(turn);
+                    let mut caller_gone = false;
                     loop {
                         tokio::select! {
+                            biased;
+                            _ = response.closed(), if proactive && !caller_gone => {
+                                caller_gone = true;
+                                deferred_interrupt = Some("proactive caller stopped".into());
+                                let _ignored = signal_control(&control, RuntimeControl::Interrupt {
+                                    reason: "proactive caller stopped".into(),
+                                });
+                            }
                             result = &mut turn =>
                             {
                                 let _ignored = response.send(result);
@@ -218,6 +288,15 @@ async fn run_actor<M, S, A, N, E>(
                                     {
                                         deferred_interrupt = Some(reason.clone());
                                         let result = signal_control(&control, RuntimeControl::Interrupt { reason });
+                                        let _ignored = response.send(result);
+                                    }
+                                    Some(RuntimeCommand::CancelProactive { response }) => {
+                                        let result = if proactive {
+                                            deferred_interrupt = Some("proactive output cancelled".into());
+                                            signal_control(&control, RuntimeControl::Interrupt {
+                                                reason: "proactive output cancelled".into(),
+                                            })
+                                        } else { Ok(()) };
                                         let _ignored = response.send(result);
                                     }
                                     Some(RuntimeCommand::SetSystemPrompt { response, .. })
@@ -250,9 +329,21 @@ async fn run_actor<M, S, A, N, E>(
                                     }
                                     Some(RuntimeCommand::Submit { input, response, admission }) =>
                                     {
+                                        if matches!(&input, TurnInput::Proactive) {
+                                            let _ignored = response.send(Err(AppError::invalid_transition(
+                                                "proactive output is unavailable during an active turn",
+                                            )));
+                                            continue;
+                                        }
                                         if pending.len() < pending_capacity {
                                             if admission.is_none_or(|admission| admission.send(Ok(())).is_ok()) {
                                                 pending.push_back(RuntimeCommand::Submit { input, response, admission: None });
+                                                if proactive {
+                                                    deferred_interrupt = Some("user conversation superseded proactive output".into());
+                                                    let _ignored = signal_control(&control, RuntimeControl::Interrupt {
+                                                        reason: "user conversation superseded proactive output".into(),
+                                                    });
+                                                }
                                             }
                                         } else {
                                             let error = AppError::unavailable("conversation queue is full; wait for a pending turn");
@@ -284,6 +375,9 @@ async fn run_actor<M, S, A, N, E>(
             }
             RuntimeCommand::Interrupt { reason, response } => {
                 let _ignored = response.send(runtime.interrupt(reason).await);
+            }
+            RuntimeCommand::CancelProactive { response } => {
+                let _ignored = response.send(runtime.cancel_proactive_output().await);
             }
             RuntimeCommand::Memory { request, response } => {
                 stopping =

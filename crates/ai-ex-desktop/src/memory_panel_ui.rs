@@ -1,5 +1,8 @@
 use super::*;
-use ai_ex_domain::{MemoryEntityKind, MemorySource};
+use ai_ex_domain::{
+    MemoryEntityGroup, MemoryEntityKind, MemoryEntityOrigin, MemoryEntitySourceStatus,
+    MemoryEntitySubject, MemorySource,
+};
 use eframe::egui;
 
 impl MemoryPanel {
@@ -485,7 +488,7 @@ impl MemoryPanel {
         action: &mut Option<MemoryRequest>,
     ) {
         ui.weak(
-            "这些是从记忆内容提取的候选线索。原记录会保留来源；出现不同说法时，可先查看再更正。",
+            "这里保留提取与导入的候选线索。主体、候选置信度和来源状态分别显示；导入不代表事实已确认。",
         );
         let Some(page) = &self.entity_page else {
             ui.weak("输入关键词后点击“查找 / 刷新”查看线索。");
@@ -509,12 +512,25 @@ impl MemoryPanel {
                     ui.horizontal_wrapped(|ui| {
                         ui.strong(&group.name);
                         ui.weak(entity_kind_name(group.kind));
+                        ui.weak(subject_label(&group.subject));
+                        ui.weak(match group.origin {
+                            MemoryEntityOrigin::Extracted => "规则提取",
+                            MemoryEntityOrigin::Imported => "保留的导入候选",
+                        });
                         ui.weak(format!("{} 次提及", group.total_mentions));
                     });
-                    ui.add(egui::Label::new(format!("当前候选：{}", group.current_value)).wrap());
+                    if group.current_value.is_empty() {
+                        ui.weak("暂无有效来源支持的当前候选；历史内容仍保留在来源概览中。");
+                    } else {
+                        ui.add(egui::Label::new(format!("当前候选：{}", group.current_value)).wrap());
+                    }
+                    if group.subject == MemoryEntitySubject::Unknown {
+                        ui.colored_label(ui.visuals().warn_fg_color, "主体未确认，不会自动归为本人。");
+                    }
                     let values = group
                         .evidence
                         .iter()
+                        .filter(|item| item.source_status == MemoryEntitySourceStatus::Active)
                         .map(|item| item.value.as_str())
                         .collect::<std::collections::BTreeSet<_>>();
                     if values.len() > 1 {
@@ -525,26 +541,34 @@ impl MemoryPanel {
                     }
                     ui.weak(format!(
                         "首次提及：{} · 最近更新：{}",
-                        age(u128::from(group.first_mentioned_ms)),
-                        age(u128::from(group.last_updated_ms))
+                        entity_age(group.first_mentioned_ms),
+                        entity_age(group.last_updated_ms)
                     ));
                     egui::CollapsingHeader::new("查看候选来源概览").show(ui, |ui| {
                         for item in &group.evidence {
                             ui.add(
                                 egui::Label::new(format!(
-                                    "{} · {}",
+                                    "{} · {} · 候选置信度 {:.1}% · {}",
                                     source_name(item.source),
-                                    item.value
+                                    source_status_label(item.source_status),
+                                    f32::from(item.confidence) / 10.0,
+                                    item.value,
                                 ))
                                 .wrap(),
                             );
+                            if let Some(legacy_id) = &item.legacy_memory_id {
+                                ui.small(format!("旧来源标识：{legacy_id}"));
+                            }
                         }
                     });
                     if ui
-                        .add_enabled(ready, egui::Button::new("查看关联原记录"))
+                        .add_enabled(ready && can_open_entity_sources(group), egui::Button::new("查看关联原记录"))
                         .clicked()
                     {
                         evidence = Some((group.key.clone(), group.name.clone()));
+                    }
+                    if !can_open_entity_sources(group) {
+                        ui.weak("来源缺失、已遗忘或关联待核对；保留候选及原始关联，不提供无效记录的更正或遗忘操作。");
                     }
                 });
             });
@@ -647,6 +671,48 @@ fn source_name(source: MemorySource) -> &'static str {
         MemorySource::UserCorrection => "你更正过的内容",
     }
 }
+pub(super) fn can_open_entity_sources(group: &MemoryEntityGroup) -> bool {
+    group.evidence.iter().any(|item| {
+        !item.memory_id.is_nil()
+            && matches!(
+                item.source_status,
+                MemoryEntitySourceStatus::Active | MemoryEntitySourceStatus::Corrected
+            )
+    })
+}
+
+pub(super) fn subject_label(subject: &MemoryEntitySubject) -> String {
+    match subject {
+        MemoryEntitySubject::SelfUser => "本人".into(),
+        MemoryEntitySubject::ThirdParty { id, name } => {
+            format!(
+                "第三方：{}（{}）",
+                if name.is_empty() { id } else { name },
+                id
+            )
+        }
+        MemoryEntitySubject::Unknown => "主体未确认".into(),
+    }
+}
+
+pub(super) fn source_status_label(status: MemoryEntitySourceStatus) -> &'static str {
+    match status {
+        MemoryEntitySourceStatus::Active => "有效来源",
+        MemoryEntitySourceStatus::Missing => "来源缺失",
+        MemoryEntitySourceStatus::Corrected => "来源已更正，不再支持旧候选",
+        MemoryEntitySourceStatus::Forgotten => "来源已遗忘，不再支持旧候选",
+        MemoryEntitySourceStatus::Unresolved => "关联待核对",
+    }
+}
+
+fn entity_age(milliseconds: u64) -> String {
+    if milliseconds == 0 {
+        "未记录".into()
+    } else {
+        age(u128::from(milliseconds))
+    }
+}
+
 fn age(milliseconds: u128) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

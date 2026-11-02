@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 ai-ex-config = { path = "../ai-ex-config" }
 ai-ex-domain = { path = "../ai-ex-domain" }
+ai-ex-memory = { path = "../ai-ex-memory" }
+ai-ex-platform-windows = { path = "../ai-ex-platform-windows" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
@@ -21,6 +23,3 @@ time = { version = "0.3.54", features = ["parsing"] }
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-ai-ex-memory = { path = "../ai-ex-memory" }

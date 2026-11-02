@@ -20,6 +20,9 @@ mod memory_tests;
 #[path = "runtime_cancellation_tests.rs"]
 mod cancellation_tests;
 
+#[path = "proactive_tests.rs"]
+mod proactive_tests;
+
 #[derive(Default)]
 struct TestState {
     model_cancelled: AtomicBool,

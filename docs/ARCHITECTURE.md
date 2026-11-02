@@ -1,8 +1,8 @@
 # 当前架构与扩展边界
 
-本文描述当前 0.9.0-alpha.1 的数字伙伴架构，保留 0.8 的记忆、人物和合成回放，并增加服务持有的原生模型准备与推理。交付范围和验证见[版本说明](releases/0.9.0-alpha.1.md)；迁移基线见[0.8 版本说明](releases/0.8.0-alpha.1.md)。源码和资源归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，操作入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
+本文描述 0.10.0-alpha.1 的数字伙伴架构，保留人物、合成回放和原生模型准备，加入 Windows 原生窗口操作、来源记忆迁移和陪伴设置。交付范围和验证见[版本说明](releases/0.10.0-alpha.1.md)；迁移基线见[0.8 版本说明](releases/0.8.0-alpha.1.md)。源码和资源归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，操作入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
 
-M0 的 Windows CPU 文件链路已通过，产品接入及未测范围单独记录在[原生验证证据](NATIVE_M0_EVIDENCE.md)。0.9 接入不表示 0.10 的真实 Windows 动作、旧记忆完整迁移或 1.0 的 Python 退役已经完成。
+M0 与 0.9 的 Windows CPU 文件链路已通过，0.10 复用其固定运行组件、目录和对应源码。Windows 动作使用假系统调用与无窗口进程测试，记忆迁移另验证原生合成库；真实窗口、设备及私人旧库副本仍由用户验收。1.0 的 Python 退役与干净环境门禁尚未完成。
 
 ## 1. 运行结构与状态归属
 
@@ -11,6 +11,11 @@ flowchart TB
     UI[桌面工作室 / 本机偏好] <-->|认证 TCP JSONL| Control[控制服务]
     Control --> Runtime[Runtime actor / 会话唯一写入者]
     Control --> Native[NativeRuntime / 原生设置与组件操作]
+    Control --> Desktop[NativeDesktopHost / 窗口与动作代次]
+    Desktop --> Coordinator[协调器 / 全局许可 / 持久审计]
+    Coordinator --> Windows[Windows 适配器 / 自有捕获进程与输入]
+    Control --> Behavior[DesktopRuntime / 设置与快捷键]
+    Behavior --> Runtime
     Native --> Manager[ModelManager / 固定目录与租约]
     Native --> Pool[原生适配器 / 自有工作进程]
     Pool --> Ports
@@ -38,6 +43,8 @@ flowchart TB
 | `main` / `launch` / `session` / `navigation` | 启动参数校验、页面切换、配置与本次进程凭据、服务和客户端装配 |
 | `app` / `app_layout` / `app_chat` | 事件归并、页面布局、输入和消息显示 |
 | `app_reflex` | 合成回放的操作草稿、服务确认应答与结果未知提示，不持有执行会话 |
+| `native_desktop_panel` / `desktop_runtime_panel` | 原生单步草稿、窗口选择、设置 CAS 和确认状态；不持有平台权限 |
+| `subtitle_overlay` | 可选透明字幕视窗与本机样式；只显示确认播放的表现投影 |
 | `native_onboarding` / `native_panel` / `worker_native` | 独立原生启动入口、准备向导、设备草稿和异步控制；只展示服务确认的设置与组件状态 |
 | `ui/theme` | 欢迎、设置、预览、聊天和记忆共用的字体与配色，不依赖聊天状态 |
 | `ui/test_support` | 仅供测试复用的离屏绘制与输入辅助，不进入发布程序 |
@@ -60,7 +67,11 @@ flowchart TB
 | `native_runtime` | 原生配置 CAS、模型操作、私人声音绑定、共享托管对话客户端及试听生命周期 |
 | `native_ports` | 将本地语音、转写和嵌入接入现有端口；每句话读取当前声音和播放开关 |
 
-快循环通过 `ai-ex-automation::ReflexSession` 执行动作；慢观察不取得输入或暂停恢复权限。当前宿主只构造 `DryRunAutomationPort`，处理清单图片，不接入真实 Windows 捕获和键鼠。聊天、转写和语音占用参与同一暂停仲裁，完整合同与限制见[模板回放](TEMPLATE_GAME.md)。
+快循环通过 `ai-ex-automation::ReflexSession` 执行动作；慢观察不取得输入或暂停恢复权限。合成宿主只构造 `DryRunAutomationPort` 并处理清单图片，不获得真实输入权限。聊天、转写和语音占用参与同一暂停仲裁，完整合同见[模板回放](TEMPLATE_GAME.md)。
+
+原生 `NativeDesktopHost` 独立持有窗口绑定、有限帧/动作预算、当前画面和操作 ID；`NativeDesktopPort` 将协调器授予的真实许可逐批核对后交给 Windows 适配器。捕获在自有隔离进程完成，输入只记录实际被系统接受的前缀。控制客户端消失不丢失 owner，暂停和停止先同步撤销代次，迟到结果不能发布。新的手动单步先捕获新画面，视觉只提供受限动作建议；不自动循环、补发或重试。
+
+`DesktopRuntime` 拥有独立设置、快捷键注册及主动输出调度。快捷键在已确认注册代次内同步固定会话意图，长步骤不占急停轮询；退休注册先撤销原生代次。主动输出以系统意图进入空闲 actor 和真实播放空闲仲裁，不构造用户消息、不写入用户历史或记忆。设置应用、免打扰和静音时段可以专门取消主动代次，不能误伤后续用户回合。
 
 预览和聊天使用相同应用存储标识，共享外形偏好。页面退出的导航请求本身不启动服务；离线预览不创建模型、网络客户端或声音设备。聊天窗口持有自己启动的子进程并检查它是否提前退出，外部服务只建立控制连接。
 

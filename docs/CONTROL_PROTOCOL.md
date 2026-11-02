@@ -60,6 +60,8 @@ max_message_bytes = 65536
 
 ## 合成模板回放
 
+0.10 的真实 Windows 操作使用独立 `native_desktop` 命令，下面的 `automation/start_template` 合同保持合成。两种快照分别声明 `execution_mode: "native_windows"` 与 `"synthetic"`，不能从界面显示名称推断执行权限。
+
 `automation` 命令使用同一个请求信封、令牌和响应 UUID，控制服务持有的合成模板会话。以下契约适用于 0.8.0-alpha.1；旧 0.7.1 程序不包含该入口，使用时需一起升级桌面与服务。它只读取明确指定的回放图片并记录 dry-run 动作，不提供真实屏幕或键鼠执行选项。清单准备和执行边界见[模板回放说明](TEMPLATE_GAME.md)。
 
 以下每行都是独立命令，发送时放入请求信封；示例中的实例、会话和版本需替换为实际状态：
@@ -96,6 +98,28 @@ max_message_bytes = 65536
 超时或响应丢失表示结果未知，客户端保留清单草稿，先查询 `automation/status`，不自动重发 Start、Pause、Resume 或 Stop。相同快照不能证明一个待确认命令尚未执行，刷新后仍可能需要保持“待核对”；只有能与实例、operation、会话或变更版本对应的确认才解除等待。版本冲突时也应刷新，不覆盖较新的控制状态。
 
 桌面的回放状态查询、Pause 和 Stop 各有独立的有界通道，Stop 不排在聊天、记忆、Start、Resume、Status 或 Pause 请求之后；全局 `emergency_stop` 继续使用独立紧急入口。断线或事件历史待同步时禁用普通回放变更；连接有效、会话身份已知时仍可请求停止。通道独立不保证断网时命令已经执行，应以服务确认和后续状态为准。
+
+## 原生窗口与运行设置
+
+```json
+{"type":"native_desktop","request":{"type":"status"}}
+{"type":"native_desktop","request":{"type":"windows"}}
+{"type":"desktop_runtime","request":{"type":"state"}}
+{"type":"desktop_runtime","request":{"type":"diagnostics"}}
+{"type":"desktop_runtime","request":{"type":"discover_vts"}}
+```
+
+`native_desktop` 返回 `NativeDesktopReply{snapshot,windows}`。窗口扫描只在显式 `windows` 请求时进行，最多 256 项且整份响应受 32 KiB 预算限制；完整授权路径不能截断，超出路径界限的项目不返回。服务启动、状态查询和界面预览不扫描窗口。
+
+- `start_native` 携带服务 `instance_id`、严格 `expected_revision`、`operation_id`、扫描取得的 `window` 和有限 `max_frames/max_actions`。服务重新核对实际进程与完整路径，使用全局配置许可和独立持久审计，不采用合成许可。
+- `set_action` 或 `set_goal` 保存单步草稿，二者互斥；它们不立即发输入。`resume` 严格核对实例、会话和版本，并要求对话/播放空闲、目标在前台及几何已确认。
+- `capture` 产生有界、短时有效的 `frame_id`，不把图片字节放进控制快照。`execute` 携带当前游标、独立操作 ID、画面 ID 和受限动作；相同 ID 同一意图只查询结果，异意图拒绝。`vision_step` 只接受一个受限动作建议，也经过同一协调器。
+- 原生 `pause/stop` 是撤销意图：同实例和会话可用已观察到的版本 `<= current`，未来版本拒绝；停止后暂停不能复活会话。其他变更继续严格 CAS。合成入口的暂停版本合同保持原样。
+- 控制超时或断线不撤销独立 owner，也不代表未执行。先查询状态，不重放未知结果；暂停和停止先撤销当前代次，迟到帧、文字或动作不得重新提交。
+
+`desktop_runtime` 的 `apply/reload` 使用实例和版本 CAS。Apply 只更新独立行为文件的主动输出、冷却、免打扰、静音时段、快捷键和字幕设置；Reload 只读取该文件，不声称重新加载模型、设备或整个服务配置。注册失败返回新版本的真实未注册/错误状态，不能把“已保存”当作“已注册”。
+
+`diagnostics` 使用专门的允许字段结构，不拼接运行日志或聊天快照；VTS 发现只返回有限 ID/名称，不触发热键。主动输出使用 `proactive_started` 事件启用输出代次，不发带伪造用户文本的 `turn_started`，也不写用户历史或记忆。
 
 ## 记忆管理
 

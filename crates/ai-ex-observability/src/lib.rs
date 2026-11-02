@@ -125,7 +125,8 @@ impl EventHub {
             snapshot.last_sequence = sequence;
             snapshot.observe_speech_event(event);
             match event {
-                SystemEvent::TurnStarted { turn_id, .. } => {
+                SystemEvent::TurnStarted { turn_id, .. }
+                | SystemEvent::ProactiveStarted { turn_id } => {
                     snapshot.active_turn = Some(*turn_id);
                     snapshot.turns_started += 1;
                 }

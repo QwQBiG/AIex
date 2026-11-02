@@ -12,6 +12,22 @@ use ai_ex_platform_windows::OwnedJobProcess;
 use support::{Fixture, SERIAL, wait};
 
 #[test]
+fn link_count_uses_open_file_identity_and_detects_an_additional_hard_link() {
+    let _serial = SERIAL.lock().unwrap();
+    let fixture = Fixture::new();
+    let original = fixture.0.join("link-count-original.txt");
+    let alias = fixture.0.join("link-count-alias.txt");
+    std::fs::write(&original, b"synthetic link test").unwrap();
+    let file = std::fs::File::open(&original).unwrap();
+    assert_eq!(ai_ex_platform_windows::file_link_count(&file).unwrap(), 1);
+    std::fs::hard_link(&original, &alias).unwrap();
+    assert_eq!(ai_ex_platform_windows::file_link_count(&file).unwrap(), 2);
+    drop(file);
+    std::fs::remove_file(alias).unwrap();
+    std::fs::remove_file(original).unwrap();
+}
+
+#[test]
 fn terminate_reaps_parent_and_descendants_without_touching_external_process() {
     let _serial = SERIAL.lock().unwrap();
     let external_root = Fixture::new();

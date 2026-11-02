@@ -4,6 +4,104 @@ use uuid::Uuid;
 
 use crate::{AppError, MemorySource};
 
+/// Identity is independent from the character whose memory store contains it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MemoryEntitySubject {
+    SelfUser,
+    ThirdParty {
+        id: String,
+        name: String,
+    },
+    #[default]
+    Unknown,
+}
+
+impl MemoryEntitySubject {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if let Self::ThirdParty { id, name } = self
+            && (id.trim().is_empty() || id.chars().count() > 128 || name.chars().count() > 256)
+        {
+            return Err(AppError::configuration(
+                "invalid third-party memory subject",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryEntityOrigin {
+    #[default]
+    Extracted,
+    Imported,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryEntitySourceStatus {
+    #[default]
+    Active,
+    Missing,
+    Corrected,
+    Forgotten,
+    Unresolved,
+}
+
+/// An imported candidate remains separate from fresh rule extraction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedMemoryEntity {
+    pub id: Uuid,
+    pub profile_id: String,
+    pub subject: MemoryEntitySubject,
+    pub entity: Option<MemoryEntity>,
+    pub first_mentioned_ms: Option<u64>,
+    pub last_updated_ms: Option<u64>,
+    pub legacy_record: Value,
+}
+
+impl ImportedMemoryEntity {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.profile_id.trim().is_empty() || self.profile_id.chars().count() > 128 {
+            return Err(AppError::configuration("invalid imported entity profile"));
+        }
+        self.subject.validate()?;
+        if let Some(entity) = &self.entity {
+            entity.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryEntitySource {
+    pub entity_id: Uuid,
+    pub profile_id: String,
+    pub legacy_memory_id: String,
+    pub memory_id: Option<Uuid>,
+    pub memory_revision: Option<u64>,
+    pub status: MemoryEntitySourceStatus,
+}
+
+impl MemoryEntitySource {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.profile_id.trim().is_empty()
+            || self.profile_id.chars().count() > 128
+            || self.legacy_memory_id.is_empty()
+            || self.memory_revision == Some(0)
+            || (self.memory_id.is_none() && self.memory_revision.is_some())
+            || (self.status == MemoryEntitySourceStatus::Active
+                && (self.memory_id.is_none() || self.memory_revision.is_none()))
+        {
+            return Err(AppError::configuration("invalid entity source association"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryEntityKind {
@@ -125,6 +223,12 @@ pub struct MemoryEntityEvidence {
     pub source: MemorySource,
     pub value: String,
     pub confidence: u16,
+    #[serde(default)]
+    pub source_status: MemoryEntitySourceStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_entity_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_memory_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +241,10 @@ pub struct MemoryEntityGroup {
     pub last_updated_ms: u64,
     pub evidence: Vec<MemoryEntityEvidence>,
     pub total_mentions: usize,
+    #[serde(default)]
+    pub subject: MemoryEntitySubject,
+    #[serde(default)]
+    pub origin: MemoryEntityOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

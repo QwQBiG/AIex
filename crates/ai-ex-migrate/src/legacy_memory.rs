@@ -43,6 +43,8 @@ struct ImportedEmbedding {
 
 #[derive(Serialize)]
 struct ImportedMemory {
+    schema_version: u32,
+    record_type: &'static str,
     #[serde(flatten)]
     entry: MemoryEntry,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -238,6 +240,8 @@ pub(super) fn convert_records(
             revision: 1,
         };
         let imported = ImportedMemory {
+            schema_version: 2,
+            record_type: "memory",
             entry,
             embedding,
             legacy_metadata: memory.metadata,
@@ -292,7 +296,7 @@ fn convert_embedding(
     }))
 }
 
-fn timestamp_ms(value: &str, utc_offset: Option<i16>) -> Result<u128, AppError> {
+pub(super) fn timestamp_ms(value: &str, utc_offset: Option<i16>) -> Result<u128, AppError> {
     let timestamp = match OffsetDateTime::parse(value, &Rfc3339) {
         Ok(timestamp) => timestamp,
         Err(_) => {

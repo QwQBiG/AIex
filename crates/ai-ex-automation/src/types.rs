@@ -1,4 +1,4 @@
-use ai_ex_domain::{AppError, ErrorKind};
+use ai_ex_domain::{AppError, ErrorKind, NativeDesktopAction};
 use ai_ex_safety::Capability;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -15,6 +15,10 @@ pub enum PointerButton {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AutomationAction {
     CaptureScreen,
+    /// Window-bound native intent; dispatch still requires a live service permit.
+    Native {
+        action: NativeDesktopAction,
+    },
     MovePointer {
         x: f32,
         y: f32,
@@ -38,6 +42,17 @@ impl AutomationAction {
     pub fn required_capability(&self) -> Capability {
         match self {
             Self::CaptureScreen => Capability::ScreenRead,
+            Self::Native { action } => match action {
+                NativeDesktopAction::Click { .. }
+                | NativeDesktopAction::Drag { .. }
+                | NativeDesktopAction::Scroll { .. } => Capability::MouseInput,
+                NativeDesktopAction::KeyChord { .. } | NativeDesktopAction::TypeText { .. } => {
+                    Capability::KeyboardInput
+                }
+                NativeDesktopAction::Wait { .. } | NativeDesktopAction::Noop => {
+                    Capability::ScreenRead
+                }
+            },
             Self::MovePointer { .. } | Self::Click { .. } => Capability::MouseInput,
             Self::KeyChord { .. } | Self::TypeText { .. } => Capability::KeyboardInput,
             Self::LaunchProcess { .. } => Capability::ProcessLaunch,
@@ -47,6 +62,27 @@ impl AutomationAction {
     pub fn audit_label(&self) -> String {
         match self {
             Self::CaptureScreen => "capture_screen".to_owned(),
+            Self::Native { action } => match action {
+                NativeDesktopAction::Click { x, y, button } => {
+                    format!("native_click({x},{y},{button:?})")
+                }
+                NativeDesktopAction::KeyChord { keys } => {
+                    format!("native_key_chord(keys={})", keys.len())
+                }
+                NativeDesktopAction::TypeText { text } => {
+                    format!("native_type_text(length={})", text.chars().count())
+                }
+                NativeDesktopAction::Drag {
+                    steps, duration_ms, ..
+                } => format!("native_drag(steps={steps},duration_ms={duration_ms})"),
+                NativeDesktopAction::Scroll { horizontal, delta } => {
+                    format!("native_scroll(horizontal={horizontal},delta={delta})")
+                }
+                NativeDesktopAction::Wait { milliseconds } => {
+                    format!("native_wait({milliseconds})")
+                }
+                NativeDesktopAction::Noop => "native_noop".to_owned(),
+            },
             Self::MovePointer { x, y } => format!("move_pointer({x:.3},{y:.3})"),
             Self::Click { button } => format!("click({button:?})"),
             Self::KeyChord { keys } => format!("key_chord({})", keys.join("+")),
@@ -59,6 +95,7 @@ impl AutomationAction {
 
     pub fn validate(&self) -> Result<(), AppError> {
         match self {
+            Self::Native { action } => action.validate(),
             Self::MovePointer { x, y }
                 if !x.is_finite()
                     || !y.is_finite()
@@ -162,4 +199,44 @@ pub struct ExecutionReceipt {
     pub action_id: Uuid,
     pub result: ActionResult,
     pub completion_audit_persisted: bool,
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+
+    #[test]
+    fn native_actions_require_their_real_capability_and_keep_text_out_of_audit() {
+        let text = AutomationAction::Native {
+            action: NativeDesktopAction::TypeText {
+                text: "private reference".into(),
+            },
+        };
+        assert_eq!(text.required_capability(), Capability::KeyboardInput);
+        assert!(!text.audit_label().contains("private"));
+        text.validate().unwrap();
+        let encoded = serde_json::to_string(&text).unwrap();
+        assert_eq!(
+            serde_json::from_str::<AutomationAction>(&encoded).unwrap(),
+            text
+        );
+        let wait = AutomationAction::Native {
+            action: NativeDesktopAction::Wait { milliseconds: 5001 },
+        };
+        assert_eq!(wait.required_capability(), Capability::ScreenRead);
+        assert!(wait.validate().is_err());
+        let drag = AutomationAction::Native {
+            action: NativeDesktopAction::Drag {
+                from_x: -2,
+                from_y: 1,
+                to_x: -1,
+                to_y: 2,
+                button: ai_ex_domain::NativePointerButton::Left,
+                steps: 64,
+                duration_ms: 100,
+            },
+        };
+        assert_eq!(drag.required_capability(), Capability::MouseInput);
+        drag.validate().unwrap();
+    }
 }

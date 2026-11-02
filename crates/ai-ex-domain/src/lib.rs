@@ -2,6 +2,8 @@
 
 mod automation;
 mod conversation;
+mod desktop_runtime;
+pub use desktop_runtime::*;
 mod error;
 mod event;
 mod memory;
@@ -9,6 +11,8 @@ mod memory_policy;
 pub use memory_policy::MemoryRecallPolicy;
 mod memory_knowledge;
 mod native_control;
+mod native_desktop;
+pub use native_desktop::*;
 mod persona;
 mod playback;
 mod stage_telemetry;
@@ -35,8 +39,9 @@ pub use memory::{
     MemorySource,
 };
 pub use memory_knowledge::{
-    MemoryEntity, MemoryEntityEvidence, MemoryEntityGroup, MemoryEntityKind, MemoryEntityPage,
-    MemoryKnowledge, MemoryMedia, MemoryModality,
+    ImportedMemoryEntity, MemoryEntity, MemoryEntityEvidence, MemoryEntityGroup, MemoryEntityKind,
+    MemoryEntityOrigin, MemoryEntityPage, MemoryEntitySource, MemoryEntitySourceStatus,
+    MemoryEntitySubject, MemoryKnowledge, MemoryMedia, MemoryModality,
 };
 pub use persona::PersonaSnapshot;
 pub use playback::SpeechPlaybackSnapshot;

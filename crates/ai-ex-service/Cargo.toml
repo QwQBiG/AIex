@@ -33,6 +33,7 @@ ai-ex-koboldcpp = { path = "../ai-ex-koboldcpp" }
 ai-ex-observability = { path = "../ai-ex-observability" }
 ai-ex-ollama = { path = "../ai-ex-ollama" }
 ai-ex-plugin = { path = "../ai-ex-plugin" }
+ai-ex-platform-windows = { path = "../ai-ex-platform-windows" }
 ai-ex-safety = { path = "../ai-ex-safety" }
 ai-ex-stage = { path = "../ai-ex-stage" }
 ai-ex-stage-obs = { path = "../ai-ex-stage-obs" }

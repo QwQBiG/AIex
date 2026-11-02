@@ -139,6 +139,8 @@ async fn superseded_preview_cannot_interrupt_a_newer_conversation() {
         stage: ai_ex_core::StageJournal::new(8),
         automation: host.clone(),
         native: Some(native.clone()),
+        native_desktop: None,
+        desktop_runtime: None,
         interaction: Arc::new(tokio::sync::Mutex::new(())),
     };
     let error = control
@@ -175,6 +177,68 @@ async fn entered(observed: &mut mpsc::Receiver<oneshot::Sender<()>>) -> oneshot:
         .await
         .unwrap()
         .unwrap()
+}
+
+#[tokio::test]
+async fn dropping_proactive_wait_cancels_intent_and_drains_its_chat_guard() {
+    let (runtime, host, mut observed, _receiver, events) = fixture();
+    let output = runtime.clone();
+    let proactive = tokio::spawn(async move { output.proactive().await });
+    let release = entered(&mut observed).await;
+    assert_eq!(host.pending_chat_count().unwrap(), 1);
+    proactive.abort();
+    assert!(proactive.await.unwrap_err().is_cancelled());
+    pending_count(&host, 0).await;
+    assert!(
+        release.send(()).is_err(),
+        "cancelled model generation was dropped"
+    );
+    assert_eq!(events.current().turns_interrupted, 1);
+    let user = runtime.enqueue("actual user").await.unwrap();
+    let release = entered(&mut observed).await;
+    runtime.cancel_proactive().await.unwrap();
+    release.send(()).unwrap();
+    assert!(matches!(
+        user.wait().await.unwrap(),
+        TurnOutcome::Completed(_)
+    ));
+    runtime.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn dropping_before_proactive_owner_is_polled_cannot_start_an_intent_after_cancel() {
+    use std::future::Future;
+    let (runtime, host, mut observed, _receiver, events) = fixture();
+    let mut proactive = Box::pin(runtime.proactive());
+    std::future::poll_fn(|context| {
+        assert!(proactive.as_mut().poll(context).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    // The owner cannot have run on this single-threaded executor yet.
+    drop(proactive);
+    pending_count(&host, 0).await;
+    let user = runtime
+        .enqueue("actual user after cancelled intent")
+        .await
+        .unwrap();
+    // A provider request may have started before cancellation; it must be
+    // closed, and no new proactive request may be queued after that cancel.
+    let release = loop {
+        let candidate = entered(&mut observed).await;
+        if !candidate.is_closed() {
+            break candidate;
+        }
+    };
+    release.send(()).unwrap();
+    assert!(matches!(
+        user.wait().await.unwrap(),
+        TurnOutcome::Completed(_)
+    ));
+    assert_eq!(events.current().turns_completed, 1);
+    runtime.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
 }
 
 #[tokio::test]

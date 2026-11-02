@@ -60,6 +60,7 @@ pub(crate) struct TemplateHost {
     execution: Arc<AsyncMutex<()>>,
     strategy_factory: Option<StrategyProviderFactory>,
     strategy_encoding: Arc<Semaphore>,
+    native_activity: Option<crate::native_desktop::NativeActivity>,
 }
 
 struct HostState {
@@ -92,6 +93,7 @@ struct SessionArchive {
 /// Owned by the actual admission/completion task, independently of its caller.
 pub(crate) struct ChatActivityGuard {
     host: TemplateHost,
+    _native: Option<crate::native_desktop::NativeChatGuard>,
 }
 
 impl Drop for ChatActivityGuard {
@@ -130,6 +132,14 @@ impl TemplateHost {
         self
     }
 
+    pub(crate) fn with_native_activity(
+        mut self,
+        activity: crate::native_desktop::NativeActivity,
+    ) -> Self {
+        self.native_activity = Some(activity);
+        self
+    }
+
     fn with_clock(
         instance_id: Uuid,
         speech: SpeechActivity,
@@ -160,11 +170,21 @@ impl TemplateHost {
             execution: Arc::new(AsyncMutex::new(())),
             strategy_factory: None,
             strategy_encoding: Arc::new(Semaphore::new(1)),
+            native_activity: None,
         })
     }
 
     /// Clock/policy errors refuse admission before its count changes.
     pub(crate) fn begin_chat(&self) -> Result<ChatActivityGuard, AppError> {
+        self.begin_chat_inner(false)
+    }
+
+    /// Reserve only genuine idle time, including synthesis and remaining audio.
+    pub(crate) fn begin_proactive(&self) -> Result<ChatActivityGuard, AppError> {
+        self.begin_chat_inner(true)
+    }
+
+    fn begin_chat_inner(&self, require_idle: bool) -> Result<ChatActivityGuard, AppError> {
         let mut state = self.lock()?;
         let now_ms = self.clock.now_ms()?;
         if state.closed || !state.snapshot.available {
@@ -173,6 +193,11 @@ impl TemplateHost {
         if state.pending_chat >= MAX_PENDING_CHAT {
             return Err(AppError::unavailable(
                 "conversation admission capacity is full",
+            ));
+        }
+        if require_idle && self.eligibility(state.pending_chat) != ResumeEligibility::Idle {
+            return Err(AppError::invalid_transition(
+                "proactive output requires idle conversation and playback",
             ));
         }
         if state.last_chat_ms.is_some_and(|previous| now_ms < previous) {
@@ -186,6 +211,11 @@ impl TemplateHost {
             .checked_add(1)
             .ok_or_else(|| AppError::unavailable("chat admission count exhausted"))?;
         ensure_revision(&mut state)?;
+        let native = self
+            .native_activity
+            .as_ref()
+            .map(|activity| activity.begin_chat())
+            .transpose()?;
         let report = state
             .current
             .as_mut()
@@ -208,7 +238,10 @@ impl TemplateHost {
         bump_revision(&mut state);
         drop(state);
         self.wake.notify_waiters();
-        Ok(ChatActivityGuard { host: self.clone() })
+        Ok(ChatActivityGuard {
+            host: self.clone(),
+            _native: native,
+        })
     }
 
     pub(crate) async fn execute(

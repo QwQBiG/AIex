@@ -7,6 +7,10 @@ use std::time::Duration;
 
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|mode| mode == "--capture") {
+        capture_fixture(&args);
+        return;
+    }
     let directory = Path::new(&args[1]);
     match args[0].to_str().unwrap() {
         "tree" => {
@@ -51,4 +55,27 @@ fn main() {
         _ => std::process::exit(2),
     }
     std::thread::sleep(Duration::from_secs(60));
+}
+
+fn capture_fixture(args: &[std::ffi::OsString]) {
+    // This binary never reads windows or devices. It only emulates a capture
+    // child's process and bounded file protocol for ownership tests.
+    let output = Path::new(args.last().unwrap());
+    std::fs::write(
+        output.parent().unwrap().join("worker.started"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+    match args[1].to_str().unwrap() {
+        "1" => std::thread::sleep(Duration::from_secs(60)),
+        "2" => std::fs::write(output, b"bad frame").unwrap(),
+        "3" => {
+            let mut frame = b"AEXCAP01".to_vec();
+            frame.extend_from_slice(&2_u32.to_le_bytes());
+            frame.extend_from_slice(&2_u32.to_le_bytes());
+            frame.extend_from_slice(&[255; 16]);
+            std::fs::write(output, frame).unwrap();
+        }
+        _ => std::process::exit(7),
+    }
 }

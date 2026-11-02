@@ -1,0 +1,209 @@
+use super::*;
+use ai_ex_control::{ControlRequest, ControlResponse};
+use ai_ex_domain::{
+    DesktopRuntimeReply, DesktopRuntimeSnapshot, NativeDesktopReply, NativeDesktopSnapshot,
+};
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpListener;
+use tokio::sync::{Semaphore, mpsc};
+use uuid::Uuid;
+
+struct Backend {
+    seen: mpsc::UnboundedSender<&'static str>,
+    release: Semaphore,
+}
+impl Backend {
+    async fn execute(&self, command: ControlCommand) -> Result<ControlPayload, AppError> {
+        let name = match &command {
+            ControlCommand::NativeDesktop {
+                request: NativeDesktopRequest::Resume { .. },
+            } => "resume",
+            ControlCommand::NativeDesktop {
+                request: NativeDesktopRequest::Stop { .. },
+            } => "stop",
+            ControlCommand::NativeDesktop {
+                request: NativeDesktopRequest::Status,
+            } => "status",
+            ControlCommand::NativeDesktop {
+                request: NativeDesktopRequest::Capture { .. },
+            } => "revoked capture",
+            ControlCommand::DesktopRuntime {
+                request: DesktopRuntimeRequest::DiscoverVts,
+            } => "discovery",
+            ControlCommand::DesktopRuntime {
+                request: DesktopRuntimeRequest::State,
+            } => "state",
+            _ => return Err(AppError::protocol("unexpected test command")),
+        };
+        self.seen.send(name).unwrap();
+        if name == "resume" {
+            self.release.acquire().await.unwrap().forget();
+        }
+        if name == "discovery" {
+            return std::future::pending().await;
+        }
+        if name == "state" {
+            return Ok(ControlPayload::DesktopRuntime(Box::new(
+                DesktopRuntimeReply::State(DesktopRuntimeSnapshot {
+                    instance_id: Uuid::nil(),
+                    revision: 0,
+                    settings: Default::default(),
+                    hotkeys_registered: false,
+                    hotkeys_error: false,
+                    proactive_available: true,
+                    vts_discovery_available: true,
+                }),
+            )));
+        }
+        Ok(ControlPayload::NativeDesktop(Box::new(
+            NativeDesktopReply {
+                snapshot: NativeDesktopSnapshot {
+                    instance_id: Uuid::nil(),
+                    revision: 0,
+                    execution_mode: "native".into(),
+                    available: true,
+                    session: None,
+                },
+                windows: Vec::new(),
+            },
+        )))
+    }
+}
+
+#[tokio::test]
+async fn stalled_native_and_discovery_do_not_hold_stop_status_or_caption_confirmation() {
+    let (seen_tx, mut seen) = mpsc::unbounded_channel();
+    let backend = Arc::new(Backend {
+        seen: seen_tx,
+        release: Semaphore::new(0),
+    });
+    let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = ControlClient::new(
+        &server.local_addr().unwrap().to_string(),
+        "x".repeat(32),
+        8192,
+    )
+    .unwrap();
+    let server_backend = backend.clone();
+    let server = tokio::spawn(async move {
+        loop {
+            let (stream, _) = server.accept().await.unwrap();
+            let backend = server_backend.clone();
+            tokio::spawn(async move {
+                let mut stream = BufReader::new(stream);
+                let mut line = String::new();
+                stream.read_line(&mut line).await.unwrap();
+                let request: ControlRequest = serde_json::from_str(&line).unwrap();
+                assert_eq!(request.token, "x".repeat(32));
+                let payload = backend.execute(request.command).await.unwrap();
+                let response = ControlResponse::Success {
+                    request_id: request.request_id,
+                    payload,
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                stream.get_mut().write_all(&bytes).await.unwrap();
+            });
+        }
+    });
+    let (commands, receiver) = mpsc::unbounded_channel();
+    let (events, result) = std::sync::mpsc::channel();
+    let worker = tokio::spawn(async move {
+        crate::worker::run_commands(&client, receiver, &events, &AtomicU64::new(0)).await;
+    });
+    let native = |id, request| WorkerCommand::NativeDesktop {
+        request_id: id,
+        request,
+    };
+    let instance_id = Uuid::nil();
+    let session_id = Uuid::new_v4();
+    commands
+        .send(native(
+            1,
+            NativeDesktopRequest::Resume {
+                instance_id,
+                expected_revision: 0,
+                session_id,
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(3), seen.recv())
+            .await
+            .unwrap(),
+        Some("resume")
+    );
+    commands
+        .send(native(
+            2,
+            NativeDesktopRequest::Capture {
+                instance_id,
+                expected_revision: 0,
+                session_id,
+            },
+        ))
+        .unwrap();
+    commands
+        .send(native(
+            3,
+            NativeDesktopRequest::Stop {
+                instance_id,
+                expected_revision: 0,
+                session_id,
+            },
+        ))
+        .unwrap();
+    commands
+        .send(native(4, NativeDesktopRequest::Status))
+        .unwrap();
+    commands
+        .send(WorkerCommand::DesktopRuntime {
+            request_id: 5,
+            request: DesktopRuntimeRequest::DiscoverVts,
+        })
+        .unwrap();
+    commands
+        .send(WorkerCommand::DesktopRuntime {
+            request_id: 6,
+            request: DesktopRuntimeRequest::State,
+        })
+        .unwrap();
+    let mut observed = Vec::new();
+    for _ in 0..4 {
+        observed.push(
+            tokio::time::timeout(Duration::from_secs(3), seen.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    for expected in ["stop", "status", "discovery", "state"] {
+        assert!(observed.contains(&expected));
+    }
+    backend.release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            while let Ok(event) = result.try_recv() {
+                if let WorkerEvent::NativeDesktop {
+                    request_id: 2,
+                    result: Err(error),
+                } = event
+                {
+                    assert!(error.message.contains("revoked"));
+                    return;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(seen.try_recv().is_err());
+    drop(commands);
+    tokio::time::timeout(Duration::from_secs(3), worker)
+        .await
+        .unwrap()
+        .unwrap();
+    server.abort();
+}

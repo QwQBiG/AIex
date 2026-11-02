@@ -2,6 +2,8 @@
 
 mod client;
 #[cfg(test)]
+mod desktop_runtime_tests;
+#[cfg(test)]
 mod native_tests;
 mod protocol;
 mod server;

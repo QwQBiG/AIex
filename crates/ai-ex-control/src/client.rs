@@ -23,6 +23,27 @@ pub struct ControlClient {
 mod tests;
 
 impl ControlClient {
+    pub async fn desktop_runtime(
+        &self,
+        request: ai_ex_domain::DesktopRuntimeRequest,
+    ) -> Result<ai_ex_domain::DesktopRuntimeReply, AppError> {
+        if let ai_ex_domain::DesktopRuntimeRequest::Apply { settings, .. } = &request {
+            settings.validate()?;
+        }
+        // The authenticated VTS actor has its own ten-second discovery timeout.
+        let mut client = self.clone();
+        client.request_timeout = Duration::from_secs(12);
+        match client
+            .send(ControlCommand::DesktopRuntime { request })
+            .await?
+        {
+            ControlPayload::DesktopRuntime(reply) => Ok(*reply),
+            _ => Err(AppError::protocol(
+                "desktop runtime returned an unexpected payload",
+            )),
+        }
+    }
+
     pub async fn native(
         &self,
         request: ai_ex_domain::NativeRequest,

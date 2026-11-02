@@ -173,7 +173,31 @@ token_path='must-not-be-read'
     );
     drop(store);
     assert!(fixture.0.join("memories.jsonl.lock").exists());
-    assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 3);
+    let files: Vec<_> = fs::read_dir(&fixture.0)
+        .unwrap()
+        .map(|file| file.unwrap().path())
+        .collect();
+    let backups: Vec<_> = files
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("memories.jsonl.v1-backup-")
+        })
+        .collect();
+    assert_eq!(
+        backups.len(),
+        1,
+        "first format upgrade preserves exactly one original backup"
+    );
+    assert_eq!(fs::read(backups[0]).unwrap(), original.as_bytes());
+    assert_eq!(
+        files.len(),
+        4,
+        "only configuration, memory, writer lock and format backup are created"
+    );
+    fs::remove_file(backups[0]).unwrap();
 }
 
 #[tokio::test]

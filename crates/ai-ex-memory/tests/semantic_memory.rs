@@ -391,6 +391,8 @@ async fn imported_enrichment_survives_export_but_is_excluded_from_control_pages(
     assert!(wire["entries"][0].get("terms").is_none());
     assert_eq!(store.export_kind(None, &files.export).await.unwrap(), 1);
     let exported = rows(&files.export).await;
+    entry["schema_version"] = json!(2);
+    entry["record_type"] = json!("memory");
     assert_eq!(exported[0], entry);
     let reopened = MemoryStore::open(&files.export)
         .await

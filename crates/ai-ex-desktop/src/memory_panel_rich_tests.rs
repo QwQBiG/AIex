@@ -430,8 +430,13 @@ fn each_rich_view_renders_headlessly_with_records_and_entity_evidence() {
                 source: MemorySource::UserNote,
                 value: "喜欢绿茶".to_owned(),
                 confidence: 900,
+                source_status: ai_ex_domain::MemoryEntitySourceStatus::Active,
+                imported_entity_id: None,
+                legacy_memory_id: None,
             }],
             total_mentions: 1,
+            subject: ai_ex_domain::MemoryEntitySubject::SelfUser,
+            origin: ai_ex_domain::MemoryEntityOrigin::Extracted,
         });
         panel.entity_page = Some(entity_page);
         panel.loaded = true;
@@ -440,6 +445,69 @@ fn each_rich_view_renders_headlessly_with_records_and_entity_evidence() {
         let _output = context.run_ui(Default::default(), |ui| {
             let _request = panel.show(ui, "合成测试角色", true, true);
         });
+    }
+}
+
+#[test]
+fn unresolved_imported_sources_are_visible_but_do_not_offer_invalid_record_actions() {
+    use ai_ex_domain::{MemoryEntityOrigin, MemoryEntitySourceStatus, MemoryEntitySubject};
+    let mut group = MemoryEntityGroup {
+        key: format!("imported:{}", uuid::Uuid::new_v4()),
+        kind: MemoryEntityKind::Preference,
+        name: "茶".into(),
+        current_value: String::new(),
+        first_mentioned_ms: 0,
+        last_updated_ms: 0,
+        evidence: vec![MemoryEntityEvidence {
+            memory_id: uuid::Uuid::nil(),
+            revision: 0,
+            source: MemorySource::Automatic,
+            value: "喜欢绿茶".into(),
+            confidence: 730,
+            source_status: MemoryEntitySourceStatus::Unresolved,
+            imported_entity_id: Some(uuid::Uuid::new_v4()),
+            legacy_memory_id: Some("legacy-one".into()),
+        }],
+        total_mentions: 1,
+        subject: MemoryEntitySubject::Unknown,
+        origin: MemoryEntityOrigin::Imported,
+    };
+    assert!(!ui::can_open_entity_sources(&group));
+    assert_eq!(ui::subject_label(&group.subject), "主体未确认");
+    assert_eq!(
+        ui::source_status_label(group.evidence[0].source_status),
+        "关联待核对"
+    );
+    let mut panel = MemoryPanel::default();
+    panel.set_profile("first");
+    panel.view = MemoryView::Entities;
+    panel.entity_page = Some(MemoryEntityPage {
+        profile_id: "first".into(),
+        enabled: true,
+        total: 1,
+        offset: 0,
+        entities: vec![group.clone()],
+    });
+    panel.loaded = true;
+    let context = eframe::egui::Context::default();
+    let output = context.run_ui(Default::default(), |ui| {
+        assert!(panel.show(ui, "合成角色", true, true).is_none());
+    });
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        eframe::egui::epaint::Shape::Text(text) if text.galley.job.text.contains("主体未确认"))));
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        eframe::egui::epaint::Shape::Text(text) if text.galley.job.text.contains("暂无有效来源"))));
+    group.evidence[0].memory_id = uuid::Uuid::new_v4();
+    group.evidence[0].revision = 1;
+    for (status, expected) in [
+        (MemoryEntitySourceStatus::Active, true),
+        (MemoryEntitySourceStatus::Corrected, true),
+        (MemoryEntitySourceStatus::Forgotten, false),
+        (MemoryEntitySourceStatus::Missing, false),
+        (MemoryEntitySourceStatus::Unresolved, false),
+    ] {
+        group.evidence[0].source_status = status;
+        assert_eq!(ui::can_open_entity_sources(&group), expected);
     }
 }
 

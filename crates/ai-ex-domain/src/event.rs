@@ -20,6 +20,10 @@ impl LiveResponseMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SystemEvent {
+    /// A system-initiated output generation, without an invented user message.
+    ProactiveStarted {
+        turn_id: TurnId,
+    },
     TurnStarted {
         turn_id: TurnId,
         user_text: String,

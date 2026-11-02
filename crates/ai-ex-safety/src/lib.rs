@@ -53,7 +53,7 @@ pub struct SafetyPolicy {
     pub allowed_targets: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Permit {
     id: Uuid,
     capability: Capability,

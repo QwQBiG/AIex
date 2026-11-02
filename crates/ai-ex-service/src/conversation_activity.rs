@@ -97,6 +97,35 @@ impl ConversationActivity {
         self.enqueue(input).await?.wait().await
     }
 
+    pub(crate) async fn proactive(&self) -> Result<TurnOutcome, AppError> {
+        let guard = self.host.begin_proactive()?;
+        let pending = self.runtime.start_proactive()?;
+        let runtime = self.runtime.clone();
+        let (mut completion, result) = oneshot::channel();
+        // Hold both hosts' chat guards until this admitted intent settles,
+        // including when the requesting scheduler disables itself or exits.
+        tokio::spawn(async move {
+            let _guard = guard;
+            let pending = pending.wait();
+            tokio::pin!(pending);
+            let outcome = tokio::select! {
+                result = &mut pending => result,
+                _ = completion.closed() => {
+                    let _cancelled = runtime.cancel_proactive().await;
+                    pending.await
+                }
+            };
+            let _delivered = completion.send(outcome);
+        });
+        result
+            .await
+            .map_err(|_| AppError::unavailable("proactive completion task stopped"))?
+    }
+
+    pub(crate) async fn cancel_proactive(&self) -> Result<(), AppError> {
+        self.runtime.cancel_proactive().await
+    }
+
     pub(crate) async fn interrupt(&self, reason: impl Into<String>) -> Result<(), AppError> {
         self.runtime.interrupt(reason).await
     }
