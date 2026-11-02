@@ -1,9 +1,15 @@
 #![forbid(unsafe_code)]
 
 mod embedding;
+mod managed;
 mod protocol;
 
 pub use embedding::OllamaEmbeddingClient;
+pub use managed::{
+    MANAGED_MODEL, MANAGED_MODEL_FILES, MANAGED_MODEL_ID, MANAGED_VERSION, ManagedModelFile,
+    ManagedOllama, ManagedOllamaSettings, managed_model_generated_file, prepare_managed_model,
+    verify_managed_model_source,
+};
 
 use std::sync::Arc;
 use std::time::Duration;

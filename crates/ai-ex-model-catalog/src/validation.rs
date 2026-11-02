@@ -90,6 +90,9 @@ impl Artifact {
             .unwrap_or_default();
         let allowed = if self.kind == ArtifactKind::NativeRuntime {
             matches!(extension.as_str(), "exe" | "dll")
+        } else if self.kind == ArtifactKind::SourceArchive {
+            let name = filename.to_ascii_lowercase();
+            name.ends_with(".zip") || name.ends_with(".tar.gz") || name.ends_with(".tgz")
         } else {
             matches!(
                 extension.as_str(),

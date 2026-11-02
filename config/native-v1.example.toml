@@ -1,0 +1,42 @@
+# Independent native settings; model preparation does not enable devices.
+schema_version = 1
+revision = 1
+active_voice = "builtin-zh"
+
+[storage]
+packages = "native/packages"
+voices = "native/voices"
+jobs = "native/jobs"
+
+[devices]
+microphone_enabled = false
+playback_enabled = false
+
+[dialogue]
+backend = "ollama"
+model_id = "qwen3-4b"
+runtime_id = "native-cpu"
+
+[transcription]
+backend = "sherpa_whisper"
+model_id = "whisper-small-int8"
+runtime_id = "native-cpu"
+
+[embedding]
+backend = "onnx_embedding"
+model_id = "bge-small-zh-v1.5"
+runtime_id = "native-cpu"
+
+[[voices]]
+id = "builtin-zh"
+label = "默认中文声音"
+language = "zh"
+
+[voices.model]
+backend = "sherpa_kokoro"
+model_id = "kokoro-v1.1-zh-en"
+runtime_id = "native-cpu"
+
+[voices.source]
+type = "preset"
+speaker = "zf_079"

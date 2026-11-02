@@ -140,6 +140,7 @@ async fn interrupted_synthesis_does_not_delay_speech_worker_shutdown() {
         Some(tts),
         player,
         events.clone(),
+        None,
     ));
     tokio::time::timeout(Duration::from_secs(2), received)
         .await

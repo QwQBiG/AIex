@@ -1,0 +1,273 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "scope": "M0 Windows CPU native input materials",
+  "materials": [
+    {
+      "id": "sherpa",
+      "path": "licenses/sherpa.txt",
+      "source_url": "https://github.com/k2-fsa/sherpa-onnx/blob/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "id": "onnxruntime",
+      "path": "licenses/onnxruntime.txt",
+      "source_url": "https://github.com/microsoft/onnxruntime/blob/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE",
+      "bytes": 1073,
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+    },
+    {
+      "id": "onnxruntime-notices",
+      "path": "licenses/onnxruntime-notices.txt",
+      "source_url": "https://github.com/microsoft/onnxruntime/blob/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt",
+      "bytes": 325054,
+      "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+    },
+    {
+      "id": "espeak-gpl",
+      "path": "licenses/espeak-gpl.txt",
+      "source_url": "https://github.com/csukuangfj/espeak-ng/blob/ed530aa113046142eb5115cf2fc9157854d0ffe1/COPYING",
+      "bytes": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "id": "espeak-apache",
+      "path": "licenses/espeak-apache.txt",
+      "source_url": "https://github.com/csukuangfj/espeak-ng/blob/ed530aa113046142eb5115cf2fc9157854d0ffe1/COPYING.APACHE",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "id": "espeak-bsd2",
+      "path": "licenses/espeak-bsd2.txt",
+      "source_url": "https://github.com/csukuangfj/espeak-ng/blob/ed530aa113046142eb5115cf2fc9157854d0ffe1/COPYING.BSD2",
+      "bytes": 1244,
+      "sha256": "a8b0c1c7d7af6c0415c068be8cf373799d1a42b0707b79dc4ccfcaf593cd902d"
+    },
+    {
+      "id": "espeak-unicode",
+      "path": "licenses/espeak-unicode.txt",
+      "source_url": "https://github.com/csukuangfj/espeak-ng/blob/ed530aa113046142eb5115cf2fc9157854d0ffe1/COPYING.UCD",
+      "bytes": 2788,
+      "sha256": "be029c50df83105a810e391778b6edcb522d6cb4b4e142332aca54437a499bf7"
+    },
+    {
+      "id": "cppjieba",
+      "path": "licenses/cppjieba.txt",
+      "source_url": "https://github.com/yanyiwu/cppjieba/blob/v5.6.5/LICENSE",
+      "bytes": 1066,
+      "sha256": "ba898a14f729ba5e9965da34e3eecd5edd3795f2cc5d7c923b815ba79bb851b0"
+    },
+    {
+      "id": "ollama",
+      "path": "licenses/ollama.txt",
+      "source_url": "https://github.com/ollama/ollama/blob/675150d6ad2747df1e218ef59de9194bc4a7e538/LICENSE",
+      "bytes": 1058,
+      "sha256": "5934ed2ce0d15154bcdb9c85203210abac0da4314af34081e36df4599f90b226"
+    },
+    {
+      "id": "llvm",
+      "path": "licenses/llvm.txt",
+      "source_url": "https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/llvm/LICENSE.TXT",
+      "bytes": 15141,
+      "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee"
+    },
+    {
+      "id": "libcxx",
+      "path": "licenses/libcxx.txt",
+      "source_url": "https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/libcxx/LICENSE.TXT",
+      "bytes": 16703,
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+    },
+    {
+      "id": "libunwind",
+      "path": "licenses/libunwind.txt",
+      "source_url": "https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/libunwind/LICENSE.TXT",
+      "bytes": 16706,
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d"
+    },
+    {
+      "id": "openmp",
+      "path": "licenses/openmp.txt",
+      "source_url": "https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/openmp/LICENSE.TXT",
+      "bytes": 19741,
+      "sha256": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4"
+    },
+    {
+      "id": "winpthreads",
+      "path": "licenses/winpthreads.txt",
+      "source_url": "https://github.com/mingw-w64/mingw-w64/blob/7c9cfe6708cafc83c14a2654308b2db62b126eae/mingw-w64-libraries/winpthreads/COPYING",
+      "bytes": 2883,
+      "sha256": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177"
+    },
+    {
+      "id": "kaldi-native-fbank",
+      "path": "licenses/kaldi-native-fbank.txt",
+      "source_url": "https://github.com/csukuangfj/kaldi-native-fbank/blob/v1.22.3/LICENSE",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "id": "kaldi-decoder",
+      "path": "licenses/kaldi-decoder.txt",
+      "source_url": "https://github.com/k2-fsa/kaldi-decoder/blob/v0.3.0/LICENSE",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "id": "kaldifst",
+      "path": "licenses/kaldifst.txt",
+      "source_url": "https://github.com/k2-fsa/kaldifst/blob/v1.8.0/LICENSE",
+      "bytes": 11728,
+      "sha256": "a682d6efd1ee5dee08a8e405c233c2c198ea70ae0718129daa83ab58cfe31c5d"
+    },
+    {
+      "id": "simple-sentencepiece",
+      "path": "licenses/simple-sentencepiece.txt",
+      "source_url": "https://github.com/pkufool/simple-sentencepiece/blob/v0.7/LICENSE",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "id": "json",
+      "path": "licenses/json.txt",
+      "source_url": "https://github.com/nlohmann/json/blob/v3.12.0/LICENSE.MIT",
+      "bytes": 1076,
+      "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+    },
+    {
+      "id": "openfst",
+      "path": "licenses/openfst.txt",
+      "source_url": "https://github.com/csukuangfj/openfst/blob/v1.8.5-2026-07-09/COPYING",
+      "bytes": 559,
+      "sha256": "4300529197035fd3452350718a0b8cee984e9412c9932d7f35fcde849fc97a4b"
+    },
+    {
+      "id": "piper-phonemize",
+      "path": "licenses/piper-phonemize.txt",
+      "source_url": "https://github.com/csukuangfj/piper-phonemize/blob/f3ff95afc03640bc1399e113e83361192a2fafb4/LICENSE.md",
+      "bytes": 1071,
+      "sha256": "13746d509d74e55ea2265fbef204bb7cdbf84a8315b0207e988326cb54387028"
+    },
+    {
+      "id": "uni-algo",
+      "path": "licenses/uni-algo.txt",
+      "source_url": "https://github.com/csukuangfj/piper-phonemize/blob/f3ff95afc03640bc1399e113e83361192a2fafb4/licenses/uni-algo/LICENSE.md",
+      "bytes": 2208,
+      "sha256": "c55648b02873556d6ab2de14938998101fda3a0f293337542af9196435def318"
+    },
+    {
+      "id": "hclust-cpp",
+      "path": "licenses/hclust-cpp.txt",
+      "source_url": "https://github.com/csukuangfj/hclust-cpp/blob/2026-02-25/LICENSE",
+      "bytes": 1480,
+      "sha256": "0d4b6932886aa9623d166c0738c425ba28f0a47d075c7524d06709fc40525cc8"
+    },
+    {
+      "id": "eigen-mpl2",
+      "path": "licenses/eigen-mpl2.txt",
+      "source_url": "https://gitlab.com/libeigen/eigen/-/blob/5.0.1/COPYING.MPL2",
+      "bytes": 16727,
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172"
+    },
+    {
+      "id": "eigen-apache",
+      "path": "licenses/eigen-apache.txt",
+      "source_url": "https://gitlab.com/libeigen/eigen/-/blob/5.0.1/COPYING.APACHE",
+      "bytes": 11362,
+      "sha256": "03379001a7b12a2ec997a25554247d985270b353c10d5bafee9ac8d6519820b7"
+    },
+    {
+      "id": "eigen-bsd",
+      "path": "licenses/eigen-bsd.txt",
+      "source_url": "https://gitlab.com/libeigen/eigen/-/blob/5.0.1/COPYING.BSD",
+      "bytes": 1517,
+      "sha256": "51928dce36213c5333ba3172e847d735d4c6e9b7ff2722a326c49067155b82eb"
+    },
+    {
+      "id": "eigen-minpack",
+      "path": "licenses/eigen-minpack.txt",
+      "source_url": "https://gitlab.com/libeigen/eigen/-/blob/5.0.1/COPYING.MINPACK",
+      "bytes": 2193,
+      "sha256": "c87b7f8ee88f6195e91743820c00354833583aef091b72e2d4a49c8e28e798a0"
+    },
+    {
+      "id": "kissfft-copyright",
+      "path": "licenses/kissfft-copyright.txt",
+      "source_url": "https://github.com/mborgerding/kissfft/blob/febd4caeed32e33ad8b2e0bb5ea77542c40f18ec/COPYING",
+      "bytes": 246,
+      "sha256": "a2840585f8411be8e6826a31ef15ae65c950bd74a2437a73b013398a934ad0c6"
+    },
+    {
+      "id": "kissfft-bsd3",
+      "path": "licenses/kissfft-bsd3.txt",
+      "source_url": "https://github.com/mborgerding/kissfft/blob/febd4caeed32e33ad8b2e0bb5ea77542c40f18ec/LICENSES/BSD-3-Clause",
+      "bytes": 1830,
+      "sha256": "4d6bcab46f27d6d0c878e8305d4bdcfe040d52bf6656b9771f04c9fb9902c0ed"
+    },
+    {
+      "id": "kissfft-unlicense",
+      "path": "licenses/kissfft-unlicense.txt",
+      "source_url": "https://github.com/mborgerding/kissfft/blob/febd4caeed32e33ad8b2e0bb5ea77542c40f18ec/LICENSES/Unlicense",
+      "bytes": 1521,
+      "sha256": "c543dab3c100d8741a83b02f397746b1e10fc0046f30b942f308191a68e99407"
+    },
+    {
+      "id": "ollama-go_license",
+      "path": "licenses/ollama-go_license.txt",
+      "source_url": "https://github.com/ollama/ollama/releases/tag/v0.40.11",
+      "bytes": 178889,
+      "sha256": "def16de01b2b30da70518fa6be21a185083553e6170af22312ab4dbdf25b4cdb"
+    },
+    {
+      "id": "ollama-llama_cpp_license",
+      "path": "licenses/ollama-llama_cpp_license.txt",
+      "source_url": "https://github.com/ollama/ollama/releases/tag/v0.40.11",
+      "bytes": 1078,
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+    },
+    {
+      "id": "ollama-llama_cpp_vendors_license",
+      "path": "licenses/ollama-llama_cpp_vendors_license.txt",
+      "source_url": "https://github.com/ollama/ollama/releases/tag/v0.40.11",
+      "bytes": 7257,
+      "sha256": "eb17b411e39c75c4ac40916d66e39287ee9723b8bbe54daf020fc27acf670c11"
+    },
+    {
+      "id": "ollama-cpp_httplib_license",
+      "path": "licenses/ollama-cpp_httplib_license.txt",
+      "source_url": "https://github.com/ollama/ollama/releases/tag/v0.40.11",
+      "bytes": 1075,
+      "sha256": "4b45cbe16d7b71b89ae6127e26e0d90a029198ca5e958ad8e3d0b8bbed364d8b"
+    },
+    {
+      "id": "wavekat-notice",
+      "path": "licenses/wavekat-notice.txt",
+      "source_url": "https://github.com/wavekat/wavekat-tts/blob/ad3c7d0f927370ab23e1afad176c3cccff51467a/LICENSE",
+      "bytes": 737,
+      "sha256": "0058475d08772caa28b0dec87863f7955ce64ac5a8ea2522f8ff7c87a08b8045"
+    },
+    {
+      "id": "kokoro",
+      "path": "licenses/kokoro.txt",
+      "source_url": "https://huggingface.co/csukuangfj/kokoro-multi-lang-v1_1/blob/423bfb9ccd6a66115a76602a9630ffea265ae176/LICENSE",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "id": "whisper",
+      "path": "licenses/whisper.txt",
+      "source_url": "https://github.com/openai/whisper/blob/v20250625/LICENSE",
+      "bytes": 1063,
+      "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d"
+    },
+    {
+      "sha256": "05cab46843576551502bfdf712f84e93e6e9590d9997306ed4f6635ef82811d9",
+      "path": "licenses/qwen3-4b.txt",
+      "id": "qwen3-4b",
+      "source_url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/bc640142c66e1fdd12af0bd68f40445458f3869b/LICENSE",
+      "bytes": 11343
+    }
+  ]
+}

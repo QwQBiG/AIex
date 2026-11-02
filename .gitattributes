@@ -1,8 +1,18 @@
 * text=auto
+/.gitattributes text eol=lf
+/.gitignore text eol=lf
+/LICENSE text eol=lf
+docs/native-distribution/** text eol=lf
+# Preserve whitespace in upstream notices covered by distribution digests.
+docs/native-distribution/licenses/** -whitespace
+docs/PORTABLE_THIRD_PARTY.txt -whitespace
 *.rs text eol=lf
 *.toml text eol=lf
 *.lock text eol=lf
 *.md text eol=lf
+*.txt text eol=lf
+*.rc text eol=lf
+*.manifest text eol=lf
 *.json text eol=lf
 *.tsv text eol=lf
 *.yml text eol=lf

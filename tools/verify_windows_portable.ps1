@@ -18,6 +18,7 @@ if ([IO.Path]::GetFileName($archive) -cnotmatch '^AIex-Windows-x64-(?<version>\d
 $version = $Matches.version
 # Prerelease archives use the layout of their numeric release line.
 $requiresMigrator = [version]($version -replace '[-+].*$', '') -ge [version]'0.8.0'
+$requiresLicense = [version]($version -replace '[-+].*$', '') -ge [version]'0.9.0'
 if (-not $EvidenceDirectory) { $EvidenceDirectory = Join-Path $repository 'target' }
 $evidenceParent = [IO.Path]::GetFullPath($EvidenceDirectory)
 $evidence = Join-Path $evidenceParent ('portable-verification-' + [guid]::NewGuid().ToString('N'))
@@ -68,6 +69,7 @@ $relocated = Resolve-PackageChild $evidence '中文目录 with spaces'
 $package = Resolve-PackageChild $relocated $name
 $expected = @('AIex.exe', 'ai-ex-service.exe', 'AIex.portable', '开始使用.txt', 'data/ai-ex.local.toml')
 if ($requiresMigrator) { $expected += 'ai-ex-migrate.exe' }
+if ($requiresLicense) { $expected += @('LICENSE.txt', 'THIRD-PARTY-LICENSES.txt') }
 $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 Add-Type -AssemblyName System.IO.Compression.FileSystem

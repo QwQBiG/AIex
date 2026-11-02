@@ -14,6 +14,10 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+ring = "0.17.14"
+
+[target.'cfg(windows)'.dependencies]
+ai-ex-platform-windows = { path = "../ai-ex-platform-windows" }
 
 [lints]
 workspace = true

@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod presentation;
+#[cfg(test)]
+mod preview_tests;
 pub use presentation::{AnimationFrame, ExpressionFrame, PresentationAnimator, PresentationState};
 
 use ai_ex_domain::{AppError, ConversationState, SystemEvent, TurnId};
@@ -122,6 +124,7 @@ impl UiState {
             }
             SystemEvent::SentenceReady { .. } => self.runtime.sentences_ready += 1,
             SystemEvent::SpeechPlayback { .. }
+            | SystemEvent::SpeechPreviewStarted { .. }
             | SystemEvent::SpeechProgress { .. }
             | SystemEvent::SpeechCancelled => {}
             SystemEvent::EmotionChanged { emotion, .. } => {

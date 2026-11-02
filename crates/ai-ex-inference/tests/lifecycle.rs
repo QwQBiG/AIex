@@ -64,6 +64,34 @@ fn request() -> InferenceRequest {
 }
 
 #[tokio::test]
+async fn cancelling_cold_startup_explicitly_reaps_before_ready_deadline() {
+    let job = Job::new();
+    let (cancel, receiver) = tokio::sync::watch::channel(false);
+    let launch = WorkerLaunch {
+        executable: PathBuf::from(env!("CARGO_BIN_EXE_inference-test-worker")),
+        arguments: vec!["slow-ready".into()],
+        environment: BTreeMap::new(),
+        job_directory: job.0.clone(),
+        ready_timeout: Duration::from_secs(60),
+    };
+    let task = tokio::spawn(InferenceWorker::spawn_cancellable(launch, receiver));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let began = Instant::now();
+    cancel.send(true).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(3), task)
+        .await
+        .unwrap()
+        .unwrap();
+    let Err(error) = result else {
+        panic!("startup must have been cancelled");
+    };
+    assert!(began.elapsed() < Duration::from_secs(3));
+    assert!(error.message.contains("startup cancelled"));
+    assert!(error.message.contains("exit_status"));
+    assert!(error.message.contains("\"forced\":true"));
+}
+
+#[tokio::test]
 async fn completes_and_shuts_down_without_leaking_stderr() {
     let job = Job::new();
     let mut worker = job.worker("normal").await.unwrap();
@@ -77,6 +105,8 @@ async fn completes_and_shuts_down_without_leaking_stderr() {
     assert!(worker.diagnostics().await.len() <= 8192);
     worker.shutdown().await.unwrap();
     assert!(worker.process_id().is_none());
+    assert!(worker.exit_status().unwrap().success());
+    assert!(!worker.was_force_terminated());
     worker.shutdown().await.unwrap();
 }
 
@@ -116,6 +146,52 @@ async fn uncooperative_computation_is_killed_after_grace() {
     assert!(started.elapsed() < Duration::from_secs(3));
     assert!(worker.process_id().is_none());
     assert!(worker.start(request()).await.is_err());
+    assert!(worker.was_force_terminated());
+    assert!(!worker.exit_status().unwrap().success());
+    // The nonzero status of this expected cancellation is not a normal-close error.
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stalled_reader_send_deadline_reaps_worker_without_reusing_partial_frame() {
+    let job = Job::new();
+    let mut worker = job.worker("ready-no-read").await.unwrap();
+    let mut large = request();
+    large.task = InferenceTask::Embed {
+        text: "x".repeat(128 * 1024),
+        space: "test-space".into(),
+    };
+    let started = Instant::now();
+    let error = worker
+        .start_until(
+            large,
+            tokio::time::Instant::now() + Duration::from_millis(100),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("send timed out"));
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(worker.process_id().is_none());
+    assert!(worker.was_force_terminated());
+    assert!(worker.start(request()).await.is_err());
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn completed_request_with_failed_shutdown_preserves_exit_code_and_reports_error() {
+    let job = Job::new();
+    let mut worker = job.worker("shutdown-failure").await.unwrap();
+    worker.start(request()).await.unwrap();
+    worker.wait().await.unwrap();
+    let error = worker.shutdown().await.unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("exited unsuccessfully during shutdown")
+    );
+    assert!(worker.process_id().is_none());
+    assert_eq!(worker.exit_status().unwrap().code(), Some(1));
+    assert!(!worker.was_force_terminated());
 }
 
 #[tokio::test]
@@ -163,11 +239,50 @@ async fn vectors_from_another_model_space_are_rejected() {
 async fn crash_and_incompatible_handshake_report_errors() {
     let job = Job::new();
     assert!(job.worker("exit").await.is_err());
-    assert!(job.worker("incompatible").await.is_err());
+    let error = job.worker("incompatible").await.err().unwrap();
+    assert_eq!(error.kind, ai_ex_domain::ErrorKind::Protocol);
+    assert!(
+        error
+            .message
+            .starts_with("native worker handshake is incompatible")
+    );
     let mut worker = job.worker("crash").await.unwrap();
     worker.start(request()).await.unwrap();
     assert!(worker.wait().await.is_err());
     worker.terminate().await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_failure_keeps_bounded_stderr_and_observed_exit_without_launch_secrets() {
+    let job = Job::new();
+    let secret = "private-config-and-environment-sentinel";
+    let error = InferenceWorker::spawn(WorkerLaunch {
+        executable: PathBuf::from(env!("CARGO_BIN_EXE_inference-test-worker")),
+        arguments: vec!["exit".into(), secret.into()],
+        environment: BTreeMap::from([("PRIVATE_WORKER_CONFIG".into(), secret.into())]),
+        job_directory: job.0.clone(),
+        ready_timeout: Duration::from_secs(5),
+    })
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(error.kind, ai_ex_domain::ErrorKind::Unavailable);
+    assert!(
+        error
+            .message
+            .starts_with("native worker closed its reply stream")
+    );
+    assert!(!error.message.contains(secret));
+    let (_, diagnostic) = error
+        .message
+        .split_once("native startup diagnostics: ")
+        .unwrap();
+    let diagnostic: serde_json::Value = serde_json::from_str(diagnostic).unwrap();
+    let stderr = diagnostic["stderr_tail"].as_str().unwrap();
+    assert!(stderr.len() <= 8192);
+    assert!(stderr.ends_with("NATIVE_LOAD_FAILED: fixture protobuf\n"));
+    assert!(diagnostic["exit_status"].is_string());
+    assert!(diagnostic["forced"].is_boolean());
 }
 
 #[tokio::test]

@@ -1,0 +1,27 @@
+[package]
+name = "wavekat-core"
+description = "Shared types for the WaveKat audio processing ecosystem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository = "https://github.com/wavekat/wavekat-core"
+homepage = "https://github.com/wavekat/wavekat-core"
+documentation = "https://docs.rs/wavekat-core"
+readme = "../../README.md"
+keywords = ["audio", "voice", "telephony", "wavekat"]
+categories = ["multimedia::audio"]
+exclude = ["CHANGELOG.md"]
+
+[features]
+wav = ["dep:hound"]
+resample = ["dep:rubato"]
+
+[dependencies]
+hound = { version = "3.5", optional = true }
+rubato = { version = "2.0", optional = true }
+
+[dev-dependencies]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -25,6 +25,10 @@ ai-ex-event-bus = { path = "../ai-ex-event-bus" }
 ai-ex-deepseek = { path = "../ai-ex-deepseek" }
 ai-ex-duplex = { path = "../ai-ex-duplex" }
 ai-ex-memory = { path = "../ai-ex-memory" }
+ai-ex-model-catalog = { path = "../ai-ex-model-catalog" }
+ai-ex-model-manager = { path = "../ai-ex-model-manager" }
+ai-ex-native-models = { path = "../ai-ex-native-models" }
+ai-ex-inference = { path = "../ai-ex-inference" }
 ai-ex-koboldcpp = { path = "../ai-ex-koboldcpp" }
 ai-ex-observability = { path = "../ai-ex-observability" }
 ai-ex-ollama = { path = "../ai-ex-ollama" }
@@ -39,6 +43,7 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image = { version = "=0.25.9", default-features = false, features = ["png", "jpeg"] }
+hound = "=3.5.1"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

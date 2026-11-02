@@ -76,6 +76,11 @@ async fn native_silent_playback_reports_progress_completion_and_interruption() {
         assert!(first.active);
         assert_eq!(first.turn_id, Some(turn_id));
         assert_eq!(first.duration_ms, duration as u64);
+        let stopped = SpeechPlaybackSnapshot {
+            turn_id: first.turn_id,
+            sentence_id: first.sentence_id,
+            ..Default::default()
+        };
         if interrupt {
             SpeechPort::interrupt(&mut queue).await.unwrap();
         }
@@ -91,7 +96,7 @@ async fn native_silent_playback_reports_progress_completion_and_interruption() {
             progressed |= snapshot.position_ms > 0;
             last = snapshot;
         }
-        assert_eq!(last, SpeechPlaybackSnapshot::default());
+        assert_eq!(last, stopped);
         assert!(interrupt || progressed);
     }
 }

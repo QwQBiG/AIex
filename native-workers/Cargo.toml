@@ -1,0 +1,29 @@
+[workspace]
+members = ["support", "bge", "sherpa", "qwen"]
+default-members = ["support", "bge"]
+resolver = "2"
+
+[workspace.package]
+version = "0.9.0-alpha.1"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+ai-ex-domain = { path = "../crates/ai-ex-domain" }
+ai-ex-inference = { path = "../crates/ai-ex-inference" }
+ai-ex-model-catalog = { path = "../crates/ai-ex-model-catalog" }
+ai-ex-native-worker-support = { path = "support" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.143"
+tokio = { version = "1.47.1", features = ["io-std", "io-util", "macros", "rt"] }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "api-24"] }
+tokenizers = { version = "=0.21.4", default-features = false, features = ["onig"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

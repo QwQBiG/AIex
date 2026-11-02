@@ -39,6 +39,9 @@ pub enum SystemEvent {
     SpeechPlayback {
         playback: crate::SpeechPlaybackSnapshot,
     },
+    SpeechPreviewStarted {
+        turn_id: TurnId,
+    },
     SpeechProgress {
         sentence_id: uuid::Uuid,
         position_ms: u64,

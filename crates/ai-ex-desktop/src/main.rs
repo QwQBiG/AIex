@@ -12,6 +12,8 @@ mod headless_snapshot;
 mod image_appearance;
 mod launch;
 mod memory_panel;
+mod native_onboarding;
+mod native_panel;
 mod navigation;
 mod portable;
 mod preview;
@@ -81,6 +83,9 @@ fn run() -> Result<(), AppError> {
             Destination::Home => welcome::run(session.configured(&options.config_path))
                 .map(|choice| choice.map(destination_for)),
             Destination::Preview => preview::run(options.appearance_pack.take()),
+            Destination::Native | Destination::NativeChat => {
+                native_onboarding::run(&options, destination == Destination::NativeChat)
+            }
             Destination::Connect | Destination::Setup => session.connect(
                 &options,
                 portable_root.as_deref(),
@@ -103,5 +108,6 @@ fn destination_for(choice: welcome::Choice) -> Destination {
         welcome::Choice::Preview => Destination::Preview,
         welcome::Choice::Connect => Destination::Connect,
         welcome::Choice::Setup => Destination::Setup,
+        welcome::Choice::Native => Destination::Native,
     }
 }

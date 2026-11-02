@@ -6,6 +6,8 @@ mod control_snapshot;
 mod conversation_activity;
 mod events;
 mod lifecycle;
+mod native_ports;
+mod native_runtime;
 mod playback;
 mod strategy_loop;
 mod template_game;
@@ -63,6 +65,7 @@ use async_trait::async_trait;
 use automation_replay::replay as replay_automation;
 use conversation_activity::ConversationActivity;
 use events::ConsoleEvents;
+use native_runtime::{NativeLanguageModel, NativeRuntime};
 use template_host::TemplateHost;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::RwLock;
@@ -79,6 +82,10 @@ enum ConfiguredModel {
     Ollama(OllamaClient),
     DeepSeek(DeepSeekClient),
     KoboldCpp(KoboldCppClient),
+    Native {
+        model: NativeLanguageModel,
+        runtime: Arc<NativeRuntime>,
+    },
 }
 
 impl ConfiguredModel {
@@ -87,6 +94,7 @@ impl ConfiguredModel {
             Self::Ollama(client) => client.health().await,
             Self::DeepSeek(client) => client.health().await,
             Self::KoboldCpp(client) => client.health().await,
+            Self::Native { runtime, .. } => runtime.health(),
         }
     }
 }
@@ -101,6 +109,7 @@ impl LanguageModelPort for ConfiguredModel {
             Self::Ollama(client) => client.stream(request).await,
             Self::DeepSeek(client) => client.stream(request).await,
             Self::KoboldCpp(client) => client.stream(request).await,
+            Self::Native { model, .. } => model.stream(request).await,
         }
     }
 
@@ -109,6 +118,7 @@ impl LanguageModelPort for ConfiguredModel {
             Self::Ollama(client) => client.cancel(turn_id).await,
             Self::DeepSeek(client) => client.cancel(turn_id).await,
             Self::KoboldCpp(client) => client.cancel(turn_id).await,
+            Self::Native { model, .. } => model.cancel(turn_id).await,
         }
     }
 }
@@ -170,6 +180,26 @@ async fn run() -> Result<(), AppError> {
         return Ok(());
     }
     if args.reindex_memory {
+        if let Some(path) = &args.native_config {
+            if !path.is_file() {
+                return Err(AppError::configuration(
+                    "native memory reindex requires an existing native configuration file",
+                ));
+            }
+            let native = NativeRuntime::start(path.clone(), config.persona.profile_id.clone());
+            let result = async {
+                native.wait_ready(Duration::from_secs(120)).await?;
+                let mut memory = native_ports::build_memory(&config, native.clone()).await?;
+                memory.select_profile(&config.persona.profile_id).await?;
+                memory.reindex_embeddings().await
+            }
+            .await;
+            let cleanup = native.shutdown().await;
+            let count = result?;
+            cleanup?;
+            println!("Reindexed {count} memory record(s) for the configured persona.");
+            return Ok(());
+        }
         if !config.memory.enabled || config.memory.embedding.is_none() {
             return Err(AppError::configuration(
                 "--reindex-memory requires enabled memory and an explicit [memory.embedding] model",
@@ -217,7 +247,34 @@ async fn run() -> Result<(), AppError> {
         println!("{}", observation.text);
         return Ok(());
     }
-    let model = build_model(&config)?;
+    let native = if args.native_setup || args.native_config.is_some() {
+        let path = args.native_config.clone().unwrap_or_else(|| {
+            args.config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(ai_ex_config::native::NATIVE_CONFIG_FILENAME)
+        });
+        Some(NativeRuntime::start(
+            path,
+            config.persona.profile_id.clone(),
+        ))
+    } else {
+        None
+    };
+    if (args.prompt.is_some() || args.check)
+        && let Some(native) = &native
+        && let Err(error) = native.wait_ready(Duration::from_secs(120)).await
+    {
+        let _cleanup = native.shutdown().await;
+        return Err(error);
+    }
+    let model = match &native {
+        Some(runtime) => ConfiguredModel::Native {
+            model: runtime.language_model(),
+            runtime: runtime.clone(),
+        },
+        None => build_model(&config)?,
+    };
     let vts = connect_vts(&config).await;
     let obs_runtime = connect_obs(&config).await;
     if obs_runtime.connected {
@@ -226,16 +283,23 @@ async fn run() -> Result<(), AppError> {
     let (speech, receiver) = SpeechQueue::new(config.audio.queue_capacity)?;
     let player = receiver.player();
     let speech_activity = speech.activity();
-    let tts = build_tts(&config).await?;
+    let tts = if native.is_none() {
+        build_tts(&config).await?
+    } else {
+        None
+    };
     let safety = Arc::new(build_safety(&config)?);
     let audit = build_audit(&config).await?;
     let plugin_runtime = connect_plugins(&config.plugins).await;
 
-    let memory = build_memory(&config).await?;
+    let memory = match &native {
+        Some(runtime) => native_ports::build_memory(&config, runtime.clone()).await?,
+        None => build_memory(&config).await?,
+    };
     memory.select_profile(&config.persona.profile_id).await?;
 
     if args.check {
-        return run_check(HealthContext {
+        let result = run_check(HealthContext {
             model: &model,
             vts: &vts,
             obs: &obs_runtime.health,
@@ -250,6 +314,10 @@ async fn run() -> Result<(), AppError> {
             config: &config,
         })
         .await;
+        if let Some(native) = &native {
+            native.shutdown().await?;
+        }
+        return result;
     }
 
     let startup_health = collect_health(HealthContext {
@@ -268,6 +336,9 @@ async fn run() -> Result<(), AppError> {
     })
     .await;
     let event_hub = EventHub::new(256)?;
+    if let Some(native) = &native {
+        native.attach_preview(speech.clone(), player.clone(), event_hub.clone());
+    }
     let mut automation = TemplateHost::new(
         event_hub
             .current()
@@ -294,6 +365,11 @@ async fn run() -> Result<(), AppError> {
         obs_runtime.health_handle.clone(),
         event_hub.clone(),
     );
+    let native_health_refresh = spawn_native_health_refresh(
+        native.clone(),
+        Arc::clone(&health_snapshot),
+        event_hub.clone(),
+    );
 
     let mut stage_router = StageRouter::new();
     stage_router.push(speech);
@@ -302,7 +378,13 @@ async fn run() -> Result<(), AppError> {
     let stage_output = StageOutput::new(stage_router);
     let speech_port = stage_output.speech();
     let avatar_port = stage_output.avatar();
-    let speech_task = tokio::spawn(run_speech_worker(receiver, tts, player, event_hub.clone()));
+    let speech_task = tokio::spawn(run_speech_worker(
+        receiver,
+        tts,
+        player,
+        event_hub.clone(),
+        native.clone(),
+    ));
     let events = TeeEventSink::new(ConsoleEvents, event_hub.clone());
     let live_memory = memory.clone();
     let mut runtime = Runtime::with_policy(
@@ -325,12 +407,23 @@ async fn run() -> Result<(), AppError> {
         .await?;
     let runtime = ConversationActivity::new(spawn_runtime(runtime, 32)?, automation.clone());
     if let Some(prompt) = args.prompt {
-        runtime.submit(prompt).await?;
-        automation.shutdown().await?;
-        runtime.shutdown().await?;
+        let prompt_result = runtime.submit(prompt).await;
+        if let Some(task) = &native_health_refresh {
+            task.abort();
+        }
+        let automation_result = automation.shutdown().await;
+        let runtime_result = runtime.shutdown().await;
+        let native_result = match &native {
+            Some(native) => native.shutdown().await,
+            None => Ok(()),
+        };
         drop(stage_output);
-        join_speech_worker(speech_task).await?;
-        return Ok(());
+        let speech_result = join_speech_worker(speech_task).await;
+        prompt_result?;
+        automation_result?;
+        runtime_result?;
+        native_result?;
+        return speech_result;
     }
 
     let bilibili_runtime = spawn_bilibili(
@@ -355,15 +448,26 @@ async fn run() -> Result<(), AppError> {
     );
     let control_task = spawn_control(
         &config,
-        runtime.clone(),
-        event_hub.clone(),
-        Arc::clone(&safety),
-        Arc::clone(&health_snapshot),
-        stage_output.journal(),
-        automation.clone(),
+        ControlResources {
+            runtime: runtime.clone(),
+            events: event_hub.clone(),
+            safety: Arc::clone(&safety),
+            health: Arc::clone(&health_snapshot),
+            stage: stage_output.journal(),
+            automation: automation.clone(),
+            native: native.clone(),
+        },
     )
     .await?;
-    let duplex_task = spawn_duplex(&config, runtime.clone(), automation.clone())?;
+    let duplex_task = match &native {
+        Some(native) => native_ports::spawn_duplex(
+            &config,
+            native.clone(),
+            runtime.clone(),
+            automation.clone(),
+        )?,
+        None => spawn_duplex(&config, runtime.clone(), automation.clone())?,
+    };
     let session_result = if args.serve || args.managed {
         lifecycle::wait_for_shutdown(args.managed).await
     } else {
@@ -378,13 +482,21 @@ async fn run() -> Result<(), AppError> {
     if let Some(task) = control_task {
         task.abort();
     }
+    if let Some(task) = &native_health_refresh {
+        task.abort();
+    }
     let automation_result = automation.shutdown().await;
     let shutdown_result = runtime.shutdown().await;
+    let native_result = match &native {
+        Some(native) => native.shutdown().await,
+        None => Ok(()),
+    };
     drop(stage_output);
     let speech_result = join_speech_worker(speech_task).await;
     session_result?;
     automation_result?;
     shutdown_result?;
+    native_result?;
     speech_result
 }
 
@@ -801,6 +913,22 @@ async fn publish_health_snapshot(
     }
 }
 
+fn spawn_native_health_refresh(
+    native: Option<Arc<NativeRuntime>>,
+    health_snapshot: Arc<RwLock<Vec<ComponentHealth>>>,
+    events: EventHub,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let native = native?;
+    Some(tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let health = native.health();
+            let mut snapshot = health_snapshot.write().await;
+            update_component_health(&mut snapshot, health, &events);
+        }
+    }))
+}
+
 fn spawn_obs_health_refresh(
     health_snapshot: Arc<RwLock<Vec<ComponentHealth>>>,
     obs_health: Option<std::sync::Arc<std::sync::RwLock<ComponentHealth>>>,
@@ -1045,7 +1173,7 @@ async fn collect_health(context: HealthContext<'_>) -> Vec<ComponentHealth> {
         health.push(tts.health().await);
         health.push(context.player.health().await);
     }
-    if context.config.duplex.enabled {
+    if context.config.duplex.enabled && !matches!(context.model, ConfiguredModel::Native { .. }) {
         match build_asr(context.config) {
             Ok(asr) => health.push(asr.health().await),
             Err(error) => health.push(ComponentHealth::unavailable("asr", error.to_string())),
@@ -1079,16 +1207,47 @@ async fn run_speech_worker(
     tts: Option<GptSovitsClient>,
     player: AudioPlayer,
     events: EventHub,
+    native: Option<Arc<NativeRuntime>>,
 ) {
     while let Some(job) = receiver.receive().await {
-        let Some(tts) = &tts else {
-            tracing::debug!(turn_id = ?job.turn_id, "TTS disabled; speech job skipped");
-            continue;
-        };
-        let synthesis = tokio::select! {
-            biased;
-            _ = player.wait_for_cancellation(&job) => continue,
-            result = tts.synthesize(&job.text) => result,
+        let synthesis = if let Some(native) = &native {
+            let Some(session_id) = events.current().instance_id else {
+                tracing::error!("native speech session identity is unavailable");
+                continue;
+            };
+            let identity = ai_ex_inference::RequestIdentity {
+                session_id,
+                request_id: job.sentence_id,
+                generation: job.generation(),
+            };
+            let synthesis = match native_ports::speech(native, identity, job.text.clone()) {
+                Ok(Some(synthesis)) => synthesis,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::error!(%error, "native speech unavailable");
+                    continue;
+                }
+            };
+            tokio::select! {
+                biased;
+                _ = player.wait_for_cancellation(&job) => {
+                    if let Err(error) = synthesis.cancel().await {
+                        tracing::error!(%error, "native speech cancellation failed");
+                    }
+                    continue;
+                }
+                result = synthesis.synthesize() => result,
+            }
+        } else {
+            let Some(tts) = &tts else {
+                tracing::debug!(turn_id = ?job.turn_id, "TTS disabled; speech job skipped");
+                continue;
+            };
+            tokio::select! {
+                biased;
+                _ = player.wait_for_cancellation(&job) => continue,
+                result = tts.synthesize(&job.text) => result,
+            }
         };
         match synthesis {
             Ok(audio) => {
@@ -1248,12 +1407,64 @@ struct ServiceControl {
     stage: StageJournal,
     automation: TemplateHost,
     persona: Arc<RwLock<PersonaSnapshot>>,
+    native: Option<Arc<NativeRuntime>>,
+    interaction: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[async_trait::async_trait]
 impl ControlBackend for ServiceControl {
     async fn execute(&self, command: ControlCommand) -> Result<ControlPayload, AppError> {
+        use ai_ex_domain::NativeRequest;
+        // Serialize preview admission with chat and stop commands. Preparation
+        // and status queries remain outside this short interaction lock.
+        let interactive = matches!(
+            &command,
+            ControlCommand::Submit { .. }
+                | ControlCommand::Interrupt { .. }
+                | ControlCommand::EmergencyStop
+                | ControlCommand::SetPersona { .. }
+                | ControlCommand::Native {
+                    request: NativeRequest::PreviewVoice { .. }
+                        | NativeRequest::StopPreview
+                        | NativeRequest::Remove { .. }
+                }
+        );
+        let _interaction = if interactive {
+            Some(self.interaction.lock().await)
+        } else {
+            None
+        };
         match command {
+            ControlCommand::Native { request } => {
+                request.validate()?;
+                let native = self.native.as_ref().ok_or_else(|| {
+                    AppError::unavailable("请从首页进入“准备本地伙伴”，再管理本地模型与声音")
+                })?;
+                if let NativeRequest::PreviewVoice {
+                    expected_generation,
+                    ..
+                } = &request
+                {
+                    // Reject superseded intent before interrupting a newer conversation.
+                    native.check_preview_generation(*expected_generation)?;
+                }
+                if matches!(
+                    request,
+                    NativeRequest::PreviewVoice { .. } | NativeRequest::Remove { .. }
+                ) {
+                    if matches!(request, NativeRequest::Remove { .. }) {
+                        self.stop_native_preview().await;
+                    }
+                    if let Err(error) = self.runtime.interrupt("native resource operation").await
+                        && error.kind != ErrorKind::InvalidTransition
+                    {
+                        return Err(error);
+                    }
+                }
+                let reply = native.request(request).await?;
+                reply.validate()?;
+                Ok(ControlPayload::Native(Box::new(reply)))
+            }
             ControlCommand::Automation { request } => Ok(ControlPayload::Automation(Box::new(
                 self.automation.execute(request).await?,
             ))),
@@ -1264,6 +1475,7 @@ impl ControlBackend for ServiceControl {
                         "control submit text must not be empty",
                     ));
                 }
+                self.stop_native_preview().await;
                 let pending = self.runtime.enqueue(text.to_owned()).await?;
                 tokio::spawn(async move {
                     if let Err(error) = pending.wait().await {
@@ -1273,6 +1485,7 @@ impl ControlBackend for ServiceControl {
                 Ok(ControlPayload::Accepted)
             }
             ControlCommand::Interrupt { reason } => {
+                self.stop_native_preview().await;
                 let reason = if reason.trim().is_empty() {
                     "control interrupt"
                 } else {
@@ -1304,6 +1517,9 @@ impl ControlBackend for ServiceControl {
                 let profile_id = profile.profile_id.clone();
                 let revision = profile.revision;
                 *current = profile;
+                if let Some(native) = &self.native {
+                    native.select_profile(&profile_id)?;
+                }
                 tracing::info!(%profile_id, revision, "persona changed");
                 self.events.publish_now(SystemEvent::PersonaChanged {
                     profile_id,
@@ -1312,7 +1528,13 @@ impl ControlBackend for ServiceControl {
                 Ok(ControlPayload::Accepted)
             }
             ControlCommand::Stage => Ok(ControlPayload::Stage(self.stage.snapshot())),
-            ControlCommand::Health => Ok(ControlPayload::Health(self.health.read().await.clone())),
+            ControlCommand::Health => {
+                let mut health = self.health.read().await.clone();
+                if let Some(native) = &self.native {
+                    replace_component_health(&mut health, native.health());
+                }
+                Ok(ControlPayload::Health(health))
+            }
             ControlCommand::Events { after, limit } => {
                 if limit == 0 || limit > 1_000 {
                     return Err(AppError::configuration(
@@ -1325,6 +1547,7 @@ impl ControlBackend for ServiceControl {
             }
             ControlCommand::EmergencyStop => {
                 self.safety.trigger_emergency_stop();
+                self.stop_native_preview().await;
                 let automation_result = self.automation.emergency_stop();
                 if let Err(error) = self.runtime.interrupt("emergency stop").await
                     && error.kind != ErrorKind::InvalidTransition
@@ -1338,14 +1561,31 @@ impl ControlBackend for ServiceControl {
     }
 }
 
-async fn spawn_control(
-    config: &AppConfig,
+impl ServiceControl {
+    async fn stop_native_preview(&self) {
+        if let Some(native) = &self.native
+            && let Err(error) = native
+                .request(ai_ex_domain::NativeRequest::StopPreview)
+                .await
+        {
+            tracing::error!(%error, "native preview cleanup failed");
+        }
+    }
+}
+
+struct ControlResources {
     runtime: ConversationActivity,
     events: EventHub,
     safety: Arc<SafetyGate>,
     health: Arc<RwLock<Vec<ComponentHealth>>>,
     stage: StageJournal,
     automation: TemplateHost,
+    native: Option<Arc<NativeRuntime>>,
+}
+
+async fn spawn_control(
+    config: &AppConfig,
+    resources: ControlResources,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
     if !config.control.enabled {
         return Ok(None);
@@ -1375,6 +1615,15 @@ async fn spawn_control(
         live_mode: config.persona.live_mode.clone(),
     };
     persona.validate()?;
+    let ControlResources {
+        runtime,
+        events,
+        safety,
+        health,
+        stage,
+        automation,
+        native,
+    } = resources;
     let backend = Arc::new(ServiceControl {
         runtime,
         events,
@@ -1383,6 +1632,8 @@ async fn spawn_control(
         persona: Arc::new(RwLock::new(persona)),
         stage,
         automation,
+        native,
+        interaction: Arc::new(tokio::sync::Mutex::new(())),
     });
     tracing::info!(%address, "local control server ready");
     Ok(Some(tokio::spawn(async move {

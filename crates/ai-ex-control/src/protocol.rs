@@ -16,16 +16,32 @@ pub struct ControlRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlCommand {
-    Submit { text: String },
-    Interrupt { reason: String },
+    Submit {
+        text: String,
+    },
+    Interrupt {
+        reason: String,
+    },
     Status,
     Persona,
-    Memory { request: MemoryRequest },
-    Automation { request: AutomationRequest },
-    SetPersona { profile: PersonaSnapshot },
+    Memory {
+        request: MemoryRequest,
+    },
+    Automation {
+        request: AutomationRequest,
+    },
+    Native {
+        request: ai_ex_domain::NativeRequest,
+    },
+    SetPersona {
+        profile: PersonaSnapshot,
+    },
     Health,
     Stage,
-    Events { after: u64, limit: usize },
+    Events {
+        after: u64,
+        limit: usize,
+    },
     EmergencyStop,
 }
 
@@ -37,6 +53,7 @@ pub enum ControlPayload {
     Persona(PersonaSnapshot),
     Memory(Box<MemoryReply>),
     Automation(Box<AutomationSnapshot>),
+    Native(Box<ai_ex_domain::NativeReply>),
     Health(Vec<ComponentHealth>),
     Stage(StageSnapshot),
     Events(Vec<SequencedEvent>),

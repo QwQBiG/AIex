@@ -1,10 +1,22 @@
 # 维护工具索引
 
-当前 Rust 主线使用下列 PowerShell 工具。Python 脚本保留供旧实现排查与迁移参考，不是便携桌面的运行依赖。系统职责见[架构说明](../docs/ARCHITECTURE.md)，历史代码处理条件见[遗留退役清单](../docs/LEGACY_RETIREMENT.md)。
+当前原生模型验证与发行使用 Rust `cargo xtask`；便携外层打包、架构和令牌入口仍保留下面的 PowerShell 工具。旧 Python 脚本只供历史排查与迁移参考，不是新的本地模型运行依赖。全部工程工具退役/收口仍属于 1.0 门槛，不能以原生入口可用推断仓库已零 Python。系统职责见[架构说明](../docs/ARCHITECTURE.md)，旧文件条件见[遗留退役清单](../docs/LEGACY_RETIREMENT.md)。
 
 ## 主线工具
 
 命令示例在仓库根目录的 PowerShell 7 中执行。
+
+普通用户从 `AIex.exe` 的“准备本地伙伴”完成模型准备，无需执行本页命令。原生控制、下载导入及声音向导已接入 0.9 开发候选，尚未发布；实际操作见[整体验收流程](../docs/MANUAL_TEST_PLAN.md)。
+
+| Rust 入口 | 作用与文档 |
+| --- | --- |
+| `cargo xtask native-verify` | 固定模型文件的大小、SHA256 与路径验证；见[文件验证](../docs/NATIVE_WORKERS.md#文件校验) |
+| `cargo xtask native-probe` | 显式启动自有 worker、请求/取消/退出及文件音频检查；见[进程探针](../docs/NATIVE_WORKERS.md#stdio-探针)，不会打开音频设备 |
+| `cargo xtask native-sources` | 明确输入的原生源码、registry 源包、项目 Git 源码与必要构建材料归档 |
+| `cargo xtask native-bundle` | 固定 worker、DLL、Ollama、许可和对应源码形成 Runtime ZIP 与独立 RuntimeManifest |
+| `cargo xtask native-catalog` | 用实际 Runtime ZIP/Manifest 和固定模型材料生成分发目录，不使用假摘要或浮动输入 |
+
+后三项的参数、JSON 输入及严格构建顺序统一见[原生发行工具](../xtask/NATIVE_DISTRIBUTION.md)，不在这里维护另一套参数。工具读取显式输入、拒绝覆盖已有输出，不扫描私人模型，不执行或递归展开对应源码归档。源码与最终派生目录有明确分层，避免 Runtime SHA 与源码包循环引用。
 
 | 工具 | 用途与实际参数 |
 | --- | --- |
@@ -75,6 +87,8 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 ## Rust 离线迁移与检查
 
 新增 `ai-ex-service --validate-config` 离线验证和 `ai-ex-migrate --memory-backup` 旧备份文本/向量/元数据迁移与 `ai-ex-service --reindex-memory` 当前角色索引重建；使用步骤、格式与数据边界见[完全 Rust 化记录](../docs/RUST_ONLY_MIGRATION.md)。语句分块的 Release 对照基准在 `crates/ai-ex-text/benches/sentence_stream.rs`，记忆检索与启动缓存对照在 `crates/ai-ex-memory/benches/recall.rs`；均由 Cargo 执行，不需要 Python。
+
+原生 BGE 重建使用 `ai-ex-service.exe --config <native-bootstrap.toml> --native-config <native-v1.toml> --reindex-memory`。先关闭使用这些文件的服务并备份记忆；只重建配置中当前人物的索引，不修改文本与来源。BGE 必须已准备，工具有界等待冷加载；失败不提交半套向量。日常写入仍保留两秒预算，冷启动或模型不可用时先保存文本并使用词法召回，需要时再显式重建。
 
 便携包同时提供 `ai-ex-migrate.exe`。在解压目录运行迁移器即可导入数据，无需安装 Rust；迁移文档中的 `cargo run -p ai-ex-migrate --locked --` 可替换为 `.\ai-ex-migrate.exe`，保留后续参数，并明确选择输入、全新输出和角色 ID。
 

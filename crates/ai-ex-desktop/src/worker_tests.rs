@@ -5,6 +5,8 @@ use tokio::net::TcpListener;
 
 #[path = "worker_memory_tests.rs"]
 mod memory_tests;
+#[path = "worker_native_tests.rs"]
+mod native_tests;
 
 async fn scripted_client(
     exchanges: Vec<(ControlCommand, ControlPayload)>,

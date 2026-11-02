@@ -111,6 +111,65 @@ async fn pending_count(host: &TemplateHost, expected: usize) {
     .expect("actual conversation owner releases its reservation");
 }
 
+#[tokio::test]
+async fn superseded_preview_cannot_interrupt_a_newer_conversation() {
+    use ai_ex_control::{ControlBackend, ControlCommand};
+    use ai_ex_domain::{NativeReply, NativeRequest, PersonaSnapshot};
+
+    let directory = std::env::temp_dir().join(format!("native-preview-intent-{}", Uuid::new_v4()));
+    std::fs::create_dir(&directory).unwrap();
+    let native = crate::NativeRuntime::start(directory.join("native-v1.toml"), "default".into());
+    native.wait_ready(Duration::from_secs(5)).await.unwrap();
+    let NativeReply::State(before) = native.request(NativeRequest::State).await.unwrap() else {
+        panic!("state reply");
+    };
+    native.request(NativeRequest::StopPreview).await.unwrap();
+    let (runtime, host, mut observed, _receiver, events) = fixture();
+    let pending = runtime
+        .enqueue("new conversation after stopping preview")
+        .await
+        .unwrap();
+    let release = entered(&mut observed).await;
+    let control = crate::ServiceControl {
+        runtime: runtime.clone(),
+        events: events.clone(),
+        safety: Arc::new(crate::build_safety(&ai_ex_config::AppConfig::default()).unwrap()),
+        health: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        persona: Arc::new(tokio::sync::RwLock::new(PersonaSnapshot::default())),
+        stage: ai_ex_core::StageJournal::new(8),
+        automation: host.clone(),
+        native: Some(native.clone()),
+        interaction: Arc::new(tokio::sync::Mutex::new(())),
+    };
+    let error = control
+        .execute(ControlCommand::Native {
+            request: NativeRequest::PreviewVoice {
+                voice_id: "builtin-zh".into(),
+                text: "old preview intent".into(),
+                expected_generation: before.preview_generation,
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ai_ex_domain::ErrorKind::InvalidTransition);
+    assert!(error.message.contains("试听状态已改变"));
+    assert_eq!(events.current().turns_interrupted, 0);
+    release
+        .send(())
+        .expect("newer model request remains active");
+    assert!(matches!(
+        pending.wait().await.unwrap(),
+        TurnOutcome::Completed(_)
+    ));
+    assert_eq!(events.current().turns_completed, 1);
+    runtime.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
+    native.shutdown().await.unwrap();
+    drop(control);
+    drop(native);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 async fn entered(observed: &mut mpsc::Receiver<oneshot::Sender<()>>) -> oneshot::Sender<()> {
     tokio::time::timeout(Duration::from_secs(3), observed.recv())
         .await

@@ -10,6 +10,28 @@ pub struct ManagedService {
 }
 
 impl ManagedService {
+    pub fn spawn_native(config_path: &Path, native_path: &Path) -> Result<Self, AppError> {
+        let mut command = Command::new(service_executable()?);
+        command
+            .arg("--managed")
+            .arg("--config")
+            .arg(config_path)
+            .arg("--native-setup")
+            .arg("--native-config")
+            .arg(native_path);
+        if let Some(directory) = std::env::current_exe()
+            .ok()
+            .and_then(|path| crate::portable::root(&path))
+        {
+            let log = crate::portable::service_log(&directory)?;
+            let errors = log
+                .try_clone()
+                .map_err(|error| AppError::unavailable(error.to_string()))?;
+            command.stdout(Stdio::from(log)).stderr(Stdio::from(errors));
+        }
+        Self::start_command(&mut command)
+    }
+
     pub fn spawn(
         config_path: &Path,
         api_key: Option<&str>,

@@ -193,11 +193,29 @@ where
             error: AppError::safety("control authentication failed"),
         };
     }
+    if let ControlCommand::Native { request: native } = &request.command
+        && let Err(error) = native.validate()
+    {
+        return ControlResponse::Failure {
+            request_id: Some(request.request_id),
+            error,
+        };
+    }
     match backend.execute(request.command).await {
-        Ok(payload) => ControlResponse::Success {
-            request_id: request.request_id,
-            payload,
-        },
+        Ok(payload) => {
+            if let ControlPayload::Native(reply) = &payload
+                && let Err(error) = reply.validate()
+            {
+                return ControlResponse::Failure {
+                    request_id: Some(request.request_id),
+                    error,
+                };
+            }
+            ControlResponse::Success {
+                request_id: request.request_id,
+                payload,
+            }
+        }
         Err(error) => ControlResponse::Failure {
             request_id: Some(request.request_id),
             error,

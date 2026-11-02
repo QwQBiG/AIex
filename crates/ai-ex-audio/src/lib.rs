@@ -89,6 +89,18 @@ pub struct SpeechJob {
 }
 
 impl SpeechJob {
+    pub fn stopped_snapshot(&self) -> SpeechPlaybackSnapshot {
+        SpeechPlaybackSnapshot {
+            turn_id: Some(self.turn_id),
+            sentence_id: Some(self.sentence_id),
+            ..Default::default()
+        }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn playback_snapshot(
         &self,
         position_ms: u64,
@@ -238,6 +250,7 @@ impl Drop for SpeechReservation {
     }
 }
 
+#[derive(Clone)]
 pub struct SpeechQueue {
     sender: mpsc::Sender<SpeechJob>,
     generation: Arc<AtomicU64>,
@@ -248,6 +261,65 @@ pub struct SpeechReceiver {
     receiver: mpsc::Receiver<SpeechJob>,
     generation: Arc<AtomicU64>,
     activity: SpeechActivity,
+}
+
+/// A preview shares playback cancellation and keeps speech activity reserved
+/// through synthesis and playback. Dropping it settles only its own reservation.
+pub struct PreviewSpeech {
+    job: SpeechJob,
+    _reservation: SpeechReservation,
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn preview_cleanup_keeps_newer_speech_alive_and_releases_only_its_activity() {
+        let (mut queue, mut receiver) = SpeechQueue::new(2).unwrap();
+        let player = receiver.player();
+        let preview = queue.preview_job("试听文本".into()).unwrap();
+        let old_generation = preview.job().generation();
+        assert_eq!(
+            queue.activity().snapshot(),
+            SpeechActivitySnapshot::Busy {
+                pending: 1,
+                active: false
+            }
+        );
+        SpeechPort::interrupt(&mut queue).await.unwrap();
+        queue
+            .enqueue(TurnId::new(), "新的对话".into())
+            .await
+            .unwrap();
+        assert!(!queue.stop_preview_generation(old_generation));
+        assert!(player.cancelled(preview.job()));
+        drop(preview);
+        assert_eq!(
+            queue.activity().snapshot(),
+            SpeechActivitySnapshot::Busy {
+                pending: 1,
+                active: false
+            }
+        );
+        let next = receiver.receive().await.unwrap();
+        assert!(!player.cancelled(&next));
+        assert_eq!(next.text, "新的对话");
+    }
+
+    #[test]
+    fn invalid_preview_never_reserves_speech_activity() {
+        let (queue, _receiver) = SpeechQueue::new(1).unwrap();
+        assert!(queue.preview_job(" ".into()).is_err());
+        assert!(queue.preview_job("x".repeat(4097)).is_err());
+        assert_eq!(queue.activity().snapshot(), SpeechActivitySnapshot::Idle);
+    }
+}
+
+impl PreviewSpeech {
+    pub fn job(&self) -> &SpeechJob {
+        &self.job
+    }
 }
 
 impl SpeechQueue {
@@ -276,6 +348,44 @@ impl SpeechQueue {
 
     pub fn activity(&self) -> SpeechActivity {
         self.activity.clone()
+    }
+
+    pub fn preview_job(&self, text: String) -> Result<PreviewSpeech, AppError> {
+        let text = clean_for_speech(&text);
+        if text.trim().is_empty() || text.len() > 4096 {
+            return Err(AppError::configuration("invalid speech preview text"));
+        }
+        let reservation = self.activity.reserve()?;
+        let generation = self
+            .generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        Ok(PreviewSpeech {
+            job: SpeechJob {
+                turn_id: TurnId::new(),
+                sentence_id: uuid::Uuid::new_v4(),
+                text,
+                emotion: Emotion::Neutral,
+                generation,
+            },
+            _reservation: reservation,
+        })
+    }
+
+    /// A late preview stop must not interrupt a newer conversation's playback.
+    pub fn stop_preview_generation(&self, generation: u64) -> bool {
+        self.generation
+            .compare_exchange(
+                generation,
+                generation.wrapping_add(1),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    pub fn is_generation_current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::Acquire) == generation
     }
 
     pub fn health(&self) -> ComponentHealth {

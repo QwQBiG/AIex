@@ -8,6 +8,8 @@ pub enum Destination {
     Preview,
     Connect,
     Setup,
+    Native,
+    NativeChat,
 }
 
 /// Window transitions are requests; each conversation owns its managed service.
@@ -49,6 +51,8 @@ mod tests {
             Destination::Preview,
             Destination::Connect,
             Destination::Setup,
+            Destination::Native,
+            Destination::NativeChat,
         ] {
             let context = egui::Context::default();
             let navigation = Navigation::default();

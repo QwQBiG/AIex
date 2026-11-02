@@ -83,6 +83,15 @@ try
         @{ name = 'missing-package-policy'; count = 1; message = '<missing architecture policy>'; mutate = {
             param($metadata, $policy) $policy.Remove('ai-ex-domain')
         } },
+        @{ name = 'unregistered-native-worker-directory'; count = 1; message = '<unregistered crate manifest>'; mutate = {
+            $directory = Join-Path $fixtureRoot 'native-workers/unregistered'
+            New-Item -ItemType Directory -Path $directory | Out-Null
+            '' | Set-Content -LiteralPath (Join-Path $directory 'Cargo.toml') -Encoding UTF8
+        }; cleanup = {
+            $directory = Join-Path $fixtureRoot 'native-workers/unregistered'
+            Remove-Item -LiteralPath (Join-Path $directory 'Cargo.toml')
+            Remove-Item -LiteralPath $directory
+        } },
         @{ name = 'unregistered-crate-directory'; count = 1; message = '<unregistered crate manifest>'; mutate = {
             $directory = Join-Path $fixtureRoot 'crates/unregistered'
             New-Item -ItemType Directory -Path $directory | Out-Null
@@ -107,6 +116,7 @@ try
             throw "$($case.name): expected diagnostic '$($case.message)'"
         }
         $results.Add([pscustomobject]@{ name = $case.name; status = 'passed' })
+        if ($case.cleanup) { & $case.cleanup }
     }
     [pscustomobject]@{ status = 'passed'; checked_cases = $results.Count; cases = $results } | ConvertTo-Json -Depth 4
 }

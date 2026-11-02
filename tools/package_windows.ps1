@@ -101,6 +101,8 @@ foreach ($entry in $binaries.GetEnumerator()) {
 Copy-Item -LiteralPath (Join-Path $repository 'config/ai-ex.portable.example.toml') -Destination (Join-Path $destination 'data/ai-ex.local.toml')
 [IO.File]::WriteAllText((Join-Path $destination 'AIex.portable'), "1`n", [Text.UTF8Encoding]::new($false))
 Copy-Item -LiteralPath (Join-Path $repository 'docs/PORTABLE_START.txt') -Destination (Join-Path $destination '开始使用.txt')
+Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination (Join-Path $destination 'LICENSE.txt')
+Copy-Item -LiteralPath (Join-Path $repository 'docs/PORTABLE_THIRD_PARTY.txt') -Destination (Join-Path $destination 'THIRD-PARTY-LICENSES.txt')
 
 $check = Invoke-PackageCheck (Join-Path $destination 'AIex.exe') '--check-install'
 $status = $check | ConvertFrom-Json

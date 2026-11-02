@@ -58,6 +58,8 @@ pub enum ArtifactKind {
     Configuration,
     License,
     NativeRuntime,
+    /// Corresponding source supplied as opaque data, never loaded or executed.
+    SourceArchive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

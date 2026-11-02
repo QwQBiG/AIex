@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "runtimes": [
+    {
+      "archive_bytes": 8032957,
+      "archive_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-lib.tar.bz2",
+      "version": "1.13.8",
+      "whole_archive_verified": true,
+      "target": "windows-x86_64-cpu-shared-mt-release",
+      "archive_sha256": "b8eedf41bd6d3779218887b48367bb7a3ece5aaa7667f01f69ee823a12b0a9e7",
+      "files": [
+        {
+          "path": "onnxruntime_providers_shared.dll",
+          "bytes": 104960,
+          "sha256": "551d0e1fe4c227d8542314ba718d52f4379e0c7bfe729a37c59833a884e27b4d"
+        },
+        {
+          "path": "onnxruntime.dll",
+          "bytes": 17799168,
+          "sha256": "7f66f939a881baf4f46a2216496798edf4a1429878b646d12674aa62f27d8a25"
+        },
+        {
+          "path": "sherpa-onnx-c-api.dll",
+          "bytes": 4605952,
+          "sha256": "300e0c88400903fc4cfc88be88a8ae587a24cc658653e0e1fd1c2b8dbbc68557"
+        },
+        {
+          "path": "sherpa-onnx-cxx-api.dll",
+          "bytes": 259584,
+          "sha256": "02ca46060f65d7d50f3448e7e67e608b0547c9acb274cba2f5cc6936521352b0"
+        }
+      ],
+      "id": "sherpa-onnx"
+    },
+    {
+      "commit": "33ca9628233dc8f002435e868d4c2e9f82766ca1",
+      "origin": "sherpa-onnx-1.13.8 archive",
+      "files": [
+        {
+          "path": "onnxruntime_providers_shared.dll",
+          "bytes": 104960,
+          "sha256": "551d0e1fe4c227d8542314ba718d52f4379e0c7bfe729a37c59833a884e27b4d"
+        },
+        {
+          "path": "onnxruntime.dll",
+          "bytes": 17799168,
+          "sha256": "7f66f939a881baf4f46a2216496798edf4a1429878b646d12674aa62f27d8a25"
+        }
+      ],
+      "worker_scope": "one DLL directory per worker process",
+      "version": "1.28.2",
+      "id": "onnxruntime"
+    },
+    {
+      "target": "windows-x86_64-cpu",
+      "whole_archive_verified": false,
+      "version": "0.40.11",
+      "id": "ollama",
+      "file_inventory": "ollama-cpu-files.json"
+    }
+  ]
+}

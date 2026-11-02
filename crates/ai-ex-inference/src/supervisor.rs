@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ai_ex_domain::AppError;
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::{
@@ -18,6 +18,7 @@ use crate::{
 
 const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
 const STDERR_TAIL_BYTES: usize = 8192;
+const STDERR_DRAIN_GRACE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancellationOutcome {
@@ -41,15 +42,30 @@ pub struct InferenceWorker {
     input: ChildStdin,
     replies: mpsc::Receiver<Result<WorkerReply, AppError>>,
     stdout_task: JoinHandle<()>,
-    stderr_task: JoinHandle<()>,
+    stderr_task: Option<JoinHandle<()>>,
     stderr: Arc<Mutex<Vec<u8>>>,
     active: Option<InferenceRequest>,
     cancel_requested: bool,
     terminated: bool,
+    exit_status: Option<ExitStatus>,
+    forced_termination: bool,
 }
 
 impl InferenceWorker {
     pub async fn spawn(launch: WorkerLaunch) -> Result<Self, AppError> {
+        let (_source, cancellation) = watch::channel(false);
+        Self::spawn_cancellable(launch, cancellation).await
+    }
+
+    /// Cancelling a cold model load explicitly terminates and reaps the child
+    /// before returning, so its package leases can be released safely.
+    pub async fn spawn_cancellable(
+        launch: WorkerLaunch,
+        mut cancellation: watch::Receiver<bool>,
+    ) -> Result<Self, AppError> {
+        if *cancellation.borrow() {
+            return Err(AppError::unavailable("native worker startup cancelled"));
+        }
         if !launch.executable.is_absolute()
             || !launch.executable.is_file()
             || !launch.job_directory.is_absolute()
@@ -89,24 +105,46 @@ impl InferenceWorker {
             input,
             replies,
             stdout_task,
-            stderr_task,
+            stderr_task: Some(stderr_task),
             stderr,
             active: None,
             cancel_requested: false,
             terminated: false,
+            exit_status: None,
+            forced_termination: false,
         };
-        let ready = tokio::time::timeout(launch.ready_timeout, worker.receive()).await;
-        let error = match ready {
-            Ok(Ok(WorkerReply::Ready { protocol_version }))
+        let ready = tokio::select! {
+            biased;
+            _ = startup_cancelled(&mut cancellation) => None,
+            ready = tokio::time::timeout(launch.ready_timeout, worker.receive()) => Some(ready),
+        };
+        let mut error = match ready {
+            Some(Ok(Ok(WorkerReply::Ready { protocol_version })))
                 if protocol_version == WORKER_PROTOCOL_VERSION =>
             {
                 return Ok(worker);
             }
-            Ok(Ok(_)) => AppError::protocol("native worker handshake is incompatible"),
-            Ok(Err(error)) => error,
-            Err(_) => AppError::unavailable("native worker startup timed out"),
+            Some(Ok(Ok(_))) => AppError::protocol("native worker handshake is incompatible"),
+            Some(Ok(Err(error))) => error,
+            Some(Err(_)) => AppError::unavailable("native worker startup timed out"),
+            None => AppError::unavailable("native worker startup cancelled"),
         };
-        worker.terminate().await?;
+        if let Err(cleanup) = worker.terminate().await {
+            error
+                .message
+                .push_str(&format!("; cleanup failed: {}", cleanup.message));
+        }
+        // Preserve the original kind and handshake/load failure. Launch arguments,
+        // environment and protocol input are not included in this diagnostic.
+        let diagnostics = serde_json::json!({
+            "exit_code": worker.exit_status().and_then(|status| status.code()),
+            "exit_status": worker.exit_status().map(|status| status.to_string()),
+            "forced": worker.was_force_terminated(),
+            "stderr_tail": worker.diagnostics().await,
+        });
+        error
+            .message
+            .push_str(&format!("; native startup diagnostics: {diagnostics}"));
         Err(error)
     }
 
@@ -114,9 +152,34 @@ impl InferenceWorker {
         self.child.id()
     }
 
+    /// The observed status is retained after the owned child has been reaped.
+    pub fn exit_status(&self) -> Option<ExitStatus> {
+        self.exit_status
+    }
+
+    /// Distinguishes a host-requested kill from an observed natural exit.
+    pub fn was_force_terminated(&self) -> bool {
+        self.forced_termination
+    }
+
     pub async fn diagnostics(&self) -> String {
         let tail = self.stderr.lock().await;
-        String::from_utf8_lossy(&tail).into_owned()
+        let text = String::from_utf8_lossy(&tail);
+        let mut start = text.len().saturating_sub(STDERR_TAIL_BYTES);
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        text[start..].to_owned()
+    }
+
+    async fn finish_stderr(&mut self) {
+        if let Some(mut task) = self.stderr_task.take()
+            && tokio::time::timeout(STDERR_DRAIN_GRACE, &mut task)
+                .await
+                .is_err()
+        {
+            task.abort();
+        }
     }
 
     pub async fn start(&mut self, request: InferenceRequest) -> Result<(), AppError> {
@@ -132,6 +195,22 @@ impl InferenceWorker {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// A timed-out send may have written only part of its frame. Stop the child
+    /// instead of sending another command through that incomplete stream.
+    pub async fn start_until(
+        &mut self,
+        request: InferenceRequest,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), AppError> {
+        match tokio::time::timeout_at(deadline, self.start(request)).await {
+            Ok(result) => result,
+            Err(_) => {
+                self.terminate().await?;
+                Err(AppError::unavailable("native request send timed out"))
+            }
+        }
     }
 
     /// Safe to select against cancellation: a dedicated task owns frame assembly.
@@ -214,6 +293,7 @@ impl InferenceWorker {
     }
 
     /// Give the owned worker a bounded opportunity to release native resources.
+    /// An unsuccessful shutdown is reported after reaping the child.
     pub async fn shutdown(&mut self) -> Result<(), AppError> {
         if self.terminated {
             return Ok(());
@@ -228,16 +308,25 @@ impl InferenceWorker {
             write_frame(&mut self.input, &WorkerCommand::Shutdown).await?;
             self.child.wait().await.map_err(|error| {
                 AppError::unavailable(format!("cannot wait for native worker: {error}"))
-            })?;
-            Ok::<_, AppError>(())
+            })
         })
         .await;
-        if matches!(stopped, Ok(Ok(()))) {
-            self.terminated = true;
-            Ok(())
-        } else {
-            self.terminate().await
+        match stopped {
+            Ok(Ok(status)) => {
+                self.exit_status = Some(status);
+                self.terminated = true;
+            }
+            _ => self.terminate().await?,
         }
+        self.finish_stderr().await;
+        if let Some(status) = self.exit_status
+            && !status.success()
+        {
+            return Err(AppError::unavailable(format!(
+                "native worker exited unsuccessfully during shutdown: {status}"
+            )));
+        }
+        Ok(())
     }
 
     pub async fn terminate(&mut self) -> Result<(), AppError> {
@@ -247,21 +336,40 @@ impl InferenceWorker {
             let exited = self.child.try_wait().map_err(|error| {
                 AppError::unavailable(format!("cannot query native worker: {error}"))
             })?;
-            if exited.is_none() {
-                self.child.kill().await.map_err(|error| {
-                    AppError::unavailable(format!("cannot stop native worker: {error}"))
-                })?;
-            }
+            self.exit_status = Some(match exited {
+                Some(status) => status,
+                None => {
+                    self.child.kill().await.map_err(|error| {
+                        AppError::unavailable(format!("cannot stop native worker: {error}"))
+                    })?;
+                    self.forced_termination = true;
+                    self.child.wait().await.map_err(|error| {
+                        AppError::unavailable(format!("cannot reap native worker: {error}"))
+                    })?
+                }
+            });
             self.terminated = true;
         }
+        self.finish_stderr().await;
         Ok(())
+    }
+}
+
+async fn startup_cancelled(cancellation: &mut watch::Receiver<bool>) {
+    loop {
+        let cancelled = *cancellation.borrow_and_update();
+        if cancelled || cancellation.changed().await.is_err() {
+            return;
+        }
     }
 }
 
 impl Drop for InferenceWorker {
     fn drop(&mut self) {
         self.stdout_task.abort();
-        self.stderr_task.abort();
+        if let Some(task) = &self.stderr_task {
+            task.abort();
+        }
     }
 }
 

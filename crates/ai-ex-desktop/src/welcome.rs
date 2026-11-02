@@ -15,6 +15,7 @@ pub enum Choice {
     Preview,
     Connect,
     Setup,
+    Native,
 }
 
 pub fn run(configured: bool) -> Result<Option<Choice>, AppError> {
@@ -124,6 +125,7 @@ impl Welcome {
                 ui.ctx().copy_text(error.clone());
             }
             self.button(ui, "连接设置", Choice::Setup);
+            self.button(ui, "准备本地伙伴", Choice::Native);
             self.button(ui, "先体验外形", Choice::Preview);
             if ui.button("关闭").clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -132,6 +134,12 @@ impl Welcome {
         }
         ui.weak("认识一个角色，留下一段对话。\n从你喜欢的样子开始。");
         ui.add_space(16.0);
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            self.button(ui, "准备本地伙伴", Choice::Native);
+            ui.small("在应用内准备模型、设置声音。准备后可离线交流。");
+        });
+        ui.add_space(12.0);
         theme::card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             self.button(ui, "先体验外形", Choice::Preview);
@@ -167,7 +175,7 @@ impl Welcome {
         if ui
             .add_sized(
                 [ui.available_width().min(320.0), 40.0],
-                if choice == Choice::Preview {
+                if choice == Choice::Native {
                     theme::primary_button(label)
                 } else {
                     egui::Button::new(label)

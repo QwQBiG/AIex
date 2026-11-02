@@ -12,6 +12,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 const HEALTH_REFRESH_TICKS: u8 = 40;
 
+#[path = "worker_native.rs"]
+mod native;
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod tests;
@@ -23,6 +25,10 @@ pub struct WorkerSettings {
 }
 
 pub enum WorkerCommand {
+    Native {
+        request_id: u64,
+        request: ai_ex_domain::NativeRequest,
+    },
     Submit(String),
     Interrupt,
     EmergencyStop,
@@ -38,6 +44,10 @@ pub enum WorkerCommand {
 }
 
 pub enum WorkerEvent {
+    Native {
+        request_id: u64,
+        result: Result<ai_ex_domain::NativeReply, AppError>,
+    },
     Automation {
         request_id: u64,
         result: Result<AutomationSnapshot, AppError>,
@@ -149,6 +159,10 @@ struct QueuedCommand {
 
 fn reject_command(events: &Sender<WorkerEvent>, command: WorkerCommand, message: &str) -> bool {
     let event = match command {
+        WorkerCommand::Native { request_id, .. } => WorkerEvent::Native {
+            request_id,
+            result: Err(AppError::unavailable(message)),
+        },
         WorkerCommand::Submit(text) => WorkerEvent::SubmitRejected {
             text,
             error: message.to_owned(),
@@ -585,6 +599,11 @@ async fn send_command(
         WorkerCommand::Memory { .. } => {
             return Err(AppError::protocol("memory uses a dedicated reply channel"));
         }
+        WorkerCommand::Native { .. } => {
+            return Err(AppError::protocol(
+                "native setup uses a dedicated reply channel",
+            ));
+        }
         WorkerCommand::SetPersona(profile) => (
             ControlCommand::SetPersona {
                 profile: profile.clone(),
@@ -737,10 +756,36 @@ pub(crate) async fn run_commands(
     let (status, status_rx) = tokio::sync::mpsc::channel(1);
     let (pause, pause_rx) = tokio::sync::mpsc::channel(1);
     let (stop, stop_rx) = tokio::sync::mpsc::channel(1);
+    let (native_commands, native_rx) = tokio::sync::mpsc::channel(16);
+    let (native_status, native_status_rx) = tokio::sync::mpsc::channel(16);
+    let (native_urgent, native_urgent_rx) = tokio::sync::mpsc::channel(2);
     let epoch = AtomicU64::new(0);
+    let native_epoch = AtomicU64::new(0);
     let router = async {
         while let Some(command) = commands.recv().await {
+            let command = match command {
+                WorkerCommand::Native {
+                    request_id,
+                    request,
+                } => {
+                    if !native::route(
+                        request_id,
+                        request,
+                        [&native_commands, &native_status, &native_urgent],
+                        events,
+                        &native_epoch,
+                    ) {
+                        return;
+                    }
+                    continue;
+                }
+                command => command,
+            };
             if matches!(&command, WorkerCommand::EmergencyStop) {
+                let _previous =
+                    native_epoch.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                        value.checked_add(1)
+                    });
                 let _previous = epoch.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
                     value.checked_add(1)
                 });
@@ -813,6 +858,9 @@ pub(crate) async fn run_commands(
                 execute_automation(client, pause_rx, events, None),
                 execute_automation(client, stop_rx, events, None),
                 poll_automation(client, status_rx, events),
+                native::execute(client, native_rx, events, &native_epoch),
+                native::execute(client, native_status_rx, events, &native_epoch),
+                native::execute(client, native_urgent_rx, events, &native_epoch),
             );
         } => {},
     }

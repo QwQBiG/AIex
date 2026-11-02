@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+mod preview_tests;
 mod speech;
 
 use std::collections::VecDeque;
@@ -129,6 +131,7 @@ impl EventHub {
                 }
                 SystemEvent::SentenceReady { .. } => snapshot.sentences_ready += 1,
                 SystemEvent::SpeechPlayback { .. }
+                | SystemEvent::SpeechPreviewStarted { .. }
                 | SystemEvent::SpeechProgress { .. }
                 | SystemEvent::SpeechCancelled => {}
                 SystemEvent::EmotionChanged { emotion, .. } => {
@@ -159,12 +162,21 @@ impl EventHub {
     }
 
     pub fn publish_now(&self, event: SystemEvent) {
+        self.publish_if(event, || true);
+    }
+
+    /// Evaluate a cancellation-clock predicate while holding event ordering.
+    /// The predicate must only read state and must not publish another event.
+    pub fn publish_if(&self, event: SystemEvent, predicate: impl FnOnce() -> bool) -> bool {
         // Assign sequence, update snapshot and broadcast under the same lock.
         // Audio and runtime publishers must never expose reordered events.
         let mut history = self
             .history
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !predicate() {
+            return false;
+        }
         let sequence = self.sequence.fetch_add(1, Ordering::AcqRel) + 1;
         self.update(&event, sequence);
         let event = SequencedEvent { sequence, event };
@@ -173,6 +185,7 @@ impl EventHub {
         }
         history.push_back(event.clone());
         let _ignored = self.events.send(event);
+        true
     }
 }
 

@@ -29,6 +29,7 @@ MANIFEST
 
 # PyInstaller
 *.manifest
+!native-workers/sherpa/worker.manifest
 *.spec
 
 # Installer logs
@@ -134,6 +135,13 @@ target/
 config/ai-ex.local.toml
 config/ai-ex.migration-test.toml
 config/control.token
+config/native-bootstrap.toml
+config/native-control.token
+config/native-memory.jsonl
+config/native-automation.jsonl
+config/native-v1.toml
+config/native-v1.toml.*
+config/native/
 memory_db/*.jsonl
 
 # Keep cache directory structure but ignore audio files

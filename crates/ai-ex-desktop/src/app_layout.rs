@@ -9,6 +9,7 @@ pub(super) enum Page {
     Scenes,
     Memory,
     Settings,
+    Native,
 }
 
 impl DesktopApp {
@@ -62,6 +63,7 @@ impl DesktopApp {
                                 }
                                 Page::Settings => self.show_settings_page(ui),
                                 Page::Memory => self.show_memory_page(ui),
+                                Page::Native => self.show_native_page(ui),
                                 Page::Conversation => unreachable!(),
                             });
                     });
@@ -110,6 +112,7 @@ impl DesktopApp {
                 (Page::Scenes, "场景组合"),
                 (Page::Memory, "记忆"),
                 (Page::Settings, "设置与诊断"),
+                (Page::Native, "本地模型与声音"),
             ] {
                 let selected = self.page == page;
                 let button = egui::Button::new(
@@ -133,6 +136,21 @@ impl DesktopApp {
                 }
             }
         });
+        if self.native_mode && self.native.microphone_restart_required() {
+            ui.horizontal_wrapped(|ui| {
+                ui.weak("麦克风开关重新进入对话后生效。");
+                if self.owned_service.is_some() {
+                    if ui.small_button("重新进入本地对话").clicked() {
+                        self.request_navigation(
+                            ui.ctx(),
+                            crate::navigation::Destination::NativeChat,
+                        );
+                    }
+                } else {
+                    ui.weak("请由启动服务的窗口重启服务。");
+                }
+            });
+        }
         if let Some(error) = self.last_error.clone() {
             ui.horizontal(|ui| {
                 if ui.small_button("收起错误").clicked() {
@@ -399,5 +417,48 @@ impl DesktopApp {
                 )),
             );
         }
+    }
+
+    fn show_native_page(&mut self, ui: &mut egui::Ui) {
+        if !self.native_mode {
+            ui.heading("本地模型与声音");
+            ui.label("当前使用外部连接。可以打开独立的本地准备流程，原连接设置会保留。");
+            if ui.button("准备本地伙伴").clicked() {
+                self.request_navigation(ui.ctx(), crate::navigation::Destination::Native);
+            }
+            return;
+        }
+        let connected = self.state.connection == ConnectionState::Connected;
+        if !connected && ui.button("返回首页重试").clicked() {
+            self.request_navigation(ui.ctx(), crate::navigation::Destination::Home);
+        }
+        for command in self
+            .native
+            .show(ui, &self.active_persona.profile_id, connected)
+        {
+            if let Err(error) = self.worker.commands.send(command)
+                && let WorkerCommand::Native { request_id, .. } = error.0
+            {
+                self.native.receive(
+                    request_id,
+                    Err(ai_ex_domain::AppError::unavailable(
+                        "桌面网络工作线程已停止。",
+                    )),
+                );
+            }
+        }
+        if self.native.take_open_chat() {
+            if self.native.microphone_restart_required() && self.owned_service.is_some() {
+                self.request_navigation(ui.ctx(), crate::navigation::Destination::NativeChat);
+            } else {
+                if self.native.microphone_restart_required() {
+                    self.notice =
+                        Some("麦克风开关重新进入对话后生效，请由启动服务的窗口重启服务。".into());
+                }
+                self.page = Page::Conversation;
+            }
+        }
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(200));
     }
 }

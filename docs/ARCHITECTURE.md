@@ -1,8 +1,8 @@
 # 当前架构与扩展边界
 
-本文描述 0.8.0-alpha.1 的数字伙伴工作室架构，包含记忆与合成回放工作流。交付范围和验证见[0.8 版本说明](releases/0.8.0-alpha.1.md)；此前基线见[0.7.1 版本说明](releases/0.7.1-alpha.1.md)，迁移进度和注明范围的历史检查点见[Rust 迁移记录](RUST_ONLY_MIGRATION.md)。源码、资源与历史内容的归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，验收入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
+本文描述当前 0.9.0-alpha.1 开发候选的数字伙伴架构，保留 0.8 的记忆、人物和合成回放，并增加服务持有的原生模型准备与推理。0.9 尚未发布，范围和验证见[待发布说明](releases/0.9.0-alpha.1.md)；已发布基线见[0.8 版本说明](releases/0.8.0-alpha.1.md)。源码和资源归属见[项目目录](PROJECT_LAYOUT.md)，未来设计见[演进路线](DIGITAL_HUMAN_ROADMAP.md)，操作入口见[整体验收流程](MANUAL_TEST_PLAN.md)。
 
-原生化验证另有 `ai-ex-model-catalog` 和 `ai-ex-inference` 两个基础模块，分别拥有固定清单/文件校验与受控推理协议/进程生命周期。当前仍处于 M0，实际结果与产品接入门槛见[原生验证证据](NATIVE_M0_EVIDENCE.md)；服务与桌面的装配沿用下述已发布结构。
+M0 的 Windows CPU 文件链路已通过，产品接入及未测范围单独记录在[原生验证证据](NATIVE_M0_EVIDENCE.md)。0.9 接入不表示 0.10 的真实 Windows 动作、旧记忆完整迁移或 1.0 的 Python 退役已经完成。
 
 ## 1. 运行结构与状态归属
 
@@ -10,6 +10,10 @@
 flowchart TB
     UI[桌面工作室 / 本机偏好] <-->|认证 TCP JSONL| Control[控制服务]
     Control --> Runtime[Runtime actor / 会话唯一写入者]
+    Control --> Native[NativeRuntime / 原生设置与组件操作]
+    Native --> Manager[ModelManager / 固定目录与租约]
+    Native --> Pool[原生适配器 / 自有工作进程]
+    Pool --> Ports
     Live[直播编排 / 全双工输入] --> Runtime
     Runtime --> Engine[ConversationEngine / 状态与上下文]
     Runtime <--> Ports[模型与记忆端口]
@@ -25,7 +29,7 @@ flowchart TB
 
 这是运行时数据流，箭头不表示 Cargo 依赖。`ai-ex-service` 是组合根，选择模型、装配端口、启动工作线程和控制服务；桌面不实例化模型或音频设备。离线工作室独立运行，只展示本地预览。
 
-便携分发层只负责启动与装配：`AIex.exe` 通过同目录标记选择 `data` 配置，欢迎页决定进入离线预览或连接设置。进入对话后仍由独立服务持有运行时。程序根据自身位置选择工作目录，从快捷方式或其他目录启动也能定位包内配置；显式传入 `--config` 时保留源码模式的路径语义。托管服务日志写入 `data/logs/service.log`，生命周期仍由桌面的管道管理。打包脚本只复制明确列出的分发文件，不扫描个人配置与记忆目录。
+便携分发层只负责启动与装配：`AIex.exe` 通过同目录标记选择 `data` 配置，欢迎页可进入离线预览、本地准备或外部连接设置。进入对话后仍由独立服务持有运行时。程序根据自身位置选择工作目录，从快捷方式或其他目录启动也能定位包内配置；显式传入 `--config` 时保留源码模式的路径语义。托管服务日志写入 `data/logs/service.log`，生命周期仍由桌面的管道管理。发行工具只读取明确输入，不扫描个人配置与记忆目录。
 
 桌面内部按职责组织：
 
@@ -34,6 +38,7 @@ flowchart TB
 | `main` / `launch` / `session` / `navigation` | 启动参数校验、页面切换、配置与本次进程凭据、服务和客户端装配 |
 | `app` / `app_layout` / `app_chat` | 事件归并、页面布局、输入和消息显示 |
 | `app_reflex` | 合成回放的操作草稿、服务确认应答与结果未知提示，不持有执行会话 |
+| `native_onboarding` / `native_panel` / `worker_native` | 独立原生启动入口、准备向导、设备草稿和异步控制；只展示服务确认的设置与组件状态 |
 | `ui/theme` | 欢迎、设置、预览、聊天和记忆共用的字体与配色，不依赖聊天状态 |
 | `ui/test_support` | 仅供测试复用的离屏绘制与输入辅助，不进入发布程序 |
 | `worker` | 独立读轮询与命令发送、优先控制、事件补齐与恢复；回放的暂停、停止和查询使用独立有界通道 |
@@ -52,6 +57,8 @@ flowchart TB
 | `template_host::TemplateHost` | 持有回放会话、控制代次和仲裁锁；替换或关闭前排空已开始的步骤与审计 |
 | `conversation_activity::ConversationActivity` | 登记排队和活动对话的占用，由实际执行任务结算；客户端断开不提前宣称空闲 |
 | `strategy_loop` | 可选慢速观察 worker，只产生 Keep / FocusRegion 建议，由宿主在完整快步骤边界核验 |
+| `native_runtime` | 原生配置 CAS、模型操作、私人声音绑定、共享托管对话客户端及试听生命周期 |
+| `native_ports` | 将本地语音、转写和嵌入接入现有端口；每句话读取当前声音和播放开关 |
 
 快循环通过 `ai-ex-automation::ReflexSession` 执行动作；慢观察不取得输入或暂停恢复权限。当前宿主只构造 `DryRunAutomationPort`，处理清单图片，不接入真实 Windows 捕获和键鼠。聊天、转写和语音占用参与同一暂停仲裁，完整合同与限制见[模板回放](TEMPLATE_GAME.md)。
 
@@ -70,10 +77,12 @@ PNG 插画通过 `include_bytes!` 编译进桌面程序，解码结果与纹理�
 | 服务人格快照与命令应答 | 服务控制后端 | 对应命令成功后确认；不由桌面草稿推断成功 |
 | 编辑草稿、收藏、外形、启动组合 | `ai-ex-desktop` | 草稿与已应用内容分离；资源校验和服务确认后切换 |
 | 合成回放会话与控制租约 | 服务 `TemplateHost` 与 `ai-ex-automation::ReflexSession` | 宿主仲裁操作与占用；旧代次不能恢复执行，慢观察结果在下一完整步骤边界核验 |
+| 模型文件与准备操作 | `ai-ex-model-manager` | 只接受固定目录中的 ID，完整校验与原子提交后才暴露就绪；活动租约阻止移除 |
+| 原生设置、声音及进程 | 服务 `NativeRuntime` 与适配器 | 版本检查和备份后生效；只管理本应用启动的进程，桌面不持有数据库、设备或模型句柄 |
 
 ## 2. 模块地图
 
-核心 workspace 有 30 个包；桌面是第 31 个受架构检查的包，有独立清单和锁文件。
+当前主工作区包含 36 个包（含 `xtask`）；桌面使用独立清单和锁文件，`native-workers` 独立工作区包含 4 包。三个清单的 `cargo metadata --no-deps --locked --offline` 合计 41 包，原生进程通过协议接入服务。
 
 | 职责 | 实际包 | 主要边界 |
 | --- | --- | --- |
@@ -88,6 +97,10 @@ PNG 插画通过 `include_bytes!` 编译进桌面程序，解码结果与纹理�
 | 扩展与动作 | `ai-ex-plugin`、`ai-ex-vision`、`ai-ex-safety`、`ai-ex-automation`、`ai-ex-audit` | 插件协议、只读观察、能力许可、受控反射会话和审计；当前回放使用合成端口 |
 | 观察与控制 | `ai-ex-observability`、`ai-ex-control`、`ai-ex-ui-model` | 运行状态事件、认证控制协议、框架无关的 UI 投影 |
 | 入口 | `ai-ex-service`、`ai-ex-migrate`、`ai-ex-desktop` | 服务装配、旧配置迁移、独立桌面 |
+| 原生组件 | `ai-ex-model-catalog`、`ai-ex-model-manager`、`ai-ex-inference`、`ai-ex-native-models` | 固定模型/运行库清单、下载导入事务、租约、受控 stdio、进程与请求生命周期 |
+| Windows 平台 | `ai-ex-platform-windows` | 自有 Job 进程树、监听端口身份与平台 FFI；不发送真实键鼠 |
+| 工程入口 | `xtask` | 文件/进程探针、固定分发与对应源码归档；不代替设备验收 |
+| 原生进程 | `ai-ex-native-worker-support`、`ai-ex-native-bge-worker`、`ai-ex-native-sherpa-worker`、`ai-ex-native-qwen-worker` | 独立原生依赖与进程，不向桌面暴露模型句柄 |
 
 源码入口：[运行时](../crates/ai-ex-core/src/runtime.rs)、[端口](../crates/ai-ex-core/src/ports.rs)、[服务装配](../crates/ai-ex-service/src/main.rs)、[桌面入口](../crates/ai-ex-desktop/src/main.rs)。仓库没有统一名为 `ai-ex-adapters` 的包。
 
@@ -106,7 +119,7 @@ flowchart LR
 
 网络、音频设备、窗口和具体后端不进入领域层。适配器按自身需要依赖契约，不要求全部依赖 core。桌面允许复用配置、客户端和投影类型，但不能直接依赖 core、service 或具体适配器。
 
-[架构检查脚本](../tools/check_architecture.ps1)读取两个 Cargo 清单的真实元数据，与逐包允许列表比较。所有本地路径依赖都必须对应已登记的包名和实际 Cargo 清单路径；同名包指向其他目录或注册表依赖也会被拒绝。检查器还扫描 `crates/` 直接子目录，拒绝未登记的 Cargo 包，不递归扫描构建目录或嵌套测试资料。脚本路径相对于自身位置解析，可从其他工作目录执行。
+[架构检查脚本](../tools/check_architecture.ps1)读取主工作区、桌面和原生进程三个 Cargo 清单的真实元数据，与逐包允许列表比较。所有本地路径依赖都必须对应已登记的包名和实际 Cargo 清单路径；同名包指向其他目录或注册表依赖也会被拒绝。检查器还扫描 `crates/` 和 `native-workers/` 直接子目录，拒绝未登记的 Cargo 包，不递归扫描构建目录或嵌套测试资料。脚本路径相对于自身位置解析，可从其他工作目录执行。
 
 ```powershell
 pwsh -NoProfile -File tools/check_architecture.ps1
@@ -114,7 +127,25 @@ pwsh -NoProfile -File tools/check_architecture.ps1 -ProbeViolation
 pwsh -NoProfile -File tools/test_architecture.ps1
 ```
 
-第一条应成功并报告 31 个包；第二条在内存中的元数据注入领域层/桌面反向依赖，**应退出 1**。第三条执行检查器自身的正反例回归，**应退出 0**；回归使用隔离测试目录和元数据，不修改真实 Cargo 清单。CI 同时执行门禁与回归。该检查约束包登记、路径和内部依赖方向，不检查第三方依赖是否含 I/O，也不能替代运行时测试、代码评审或进程隔离。
+第一条应成功并报告 41 个包；第二条在内存中的元数据注入领域层/桌面反向依赖，**应退出 1**。第三条执行检查器自身的正反例回归，**应退出 0**；回归使用隔离测试目录和元数据，不修改真实 Cargo 清单。该检查约束包登记、路径和内部依赖方向，不检查第三方依赖是否含 I/O，也不能替代运行时测试、代码评审或进程隔离。
+
+### 原生模型准备与推理
+
+依赖保持“桌面 → 控制协议 → 服务 → 适配器”。`ai-ex-model-manager` 只依赖领域与固定清单，不反向依赖服务或 UI；`ai-ex-native-models` 实现语音、转写和嵌入端口，服务装配它们与共享的托管 Ollama 客户端。自有业务、GUI、原生工作进程禁止 unsafe；Windows 平台 FFI 集中在 `ai-ex-platform-windows`，原生库的第三方内部实现不由 GUI 承担。
+
+`NativeRuntime::start` 只创建控制与后台校验任务。坏配置、缺模型、加载失败保留在对应状态中，不令整个服务退出；控制界面、错误查询、人物预览和其他可用能力继续工作。首次向导使用独立 `native-bootstrap.toml` 和 `native-v1.toml`，原有外部连接配置保留。配置更新核对预期 revision，先备份原字节，再写新版本；存储目录变更需排空任务、关闭适配器并后台重开管理器。麦克风开关重新进入对话生效，播放和人物声音在后续语句读取。
+
+固定 `DistributionCatalog` 将模型与运行包分开声明。只有已知 ID 可下载或导入；HTTPS 输入固定版本、大小和 SHA256，离线导入不信任替代清单，也不执行包内代码。每次操作用唯一 staging，流式复制并校验全量文件，拒绝 ZIP 路径穿越、大小写重复、未声明文件与重解析点。校验后原子提交，失败/取消不破坏当前安装；已校验模型可先保存，等待匹配运行包时保持未准备。安装路径是 `<packages>/{models,runtimes}/<id>/<revision>/{manifest.json,data/}`，模型文件位于 `data`，元数据位于外层。
+
+管理器拥有准备任务和 OS 目录锁；控制调用短应答返回操作 UUID，界面随后查询进度。就绪表示文件与固定运行依赖兼容，模型冷加载另有 worker 状态。重启先核验运行包再核验模型；SHA 每 64 KiB 检查取消，退出先发取消再等待任务收束和目录锁释放。租约覆盖模型及其依赖运行包，直到进程真正回收才释放；移除需先卸载相关 worker 或清理自有 Ollama 私有链接。仅卸载某项能力不会永久关闭共享 pool。
+
+Sherpa、Qwen 和 BGE 按后端隔离 worker 与 DLL 目录；模型大文件由租约声明的公共 packages 根读取，不复制到每个请求目录。控制通过受限 stdio，音频只传私有作业文件引用。请求携带会话、请求 ID、代次及模型引用；取消只匹配该身份。尚未提交的请求不再开始；活动计算先协作取消，必要时等待至多一秒后终止并回收对应工作进程，完成回收才确认取消。旧请求不重放，旧清理不能卸载或杀死新请求。
+
+本地对话通过独立 Ollama 原生实例和私有 loopback 地址运行；固定 GGUF 与四个控制文件由同一清单校验，使用非思考预设。Windows Job 持有本应用启动的进程树，核对监听端口属于该树。服务不会停止用户自行运行的 Ollama，也不使用它的私人模型目录。
+
+试听复用 `SpeechQueue`、`SpeechActivity`、`AudioPlayer` 与 `EventHub`，不另建播放器。默认播放关闭；保存开关后仍需单独点击试听。试听持有自己的代次与活动 guard，直到合成取消/回收和实际播放结束。`SpeechPreviewStarted` 只更新声音投影，不增加聊天轮次；事件在 EventHub 的有序锁内核对当前代次。停止只撤销自己的代次，带原 turn/sentence 的 inactive 事件不能清掉较新的嘴型或字幕。关闭服务释放试听上下文里的队列 sender，避免阻塞播放线程退出。
+
+完整的固定输入与源码归档流程见[原生发行工具](../xtask/NATIVE_DISTRIBUTION.md)。运行包的对应源码归档作为已声明字节保存，不递归展开或执行；配置、私人声音、凭据和记忆不进入公开分发材料。
 
 ## 4. 一轮对话的完整流转
 
@@ -125,7 +156,7 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 5. 生成完成后提交完整回答到记忆。生成结束与声音播放结束是两个独立时刻。
 6. 打断取消未完成生成和旧语音代次，回滚未完成回合的短期历史；已开始的持久写入会继续完成。
 
-模型、召回、排队与末尾分句等待都处于可取消范围。单次语音/模型取消及外形调用采用 250 毫秒异步等待上限。语音先停，外形后清理；失败产生诊断事件，下一轮可重试。同步阻塞适配器、事件发布和存储写入不受这个上限统一约束。
+模型、召回、排队与末尾分句等待都处于可取消范围。核心的单次端口取消及外形调用采用 250 毫秒异步等待上限；原生适配器另外持有请求和租约，后台实际回收遵守上文的 worker 合同，不能把核心等待超时视为进程已经退出。语音先停，外形后清理；失败产生诊断事件。同步阻塞适配器、事件发布和存储写入不受同一上限统一约束。
 
 StageRouter 依据 `Speech` 能力分组清理；外形扩展应与语音执行器分开。VTS/OBS 尚未接入原生播放时间线，仍消费生成时的舞台动作。详见[声音与表达](SPEECH_PRESENTATION.md)。
 
@@ -141,6 +172,7 @@ StageRouter 依据 `Speech` 能力分组清理；外形扩展应与语音执行�
 - **外形包**：包内图片和状态映射；不持有会话逻辑，不执行包内代码。
 - **场景包**：当前已应用的角色、外形和偏好组合；图片随包复制，私人记忆和服务凭据不导出。
 - **启动组合**：桌面本机快照，按配置绝对路径与控制地址区分；复用已有服务时先预览确认。
+- **私人声音绑定**：`native-v1.toml` 以 `profile_id` 绑定声音 ID；参考 WAV 的规范化副本与原文属于私人设置，不随人物或场景导出。
 
 导入先校验版本、资源路径、大小和图片内容，再进入确认流程。连接超时可能导致客户端无法确定服务是否已应用，此时保留本地外形并提示重新确认；没有跨进程事务回滚。持久记忆存在本机，召回内容会随请求发送到用户选择的模型。
 

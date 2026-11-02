@@ -5,6 +5,8 @@ use ai_ex_domain::AppError;
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
     pub config: PathBuf,
+    pub native_config: Option<PathBuf>,
+    pub native_setup: bool,
     pub check: bool,
     pub validate_config: bool,
     pub reindex_memory: bool,
@@ -27,6 +29,8 @@ pub struct Args {
 impl Args {
     pub fn parse(values: impl IntoIterator<Item = String>) -> Result<Self, AppError> {
         let mut config = PathBuf::from("config/ai-ex.example.toml");
+        let mut native_config = None;
+        let mut native_setup = false;
         let mut check = false;
         let mut validate_config = false;
         let mut reindex_memory = false;
@@ -54,6 +58,13 @@ impl Args {
                     config = PathBuf::from(path);
                 }
                 "--check" => check = true,
+                "--native-config" => {
+                    let path = values.next().ok_or_else(|| {
+                        AppError::configuration("--native-config requires a path")
+                    })?;
+                    native_config = Some(PathBuf::from(path));
+                }
+                "--native-setup" => native_setup = true,
                 "--validate-config" => validate_config = true,
                 "--reindex-memory" => reindex_memory = true,
                 "--maintain-media" => maintain_media = true,
@@ -179,8 +190,15 @@ impl Args {
                 "--validate-config, --reindex-memory, --maintain-media, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --template-game, --prompt, and vision analysis modes are mutually exclusive",
             ));
         }
+        if native_setup && !(serve || managed) {
+            return Err(AppError::configuration(
+                "--native-setup requires --serve or --managed",
+            ));
+        }
         Ok(Self {
             config,
+            native_config,
+            native_setup,
             check,
             validate_config,
             reindex_memory,
@@ -426,5 +444,36 @@ mod template_game_args_tests {
                 .is_err()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod native_args_tests {
+    use super::*;
+
+    #[test]
+    fn native_setup_is_an_explicit_background_modifier() {
+        assert!(Args::parse(["--native-setup".into()]).is_err());
+        assert!(Args::parse(["--native-config".into()]).is_err());
+        let args = Args::parse([
+            "--managed".into(),
+            "--native-setup".into(),
+            "--native-config".into(),
+            "中文 目录/native-v1.toml".into(),
+        ])
+        .unwrap();
+        assert!(args.native_setup && args.managed);
+        assert_eq!(
+            args.native_config.unwrap(),
+            PathBuf::from("中文 目录/native-v1.toml")
+        );
+        assert!(
+            Args::parse([
+                "--managed".into(),
+                "--native-setup".into(),
+                "--check".into()
+            ])
+            .is_err()
+        );
     }
 }

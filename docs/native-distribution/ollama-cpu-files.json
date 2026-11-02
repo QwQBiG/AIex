@@ -1,0 +1,300 @@
+{
+  "schema_version": 1,
+  "runtime": "ollama",
+  "version": "0.40.11",
+  "scope": "windows-x86_64-cpu-subset",
+  "source_asset_id": 672866806,
+  "release_url": "https://github.com/ollama/ollama/releases/tag/v0.40.11",
+  "source_commit": "675150d6ad2747df1e218ef59de9194bc4a7e538",
+  "whole_archive_verified": false,
+  "files": [
+    {
+      "path": "lib/ollama/ggml-base.dll",
+      "bytes": 821640,
+      "sha256": "ba4ad104529f415fd88f794e4dfa68df97248c7461402aee92af6b523947811f",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-alderlake.dll",
+      "bytes": 1733512,
+      "sha256": "75564b4f585f79e975d1e6eeab2106d0929c28011dc7dcdc95aa6fc269df315d",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-cannonlake.dll",
+      "bytes": 2020232,
+      "sha256": "0ae723747af1e9bc71fda9e1dbd683cc5b3298ac7ec76ae724cf12750ae2a505",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-cascadelake.dll",
+      "bytes": 1990024,
+      "sha256": "021bf22e821e7cb833973b911b91bbc03c22eda8e915be8b376ae8de0c82e2d8",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-cooperlake.dll",
+      "bytes": 1988488,
+      "sha256": "bdfb95f90667cf99337cbf830b821251e7abc8359bb86090ac7913de0fa87214",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-haswell.dll",
+      "bytes": 1740680,
+      "sha256": "d6d52e2d98ce597abe088d16c048c1d6b3ed76920709fa3fb5ae39421d5a0d03",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-icelake.dll",
+      "bytes": 1997704,
+      "sha256": "243c6f4887bd6033214d491bff250898785819697acdd0342ebb4df251cae858",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-ivybridge.dll",
+      "bytes": 1619336,
+      "sha256": "6be40a217c46fffc194b9a86f89cd0ef5a69178b87510289c37e081cda0cd03d",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-piledriver.dll",
+      "bytes": 1625480,
+      "sha256": "ae4fdad20ac18d658d69fee1c3ba323cc84873c4ac98c8533c5e15cdc01432db",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-sandybridge.dll",
+      "bytes": 1638792,
+      "sha256": "ec99c30f13f11ef39ca189fdf65dc8388ab41dd30a5cf9848d2c4d354704fef0",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-sapphirerapids.dll",
+      "bytes": 2289544,
+      "sha256": "f7361586b152dca00daa257ae353f44671c11953ee7e18f5f0507207d3cd1a11",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-skylakex.dll",
+      "bytes": 2013064,
+      "sha256": "2f80886382a74a151fce70caf553cadad9beaccb215bfd84230874662d0f55ae",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-sse42.dll",
+      "bytes": 1264008,
+      "sha256": "8fb13b4c37548edd91a5947f88f0e3bbfa50e7e9f1f926cb0aee0096e97faa2b",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-x64.dll",
+      "bytes": 1250696,
+      "sha256": "d47c30627539de8f4a07874d2ae1622d77b07a0304779e12484cb349688d833d",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml-cpu-zen4.dll",
+      "bytes": 1996168,
+      "sha256": "bbdd4266daed27241ce11e333a39d08df6a182714c7502e4b21836137c4556f9",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/ggml.dll",
+      "bytes": 49032,
+      "sha256": "c6151483ade5a7cda93e232225e1389d0876a1ec5a17136ac5d430455b986861",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/GO_LICENSE",
+      "bytes": 182211,
+      "sha256": "4285a95875d7a3ae3790910d59ee88f82339d0ba37b1cbadde4124113bd04308",
+      "crc32_matches_central": true,
+      "signature_status": null,
+      "signer": null,
+      "signer_thumbprint": null
+    },
+    {
+      "path": "lib/ollama/libc++.dll",
+      "bytes": 1767816,
+      "sha256": "950aa36d3f37745e5f91863946040c50e75f34bcd1979a89ee41643367203977",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/libllama-common.dll",
+      "bytes": 4373896,
+      "sha256": "3c33123fcd12868fbb42b0adea503efe56903e09c82ede13576524b340be1a36",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/libllama-quantize-impl.dll",
+      "bytes": 83848,
+      "sha256": "23b9618665fc53486e468e68c7fa681a46d34787d412d12215e6461b530b019d",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/libllama-server-impl.dll",
+      "bytes": 2837384,
+      "sha256": "f2daaf651180dfc7eb1427f2fea4175d3760795359e59c22a09b7683cf8edf3e",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/libllama.dll",
+      "bytes": 3922312,
+      "sha256": "9e19b4021af356b336806c73dc173d666ac0fd36adf4cd1190e58d968720851d",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/libmtmd.dll",
+      "bytes": 1536904,
+      "sha256": "0427478c3e2248486e337af40d0b754ff57149665d72be5bb9064802a06a36b8",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/libomp.dll",
+      "bytes": 965000,
+      "sha256": "6064f5edad85160e25dc89d244d99f69b67a02ec338a9a071d550d873a3ac7f1",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/libunwind.dll",
+      "bytes": 107912,
+      "sha256": "abf46cf91bd3be2bbcb939b98bdcdcd7b9be392ba61fe64b7f437f4781e108a1",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/libwinpthread-1.dll",
+      "bytes": 390024,
+      "sha256": "95deff0e85ae07ecf58424c96264c581f70829c6f5e050a4abe036a9c3a841f5",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/llama-quantize.exe",
+      "bytes": 22920,
+      "sha256": "95f13e0b8b2ed93d903c7a1fd3dd0265524e4a5d0ef154c22b5326219c337f2d",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/llama-server.exe",
+      "bytes": 22920,
+      "sha256": "1d15a5a52f25bd6402d77861e480936cdac56d6a05d53586634a5d9543511b40",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/LLAMA_CPP_LICENSE",
+      "bytes": 1099,
+      "sha256": "bcd8ec749126d45cb06737d0690295d73df4b6e7e194205bcf91190368f27285",
+      "crc32_matches_central": true,
+      "signature_status": null,
+      "signer": null,
+      "signer_thumbprint": null
+    },
+    {
+      "path": "lib/ollama/LLAMA_CPP_VENDORS_LICENSE",
+      "bytes": 7424,
+      "sha256": "7547ae6372a35e7382898dd9f5519ebc16e93095f69c2466b5b74b617c33d4da",
+      "crc32_matches_central": true,
+      "signature_status": null,
+      "signer": null,
+      "signer_thumbprint": null
+    },
+    {
+      "path": "ollama.exe",
+      "bytes": 38019464,
+      "sha256": "cc00918e2d25577969c929a1004be054781b8bff25819c1be19ca2f7b7bb4012",
+      "crc32_matches_central": true,
+      "signature_status": "Valid",
+      "signer": "CN=Ollama Inc., O=Ollama Inc., L=Toronto, S=Ontario, C=CA, SERIALNUMBER=2713355, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Ontario, OID.1.3.6.1.4.1.311.60.2.1.3=CA",
+      "signer_thumbprint": "716CD3BC8C02361431A18F56F98C72DE88066103"
+    },
+    {
+      "path": "lib/ollama/CPP_HTTPLIB_LICENSE",
+      "bytes": 1097,
+      "sha256": "bb546eae5924d8ee842e0e567e6d533c5824bdebccf605f99a5b3429034e6697",
+      "crc32_matches_central": true,
+      "signature_status": null,
+      "signer": null,
+      "signer_thumbprint": null
+    }
+  ]
+}

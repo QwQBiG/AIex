@@ -13,7 +13,8 @@ async fn main() {
     let mut input = BufReader::new(tokio::io::stdin());
     let mut output = tokio::io::stdout();
     if mode == "exit" {
-        return;
+        eprintln!("{}NATIVE_LOAD_FAILED: fixture protobuf", "x".repeat(10_000));
+        std::process::exit(1);
     }
     if mode == "slow-ready" {
         std::thread::sleep(std::time::Duration::from_secs(60));
@@ -30,6 +31,9 @@ async fn main() {
     )
     .await
     .unwrap();
+    if mode == "ready-no-read" {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
     while let Some(command) = read_frame::<_, WorkerCommand>(&mut input).await.unwrap() {
         match command {
             WorkerCommand::Run { request } => {
@@ -40,7 +44,7 @@ async fn main() {
                     continue;
                 }
                 if mode == "crash" {
-                    return;
+                    std::process::exit(1);
                 }
                 eprintln!("{}", "diagnostics".repeat(2000));
                 let mut identity = request.identity;
@@ -92,6 +96,7 @@ async fn main() {
                     .await
                     .unwrap();
             }
+            WorkerCommand::Shutdown if mode == "shutdown-failure" => std::process::exit(1),
             WorkerCommand::Shutdown => return,
         }
     }

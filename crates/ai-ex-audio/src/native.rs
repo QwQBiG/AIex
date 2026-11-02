@@ -13,11 +13,11 @@ mod tests;
 
 const MAX_DECODED_SAMPLES: usize = 48_000 * 2 * 120;
 
-struct PlaybackGuard<'a, F: Fn(SpeechPlaybackSnapshot)>(&'a F);
+struct PlaybackGuard<'a, F: Fn(SpeechPlaybackSnapshot)>(&'a F, SpeechPlaybackSnapshot);
 
 impl<F: Fn(SpeechPlaybackSnapshot)> Drop for PlaybackGuard<'_, F> {
     fn drop(&mut self) {
-        (self.0)(SpeechPlaybackSnapshot::default());
+        (self.0)(self.1.clone());
     }
 }
 
@@ -65,7 +65,7 @@ impl AudioPlayer {
                 sink.stop();
                 return Ok(());
             }
-            let _guard = PlaybackGuard(&observer);
+            let _guard = PlaybackGuard(&observer, job.stopped_snapshot());
             let report = |position_ms| {
                 observer(job.playback_snapshot(
                     position_ms,

@@ -87,6 +87,8 @@ pub struct DesktopApp {
     memory: crate::memory_panel::MemoryPanel,
     reflex: reflex::ReflexPanel,
     reflex_runtime_ready: bool,
+    native: crate::native_panel::NativePanel,
+    native_mode: bool,
 }
 
 impl DesktopApp {
@@ -149,6 +151,8 @@ impl DesktopApp {
             memory: Default::default(),
             reflex: Default::default(),
             reflex_runtime_ready: false,
+            native: Default::default(),
+            native_mode: false,
         }
     }
 
@@ -159,6 +163,16 @@ impl DesktopApp {
 
     pub fn with_service(mut self, service: Option<crate::service_process::ManagedService>) -> Self {
         self.owned_service = service;
+        self
+    }
+
+    pub fn with_native_setup(mut self, start_in_chat: bool) -> Self {
+        self.page = if start_in_chat {
+            layout::Page::Conversation
+        } else {
+            layout::Page::Native
+        };
+        self.native_mode = true;
         self
     }
 
@@ -197,6 +211,9 @@ impl DesktopApp {
     fn drain_events(&mut self) {
         while let Ok(event) = self.worker.events.try_recv() {
             match event {
+                WorkerEvent::Native { request_id, result } => {
+                    self.native.receive(request_id, result)
+                }
                 WorkerEvent::Automation { request_id, result } => {
                     self.sync_reflex_identity();
                     self.reflex.receive(Some(request_id), result);
@@ -210,6 +227,7 @@ impl DesktopApp {
                     self.reflex.disconnected();
                     if !connected {
                         self.persona_synced = false;
+                        self.native.disconnected();
                     }
                     self.push_log(if connected {
                         "control connected"
@@ -267,6 +285,11 @@ impl DesktopApp {
                         && snapshot.last_sequence < self.state.runtime.last_sequence
                     {
                         continue;
+                    }
+                    if self.state.runtime.instance_id.is_some()
+                        && snapshot.instance_id != self.state.runtime.instance_id
+                    {
+                        self.native.runtime_restarted();
                     }
                     self.state.recover_snapshot(snapshot);
                     self.reflex_runtime_ready = true;

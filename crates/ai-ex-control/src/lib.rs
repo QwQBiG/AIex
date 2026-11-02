@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod client;
+#[cfg(test)]
+mod native_tests;
 mod protocol;
 mod server;
 
@@ -11,6 +13,7 @@ pub use ai_ex_domain::{
     AutomationPauseReason, AutomationRequest, AutomationResumeEligibility, AutomationSessionPhase,
     AutomationSessionSnapshot, AutomationSnapshot, AutomationStepOutcome, AutomationTemplateMode,
 };
+pub use ai_ex_domain::{NativeReply, NativeRequest};
 pub use client::ControlClient;
 pub use protocol::{ControlCommand, ControlPayload, ControlRequest, ControlResponse, MemoryReply};
 pub use server::{ControlBackend, ControlServer};

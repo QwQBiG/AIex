@@ -6,7 +6,8 @@ impl RuntimeSnapshot {
     /// Shared by the service snapshot and client event replay.
     pub fn observe_speech_event(&mut self, event: &SystemEvent) {
         match event {
-            SystemEvent::TurnStarted { turn_id, .. } => {
+            SystemEvent::TurnStarted { turn_id, .. }
+            | SystemEvent::SpeechPreviewStarted { turn_id } => {
                 self.speech_turn = Some(*turn_id);
                 self.speech_cancelled = false;
                 self.playback = Default::default();
@@ -22,8 +23,12 @@ impl RuntimeSnapshot {
                 self.current_emotion = None;
             }
             SystemEvent::SpeechPlayback { playback }
-                if !playback.active
+                if (!playback.active
+                    && (playback.sentence_id.is_none()
+                        || (playback.sentence_id == self.playback.sentence_id
+                            && playback.turn_id == self.playback.turn_id)))
                     || (!self.speech_cancelled
+                        && playback.active
                         && (self.speech_turn.is_none()
                             || self.speech_turn == playback.turn_id)) =>
             {

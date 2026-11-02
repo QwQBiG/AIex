@@ -7,6 +7,26 @@ use crate::*;
 
 const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
+#[test]
+fn corresponding_sources_are_opaque_archives_not_executable_artifacts() {
+    let mut artifact = Artifact {
+        path: "sources/corresponding-sources.zip".into(),
+        kind: ArtifactKind::SourceArchive,
+        bytes: 3,
+        sha256: ABC_SHA256.into(),
+    };
+    assert!(artifact.validate().is_ok());
+    artifact.path = "sources/source.tar.gz".into();
+    assert!(artifact.validate().is_ok());
+    artifact.path = "sources/export.py".into();
+    assert!(artifact.validate().is_err());
+    artifact.path = "sources/corresponding-sources.zip".into();
+    artifact.kind = ArtifactKind::NativeRuntime;
+    assert!(artifact.validate().is_err());
+    artifact.kind = ArtifactKind::Model;
+    assert!(artifact.validate().is_err());
+}
+
 fn manifest() -> ModelManifest {
     ModelManifest {
         id: "fixture-encoder".to_owned(),

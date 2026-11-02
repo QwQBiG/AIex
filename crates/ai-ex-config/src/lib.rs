@@ -2,6 +2,7 @@
 
 pub mod appearance;
 pub mod character;
+pub mod native;
 pub mod scene;
 
 #[cfg(test)]

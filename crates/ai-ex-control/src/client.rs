@@ -23,6 +23,22 @@ pub struct ControlClient {
 mod tests;
 
 impl ControlClient {
+    pub async fn native(
+        &self,
+        request: ai_ex_domain::NativeRequest,
+    ) -> Result<ai_ex_domain::NativeReply, AppError> {
+        request.validate()?;
+        match self.send(ControlCommand::Native { request }).await? {
+            ControlPayload::Native(reply) => {
+                reply.validate()?;
+                Ok(*reply)
+            }
+            _ => Err(AppError::protocol(
+                "native control returned an unexpected payload",
+            )),
+        }
+    }
+
     pub fn new(
         address: &str,
         token: impl Into<String>,

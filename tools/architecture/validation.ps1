@@ -86,17 +86,21 @@ function Get-ArchitectureViolations
         }
     }
 
-    # Package directories are direct children of crates; build output is not a package inventory.
-    $cratesRoot = Join-Path $WorkspaceRoot 'crates'
-    foreach ($directory in Get-ChildItem -LiteralPath $cratesRoot -Directory -Force)
+    # Scan source package roots only, not nested build or test fixture directories.
+    foreach ($sourceRoot in @('crates', 'native-workers'))
     {
-        $manifest = Join-Path $directory.FullName 'Cargo.toml'
-        if ((Test-Path -LiteralPath $manifest -PathType Leaf) -and
-            !$manifests.Contains((Get-ArchitectureManifestPath $manifest)))
+        $packageRoot = Join-Path $WorkspaceRoot $sourceRoot
+        if (!(Test-Path -LiteralPath $packageRoot -PathType Container)) { continue }
+        foreach ($directory in Get-ChildItem -LiteralPath $packageRoot -Directory -Force)
         {
-            $violations.Add([pscustomobject]@{
-                package = $directory.Name; dependency = '<unregistered crate manifest>'; manifest = $manifest
-            })
+            $manifest = Join-Path $directory.FullName 'Cargo.toml'
+            if ((Test-Path -LiteralPath $manifest -PathType Leaf) -and
+                !$manifests.Contains((Get-ArchitectureManifestPath $manifest)))
+            {
+                $violations.Add([pscustomobject]@{
+                    package = $directory.Name; dependency = '<unregistered crate manifest>'; manifest = $manifest
+                })
+            }
         }
     }
     return $violations.ToArray()

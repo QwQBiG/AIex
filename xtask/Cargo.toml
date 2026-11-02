@@ -1,0 +1,21 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+ai-ex-inference = { path = "../crates/ai-ex-inference" }
+ai-ex-model-catalog = { path = "../crates/ai-ex-model-catalog" }
+ai-ex-model-manager = { path = "../crates/ai-ex-model-manager" }
+ai-ex-ollama = { path = "../crates/ai-ex-ollama" }
+ring = "0.17.14"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+zip = { version = "=2.6.1", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

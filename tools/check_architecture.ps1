@@ -8,6 +8,7 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $allowed = @{
+    'xtask' = @('ai-ex-inference', 'ai-ex-model-catalog', 'ai-ex-model-manager', 'ai-ex-ollama')
     'ai-ex-domain' = @()
     'ai-ex-protocol' = @('ai-ex-domain')
     'ai-ex-event-bus' = @('ai-ex-domain', 'ai-ex-protocol')
@@ -25,7 +26,8 @@ $allowed = @{
     'ai-ex-audio' = @('ai-ex-core', 'ai-ex-domain', 'ai-ex-text', 'ai-ex-stage')
     'ai-ex-memory' = @('ai-ex-core', 'ai-ex-domain')
     'ai-ex-deepseek' = @('ai-ex-core', 'ai-ex-domain')
-    'ai-ex-ollama' = @('ai-ex-core', 'ai-ex-domain')
+    'ai-ex-ollama' = @('ai-ex-core', 'ai-ex-domain', 'ai-ex-platform-windows')
+    'ai-ex-platform-windows' = @()
     'ai-ex-koboldcpp' = @('ai-ex-core', 'ai-ex-domain')
     'ai-ex-tts' = @('ai-ex-domain')
     'ai-ex-vts' = @('ai-ex-core', 'ai-ex-domain', 'ai-ex-stage')
@@ -38,13 +40,20 @@ $allowed = @{
     'ai-ex-ui-model' = @('ai-ex-domain', 'ai-ex-observability')
     'ai-ex-migrate' = @('ai-ex-config', 'ai-ex-domain', 'ai-ex-memory')
     'ai-ex-model-catalog' = @('ai-ex-domain')
+    'ai-ex-model-manager' = @('ai-ex-domain', 'ai-ex-model-catalog')
+    'ai-ex-native-models' = @('ai-ex-core', 'ai-ex-domain', 'ai-ex-duplex', 'ai-ex-config', 'ai-ex-inference', 'ai-ex-model-catalog', 'ai-ex-model-manager')
     'ai-ex-inference' = @('ai-ex-domain', 'ai-ex-model-catalog')
+    'ai-ex-native-worker-support' = @('ai-ex-domain', 'ai-ex-inference', 'ai-ex-model-catalog')
+    'ai-ex-native-bge-worker' = @('ai-ex-native-worker-support')
+    'ai-ex-native-sherpa-worker' = @('ai-ex-native-worker-support')
+    'ai-ex-native-qwen-worker' = @('ai-ex-native-worker-support')
     'ai-ex-desktop' = @('ai-ex-config', 'ai-ex-control', 'ai-ex-domain', 'ai-ex-observability', 'ai-ex-ui-model')
     'ai-ex-service' = @(
         'ai-ex-asr', 'ai-ex-audit', 'ai-ex-audio', 'ai-ex-automation', 'ai-ex-bilibili', 'ai-ex-capture',
         'ai-ex-config', 'ai-ex-control', 'ai-ex-core', 'ai-ex-domain', 'ai-ex-event-bus',
         'ai-ex-deepseek',
         'ai-ex-duplex', 'ai-ex-koboldcpp', 'ai-ex-memory', 'ai-ex-observability',
+        'ai-ex-model-catalog', 'ai-ex-model-manager', 'ai-ex-native-models', 'ai-ex-inference',
         'ai-ex-ollama',
         'ai-ex-plugin',
         'ai-ex-safety', 'ai-ex-stage', 'ai-ex-stage-obs', 'ai-ex-tts', 'ai-ex-vision', 'ai-ex-vts'
@@ -65,9 +74,16 @@ if ($LASTEXITCODE -ne 0)
     throw 'desktop cargo metadata failed'
 }
 $desktopMetadata = $desktopMetadata | ConvertFrom-Json
-$packages = @($metadata.packages) + @($desktopMetadata.packages)
+$nativeMetadata = cargo metadata --manifest-path (Join-Path $workspaceRoot 'native-workers/Cargo.toml') --no-deps --locked --offline --format-version 1
+if ($LASTEXITCODE -ne 0)
+{
+    throw 'native worker cargo metadata failed'
+}
+$nativeMetadata = $nativeMetadata | ConvertFrom-Json
+$documents = @($metadata, $desktopMetadata, $nativeMetadata)
+$packages = @($documents | ForEach-Object { $_.packages })
 $workspaceIds = [Collections.Generic.HashSet[string]]::new(
-    [string[]](@($metadata.workspace_members) + @($desktopMetadata.workspace_members))
+    [string[]]@($documents | ForEach-Object { $_.workspace_members })
 )
 if ($ProbeViolation)
 {
@@ -83,7 +99,7 @@ if ($ProbeViolation)
     }
 }
 $violations = @(Get-ArchitectureViolations -WorkspaceRoot $workspaceRoot `
-    -Metadata @($metadata, $desktopMetadata) -Allowed $allowed)
+    -Metadata $documents -Allowed $allowed)
 
 if ($violations.Count -gt 0)
 {
@@ -99,4 +115,5 @@ if ($violations.Count -gt 0)
     checked_packages = $workspaceIds.Count
     workspace_packages = @($metadata.workspace_members).Count
     desktop_packages = @($desktopMetadata.workspace_members).Count
+    native_worker_packages = @($nativeMetadata.workspace_members).Count
 } | ConvertTo-Json -Compress

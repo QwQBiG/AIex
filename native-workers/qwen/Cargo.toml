@@ -1,0 +1,17 @@
+[package]
+name = "ai-ex-native-qwen-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ai-ex-native-worker-support.workspace = true
+serde.workspace = true
+tokio.workspace = true
+ort.workspace = true
+wavekat-tts = { version = "=0.0.5", features = ["qwen3-tts"] }
+
+[lints]
+workspace = true

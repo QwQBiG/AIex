@@ -8,9 +8,15 @@ mod memory;
 mod memory_policy;
 pub use memory_policy::MemoryRecallPolicy;
 mod memory_knowledge;
+mod native_control;
 mod persona;
 mod playback;
 mod stage_telemetry;
+pub use native_control::{
+    NATIVE_MAX_DOCUMENT_BYTES, NATIVE_MAX_ERROR_BYTES, NATIVE_MAX_PACKAGES, NativeLicense,
+    NativeOperation, NativeOperationPhase, NativePackage, NativePackageKind, NativePackageState,
+    NativeReply, NativeRequest, NativeState,
+};
 
 pub use automation::{
     AUTOMATION_MAX_ACTIONS, AUTOMATION_MAX_ERROR_BYTES, AUTOMATION_MAX_FRAMES,
