@@ -3,6 +3,7 @@ param(
     [ValidateSet('core', 'desktop', 'native')][string]$Workspace = 'core',
     [ValidateSet('check', 'build', 'test', 'clippy', 'verify')][string]$Task = 'check',
     [ValidatePattern('^[A-Za-z0-9_-]+$')][string[]]$Package = @(),
+    [string]$TestFilter,
     [ValidateRange(1, 16)][int]$Jobs = 2,
     [ValidateRange(1, 1048576)][int]$MinimumFreeGiB = 10,
     [switch]$KeepIncremental,
@@ -12,6 +13,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($PSBoundParameters.ContainsKey('TestFilter') -and
+    ($Task -ne 'test' -or [string]::IsNullOrWhiteSpace($TestFilter) -or
+        $TestFilter.StartsWith('-') -or $TestFilter -match '\p{Cc}')) {
+    throw 'TestFilter requires Task=test and a nonempty test name without control characters or a leading dash.'
+}
 $repository = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $manifest = switch ($Workspace) {
     'core' { Join-Path $repository 'Cargo.toml' }
@@ -29,7 +35,7 @@ $required = [long]$MinimumFreeGiB * 1GB
 if ($free -lt $required) {
     throw "Insufficient free disk space: $free bytes available, $required required. Inspect tools/manage_build_cache.ps1 first."
 }
-$incremental = if ($KeepIncremental) { '1' } elseif ($Task -in @('test', 'clippy', 'verify')) { '0' } else { $env:CARGO_INCREMENTAL }
+$incremental = if ($KeepIncremental) { '1' } elseif ($Release -or $Task -in @('test', 'clippy', 'verify')) { '0' } else { $env:CARGO_INCREMENTAL }
 if (-not $incremental) { $incremental = '1' }
 $base = @('--manifest-path', $manifest, '--all-features', '--locked')
 if ($Package.Count) {
@@ -46,6 +52,7 @@ $commands = foreach ($step in $steps) {
     } else {
         @($step) + $base + $(if ($step -eq 'clippy') { @('--all-targets', '--', '-D', 'warnings') } else { @() })
     }
+    if ($step -eq 'test' -and $TestFilter) { $arguments += @('--', $TestFilter) }
     [pscustomobject]@{ program = 'cargo'; arguments = $arguments }
 }
 if ($Plan) {
@@ -58,6 +65,13 @@ if ($Plan) {
 $names = @('CARGO_TARGET_DIR', 'CARGO_INCREMENTAL', 'CARGO_BUILD_JOBS')
 $previous = @{}
 foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+[void][IO.Directory]::CreateDirectory($target)
+$leasePath = Join-Path $target '.development.lock'
+try {
+    $lease = [IO.File]::Open($leasePath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+} catch [IO.IOException] {
+    throw "Development target is already in use or inaccessible: $target. Wait for the current task to finish before starting another."
+}
 Push-Location -LiteralPath $repository
 try {
     $env:CARGO_TARGET_DIR = $target
@@ -71,4 +85,5 @@ try {
 } finally {
     Pop-Location
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }
+    $lease.Dispose()
 }

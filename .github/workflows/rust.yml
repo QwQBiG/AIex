@@ -44,6 +44,10 @@ jobs:
         shell: pwsh
         run: ./tools/test_architecture.ps1
 
+      - name: Test development entry points
+        shell: pwsh
+        run: ./tools/test_development.ps1
+
       - name: Confirm forbidden dependencies are rejected
         shell: pwsh
         run: |

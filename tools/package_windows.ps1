@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory,
+    [ValidateRange(1, 16)][int]$Jobs = 2,
+    [ValidateRange(1, 1048576)][int]$MinimumFreeGiB = 10,
     [switch]$SkipBuild,
     [switch]$Offline
 )
@@ -62,19 +64,22 @@ foreach ($path in @($destination, $archive, $checksum)) {
 }
 
 if (-not $SkipBuild) {
-    $buildArgs = @('build', '--release', '--locked')
-    if ($Offline) { $buildArgs += '--offline' }
-    & cargo @buildArgs --manifest-path (Join-Path $repository 'Cargo.toml') -p ai-ex-service -p ai-ex-migrate -p ai-ex-platform-windows --all-features
+    $development = Join-Path $PSScriptRoot 'dev.ps1'
+    $build = @{ Task = 'build'; Release = $true; Offline = $Offline; Jobs = $Jobs; MinimumFreeGiB = $MinimumFreeGiB }
+    & $development @build -Workspace core -Package @('ai-ex-service', 'ai-ex-migrate', 'ai-ex-platform-windows')
     if ($LASTEXITCODE -ne 0) { throw 'Core executable release build failed.' }
-    & cargo @buildArgs --manifest-path (Join-Path $repository 'crates/ai-ex-desktop/Cargo.toml')
+    & $development @build -Workspace desktop
     if ($LASTEXITCODE -ne 0) { throw 'Desktop release build failed.' }
 }
 
+# Match the development entry point even when the caller has a target override.
+$coreTarget = Join-Path $repository 'target'
+$desktopTarget = Join-Path $repository 'crates/ai-ex-desktop/target'
 $binaries = @{
-    'AIex.exe' = Join-Path $desktop.target_directory 'release/ai-ex-desktop.exe'
-    'ai-ex-service.exe' = Join-Path $core.target_directory 'release/ai-ex-service.exe'
-    'ai-ex-migrate.exe' = Join-Path $core.target_directory 'release/ai-ex-migrate.exe'
-    'ai-ex-platform-helper.exe' = Join-Path $core.target_directory 'release/ai-ex-platform-helper.exe'
+    'AIex.exe' = Join-Path $desktopTarget 'release/ai-ex-desktop.exe'
+    'ai-ex-service.exe' = Join-Path $coreTarget 'release/ai-ex-service.exe'
+    'ai-ex-migrate.exe' = Join-Path $coreTarget 'release/ai-ex-migrate.exe'
+    'ai-ex-platform-helper.exe' = Join-Path $coreTarget 'release/ai-ex-platform-helper.exe'
 }
 foreach ($path in $binaries.Values) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Release executable missing: $path" }

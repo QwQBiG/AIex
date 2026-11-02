@@ -94,14 +94,24 @@
 
 以下命令在仓库根目录的 PowerShell 中执行。源码需要 **Rust 1.96 或更新的兼容版本**及对应工具链的 Windows 链接器；首次构建需要下载依赖。
 
-### 1. 构建两个程序
+### 1. 通过统一入口构建
 
 ```powershell
-cargo build -p ai-ex-service --all-features --locked
-cargo build --manifest-path crates/ai-ex-desktop/Cargo.toml --locked
+./tools/dev.ps1 -Workspace core -Task build -Package ai-ex-service,ai-ex-migrate,ai-ex-platform-windows
+./tools/dev.ps1 -Workspace desktop -Task build
 ```
 
-核心 workspace 和独立桌面包分别构建。构建只准备程序，语音输出与麦克风是否启用仍由配置控制。
+核心与原生工作进程共用根 `target`，桌面固定使用自己的 `target`。统一入口默认 2 个构建任务，检查剩余空间，并拒绝另一个统一入口同时占用相同目录；构建只准备程序，设备是否启用仍由配置控制。
+
+日常先检查改动所在的包，需要时筛选具体测试；完整验证留到交付前执行：
+
+```powershell
+./tools/dev.ps1 -Task check -Package ai-ex-core
+./tools/dev.ps1 -Task test -Package ai-ex-service -TestFilter native_desktop
+./tools/dev.ps1 -Workspace native -Task test -Package ai-ex-native-worker-support
+```
+
+已有依赖时可加 `-Offline`，只看执行计划可加 `-Plan`；`-Task verify` 顺序执行格式、测试和严格检查。release 默认关闭增量缓存，日常开发与一次性验证的缓存策略见[维护工具](tools/README.md#构建空间与缓存)。
 
 ### 2. 先预览外形
 
