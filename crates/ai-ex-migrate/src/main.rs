@@ -60,7 +60,7 @@ async fn run() -> Result<(), AppError> {
             "Closed Chroma snapshot copy: ai-ex-migrate --chroma-copy-export --source CLOSED_SNAPSHOT --working-copy NEW_DIR --native-server CHROMA.EXE --server-sha256 SHA256 --collection NAME --tenant TENANT --database DATABASE --output NEW_SNAPSHOT.json [--entity-collection NAME]. The pinned native server opens only the working copy; source files stay read-locked and unchanged. Close the legacy application first."
         );
         println!(
-            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nMultimodal dataclass snapshot: ai-ex-migrate --multimodal-memory --input SNAPSHOT.json --output NEW.jsonl --profile ID\nThis mode accepts explicitly exported dataclass JSON arrays, not an existing legacy backup format.\nChroma export: ai-ex-migrate --chroma-export --url URL --collection NAME --tenant TENANT --database DATABASE --output SNAPSHOT.json [--entity-collection NAME]\nChroma snapshot: ai-ex-migrate --chroma-snapshot --input SNAPSHOT.json --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nThe Chroma bridge uses the read-only v2 API. Entity candidates retain declared source associations and unknown subjects remain unconfirmed.\nOutputs must be new files. Sources and complete metadata are retained. Backups with vectors require an explicit embedding space."
+            "AIex Rust migration\nConfiguration: ai-ex-migrate [--input OLD.json] [--preview | --output NEW.toml]\nMemory backup: ai-ex-migrate --memory-backup --input OLD.json.gz --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nMultimodal dataclass snapshot: ai-ex-migrate --multimodal-memory --input SNAPSHOT.json --output NEW.jsonl --profile ID\nThis mode accepts explicitly exported dataclass JSON arrays, not an existing legacy backup format.\nChroma export: ai-ex-migrate --chroma-export --url URL --collection NAME --tenant TENANT --database DATABASE --output SNAPSHOT.json [--entity-collection NAME]\nChroma snapshot: ai-ex-migrate --chroma-snapshot --input SNAPSHOT.json --output NEW.jsonl --profile ID [--utc-offset-minutes MINUTES] [--embedding-space NAME]\nThe Chroma bridge uses the read-only v2 API. Entity candidates retain declared source associations and unknown subjects remain unconfirmed.\nOutputs must be new files. Sources and complete metadata are retained. Backups with vectors require an explicit embedding space."
         );
         return Ok(());
     }
@@ -99,9 +99,10 @@ async fn run() -> Result<(), AppError> {
         return migrate_memory(arguments.into_iter(), mode).await;
     }
     let (input, output) = parse_args(arguments.into_iter())?;
-    if tokio::fs::try_exists(&output)
-        .await
-        .map_err(|error| AppError::unavailable(format!("cannot inspect output path: {error}")))?
+    if let Some(output) = &output
+        && tokio::fs::try_exists(output).await.map_err(|error| {
+            AppError::unavailable(format!("cannot inspect output path: {error}"))
+        })?
     {
         return Err(AppError::configuration(format!(
             "refusing to overwrite existing output {}",
@@ -128,29 +129,58 @@ async fn run() -> Result<(), AppError> {
             error.column()
         ))
     })?;
+    let source: serde_json::Value = serde_json::from_slice(&content)
+        .map_err(|error| AppError::configuration(format!("invalid legacy JSON: {error}")))?;
+    let unmapped = legacy::unmapped_fields(&source);
     let migration = legacy.migrate();
     migration.config.validate()?;
     let output_content = toml::to_string_pretty(&migration.config)
         .map_err(|error| AppError::protocol(format!("cannot encode migrated TOML: {error}")))?;
-    write_new_atomic(&output, output_content.as_bytes()).await?;
-    println!("Migrated configuration written to {}", output.display());
+    if let Some(output) = output {
+        write_new_atomic(&output, output_content.as_bytes()).await?;
+        println!("Migrated configuration written to {}", output.display());
+    } else {
+        print!("{output_content}");
+    }
     for warning in migration.warnings {
         eprintln!("warning: {warning}");
+    }
+    for field in unmapped {
+        eprintln!("warning: unmapped legacy field {field:?}");
     }
     Ok(())
 }
 
-fn parse_args(arguments: impl Iterator<Item = String>) -> Result<(PathBuf, PathBuf), AppError> {
+fn parse_args(
+    arguments: impl Iterator<Item = String>,
+) -> Result<(PathBuf, Option<PathBuf>), AppError> {
     let mut arguments = arguments;
     let mut input = PathBuf::from("config.json");
-    let mut output = PathBuf::from("config/ai-ex.local.toml");
+    let mut input_set = false;
+    let mut output = None;
+    let mut preview = false;
     while let Some(argument) = arguments.next() {
+        if argument == "--preview" {
+            if preview {
+                return Err(AppError::configuration("--preview must not be repeated"));
+            }
+            preview = true;
+            continue;
+        }
         let value = arguments
             .next()
             .ok_or_else(|| AppError::configuration(format!("{argument} requires a path")))?;
+        if value.is_empty() || value.starts_with("--") {
+            return Err(AppError::configuration(format!(
+                "{argument} requires a path"
+            )));
+        }
         match argument.as_str() {
-            "--input" => input = PathBuf::from(value),
-            "--output" => output = PathBuf::from(value),
+            "--input" if !input_set => {
+                input = PathBuf::from(value);
+                input_set = true;
+            }
+            "--output" if output.is_none() => output = Some(PathBuf::from(value)),
             _ => {
                 return Err(AppError::configuration(format!(
                     "unknown migration argument: {argument}",
@@ -158,7 +188,19 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> Result<(PathBuf, PathB
             }
         }
     }
-    Ok((input, output))
+    if preview && output.is_some() {
+        return Err(AppError::configuration(
+            "--preview and --output are mutually exclusive",
+        ));
+    }
+    Ok((
+        input,
+        if preview {
+            None
+        } else {
+            Some(output.unwrap_or_else(|| PathBuf::from("config/ai-ex.local.toml")))
+        },
+    ))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -268,12 +310,47 @@ mod tests {
         .expect("arguments parse");
 
         assert_eq!(input, PathBuf::from("old.json"));
-        assert_eq!(output, PathBuf::from("new.toml"));
+        assert_eq!(output, Some(PathBuf::from("new.toml")));
     }
 
     #[test]
     fn rejects_unknown_argument() {
         assert!(parse_args(["--force", "yes"].into_iter().map(str::to_owned)).is_err());
+    }
+
+    #[test]
+    fn preview_rejects_output_and_duplicate_flags() {
+        let (_, output) = parse_args(
+            ["--input", "old.json", "--preview"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(output, None);
+        assert!(
+            parse_args(
+                ["--preview", "--output", "new.toml"]
+                    .into_iter()
+                    .map(str::to_owned)
+            )
+            .is_err()
+        );
+        assert!(parse_args(["--preview", "--preview"].into_iter().map(str::to_owned)).is_err());
+        assert!(parse_args(["--input", "--preview"].into_iter().map(str::to_owned)).is_err());
+    }
+
+    #[test]
+    fn identifies_unmapped_fields_without_including_values() {
+        let source = serde_json::json!({
+            "ollama_url": "mapped", "password": "private-value",
+            "agent": {"safety": {"emergency_key": "F12", "extra": "private-value"}},
+            "performance": {"other": true},
+            "emotion_hotkey_map": {"happy": "F1"}
+        });
+        assert_eq!(
+            legacy::unmapped_fields(&source),
+            ["agent.safety.extra", "password", "performance.other"]
+        );
     }
 }
 

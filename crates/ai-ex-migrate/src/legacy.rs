@@ -60,6 +60,70 @@ pub struct Migration {
     pub warnings: Vec<String>,
 }
 
+/// Report keys that this migration does not interpret without printing their values.
+pub fn unmapped_fields(value: &serde_json::Value) -> Vec<String> {
+    const ROOT: &[&str] = &[
+        "ollama_url",
+        "ollama_model",
+        "llm_backend",
+        "koboldcpp_url",
+        "koboldcpp_max_context_length",
+        "koboldcpp_max_length",
+        "koboldcpp_temperature",
+        "vts_port",
+        "enable_expression_control",
+        "enable_voice_cloning",
+        "emotion_hotkey_map",
+        "sovits_url",
+        "sovits_timeout",
+        "sovits_language",
+        "sovits_ref_audio_path",
+        "sovits_prompt_text",
+        "sovits_prompt_lang",
+        "enable_memory_features",
+        "performance",
+        "agent",
+    ];
+    fn collect(value: &serde_json::Value, prefix: &str, known: &[&str], out: &mut Vec<String>) {
+        if let Some(object) = value.as_object() {
+            for key in object.keys() {
+                if !known.contains(&key.as_str()) {
+                    out.push(format!("{prefix}{key}"));
+                }
+            }
+        }
+    }
+    let mut fields = Vec::new();
+    collect(value, "", ROOT, &mut fields);
+    collect(
+        &value["performance"],
+        "performance.",
+        &["max_queue_size"],
+        &mut fields,
+    );
+    let agent = &value["agent"];
+    collect(
+        agent,
+        "agent.",
+        &["enabled", "vision", "safety"],
+        &mut fields,
+    );
+    collect(
+        &agent["vision"],
+        "agent.vision.",
+        &["vision_model"],
+        &mut fields,
+    );
+    collect(
+        &agent["safety"],
+        "agent.safety.",
+        &["emergency_key"],
+        &mut fields,
+    );
+    fields.sort();
+    fields
+}
+
 impl LegacyConfig {
     pub fn migrate(self) -> Migration {
         let mut config = AppConfig::default();
@@ -121,6 +185,8 @@ impl LegacyConfig {
         assign_nonempty(&mut config.tts.prompt_lang, self.sovits_prompt_lang);
         if let Some(timeout) = positive_seconds(self.sovits_timeout) {
             config.tts.timeout_seconds = timeout;
+        } else if self.sovits_timeout.is_some() {
+            warnings.push("legacy sovits_timeout was invalid; using the default".to_owned());
         }
         if let Some(enabled) = self.enable_voice_cloning {
             config.tts.enabled = enabled;
@@ -218,6 +284,22 @@ mod tests {
         assert_eq!(positive_seconds(Some(1.2)), Some(2));
         assert_eq!(positive_seconds(Some(0.0)), None);
         assert_eq!(positive_seconds(Some(f64::NAN)), None);
+    }
+
+    #[test]
+    fn reports_invalid_timeout_instead_of_silently_using_the_default() {
+        let legacy: LegacyConfig = serde_json::from_str(r#"{"sovits_timeout":0}"#).unwrap();
+        let migration = legacy.migrate();
+        assert_eq!(
+            migration.config.tts.timeout_seconds,
+            AppConfig::default().tts.timeout_seconds
+        );
+        assert!(
+            migration
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("sovits_timeout"))
+        );
     }
 
     #[test]

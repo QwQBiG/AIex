@@ -21,32 +21,6 @@ function Get-PackageMetadata([string]$Manifest) {
     return ($json | ConvertFrom-Json)
 }
 
-function Invoke-PackageCheck([string]$Executable, [string]$Argument) {
-    $info = [Diagnostics.ProcessStartInfo]::new()
-    $info.FileName = $Executable
-    $info.ArgumentList.Add($Argument)
-    $info.UseShellExecute = $false
-    $info.CreateNoWindow = $true
-    $info.RedirectStandardOutput = $true
-    $info.RedirectStandardError = $true
-    $info.StandardOutputEncoding = [Text.Encoding]::UTF8
-    $info.StandardErrorEncoding = [Text.Encoding]::UTF8
-    $process = [Diagnostics.Process]::Start($info)
-    try {
-        $output = $process.StandardOutput.ReadToEndAsync()
-        $errors = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(30000)) {
-            $process.Kill()
-            $process.WaitForExit()
-            throw "Package check timed out: $Executable"
-        }
-        if ($process.ExitCode -ne 0) {
-            throw "Package check failed ($($process.ExitCode)): $($errors.GetAwaiter().GetResult())"
-        }
-        return $output.GetAwaiter().GetResult()
-    } finally { $process.Dispose() }
-}
-
 $core = Get-PackageMetadata (Join-Path $repository 'Cargo.toml')
 $desktop = Get-PackageMetadata (Join-Path $repository 'crates/ai-ex-desktop/Cargo.toml')
 $version = ($core.packages | Where-Object name -EQ 'ai-ex-service').version
@@ -72,62 +46,14 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw 'Desktop release build failed.' }
 }
 
-# Match the development entry point even when the caller has a target override.
-$coreTarget = Join-Path $repository 'target'
-$desktopTarget = Join-Path $repository 'crates/ai-ex-desktop/target'
-$binaries = @{
-    'AIex.exe' = Join-Path $desktopTarget 'release/ai-ex-desktop.exe'
-    'ai-ex-service.exe' = Join-Path $coreTarget 'release/ai-ex-service.exe'
-    'ai-ex-migrate.exe' = Join-Path $coreTarget 'release/ai-ex-migrate.exe'
-    'ai-ex-platform-helper.exe' = Join-Path $coreTarget 'release/ai-ex-platform-helper.exe'
-}
-foreach ($path in $binaries.Values) {
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Release executable missing: $path" }
-    $stream = [IO.File]::OpenRead($path)
-    $reader = [IO.BinaryReader]::new($stream)
-    try {
-        $stream.Position = 0x3c
-        $header = $reader.ReadInt32()
-        $stream.Position = $header
-        if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) {
-            throw "Expected a Windows x64 executable: $path"
-        }
-        if ([IO.Path]::GetFileName($path) -eq 'ai-ex-desktop.exe') {
-            $stream.Position = $header + 24 + 68
-            if ($reader.ReadUInt16() -ne 2) { throw 'Desktop must use the Windows GUI subsystem.' }
-        }
-    } finally { $reader.Dispose() }
-}
-
-# Explicit allowlist: never copy local settings, credentials, memory or logs.
-[IO.Directory]::CreateDirectory((Join-Path $destination 'data')) | Out-Null
-foreach ($entry in $binaries.GetEnumerator()) {
-    Copy-Item -LiteralPath $entry.Value -Destination (Join-Path $destination $entry.Key)
-}
-Copy-Item -LiteralPath (Join-Path $repository 'config/ai-ex.portable.example.toml') -Destination (Join-Path $destination 'data/ai-ex.local.toml')
-[IO.File]::WriteAllText((Join-Path $destination 'AIex.portable'), "1`n", [Text.UTF8Encoding]::new($false))
-Copy-Item -LiteralPath (Join-Path $repository 'docs/PORTABLE_START.txt') -Destination (Join-Path $destination '开始使用.txt')
-Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination (Join-Path $destination 'LICENSE.txt')
-Copy-Item -LiteralPath (Join-Path $repository 'docs/PORTABLE_THIRD_PARTY.txt') -Destination (Join-Path $destination 'THIRD-PARTY-LICENSES.txt')
-$testWindow = "@echo off`r`nsetlocal`r`nstart `"`" `"%~dp0ai-ex-platform-helper.exe`" --test-window`r`n"
-[IO.File]::WriteAllText((Join-Path $destination 'AIex-Test-Window.cmd'), $testWindow, [Text.UTF8Encoding]::new($false))
-
-$check = Invoke-PackageCheck (Join-Path $destination 'AIex.exe') '--check-install'
-$status = $check | ConvertFrom-Json
-if (-not $status.ready -or $status.version -ne $version) { throw 'Packaged desktop version check failed.' }
-$serviceVersion = Invoke-PackageCheck (Join-Path $destination 'ai-ex-service.exe') '--version'
-if ($serviceVersion.Trim() -ne "ai-ex-service $version") {
-    throw 'Packaged service version check failed.'
-}
-$migratorVersion = Invoke-PackageCheck (Join-Path $destination 'ai-ex-migrate.exe') '--version'
-if ($migratorVersion.Trim() -ne "ai-ex-migrate $version") {
-    throw 'Packaged migrator version check failed.'
-}
-$helperVersion = Invoke-PackageCheck (Join-Path $destination 'ai-ex-platform-helper.exe') '--version'
-if ($helperVersion.Trim() -ne "ai-ex-platform-helper $version") { throw 'Packaged platform helper version check failed.' }
-
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory($destination, $archive, [IO.Compression.CompressionLevel]::Optimal, $true)
-$hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-[IO.File]::WriteAllText($checksum, "$hash  $name.zip`n", [Text.UTF8Encoding]::new($false))
-[pscustomobject]@{ version = $version; directory = $destination; archive = $archive; sha256 = $hash; ready = $true } | ConvertTo-Json
+# Build the packaging tool under the same target lease and resource limits as
+# other development tasks. SkipBuild still skips rebuilding product binaries.
+$development = Join-Path $PSScriptRoot 'dev.ps1'
+$toolBuild = @{ Task = 'build'; Workspace = 'core'; Package = @('xtask'); Offline = $Offline; Jobs = $Jobs; MinimumFreeGiB = $MinimumFreeGiB }
+& $development @toolBuild
+if ($LASTEXITCODE -ne 0) { throw 'Packaging tool build failed.' }
+$tool = Join-Path $repository 'target/debug/xtask.exe'
+$arguments = @('portable', '--project', $repository, '--output', $outputRoot)
+if ($Offline) { $arguments += '--offline' }
+& $tool @arguments
+if ($LASTEXITCODE -ne 0) { throw 'Portable packaging failed.' }

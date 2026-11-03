@@ -1,12 +1,20 @@
 #![forbid(unsafe_code)]
 
+mod architecture;
+mod build_cache_inventory;
 mod bundle;
 mod bundle_io;
 #[cfg(test)]
 mod bundle_tests;
 mod bundle_zip;
 mod catalog_build;
+mod control_token;
 mod native;
+mod pe_imports;
+mod portable;
+mod portable_verify;
+mod portable_verify_archive;
+mod python_gate;
 mod sources_build;
 mod spec;
 mod wav;
@@ -21,11 +29,46 @@ use serde_json::json;
 async fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     let result = match arguments.as_slice() {
+        [command] if command == "architecture" => architecture::check(false),
+        [command, probe] if command == "architecture" && probe == "--probe-violation" => {
+            architecture::check(true)
+        }
+        [command, options @ ..] if command == "cache-inventory" => {
+            command_paths(options, &["--project"])
+                .and_then(|paths| build_cache_inventory::inspect(&paths[0]))
+        }
+        [command, options @ ..] if command == "control-token" => {
+            let force_count = options.iter().filter(|option| *option == "--force").count();
+            if force_count > 1 {
+                Err("repeated option: --force".into())
+            } else {
+                let paths: Vec<_> = options.iter().filter(|option| *option != "--force").cloned().collect();
+                command_paths(&paths, &["--path"])
+                    .and_then(|paths| control_token::create(&paths[0], force_count == 1))
+            }
+        }
+        [command, options @ ..] if command == "portable" => {
+            let offline_count = options.iter().filter(|option| *option == "--offline").count();
+            if offline_count > 1 {
+                Err("repeated option: --offline".into())
+            } else {
+                let paths: Vec<_> = options.iter().filter(|option| *option != "--offline").cloned().collect();
+                command_paths(&paths, &["--project", "--output"])
+                    .and_then(|paths| portable::package(&paths[0], &paths[1], offline_count == 1))
+            }
+        }
         [command, manifest, directory] if command == "native-verify" => {
             native::verify(Path::new(manifest), Path::new(directory))
         }
         [command, specification] if command == "native-probe" => {
             native::probe(Path::new(specification)).await
+        }
+        [command, archive] if command == "portable-inspect" => {
+            portable_verify_archive::inspect_path(Path::new(archive))
+        }
+        [command, options @ ..] if command == "portable-verify" => {
+            command_paths(options, &["--archive", "--evidence-directory"])
+                .and_then(|paths| portable_verify::verify(&paths[0], &paths[1]))
         }
         [command, options @ ..] if command == "native-bundle" => {
             command_paths(options, &["--spec", "--output", "--manifest"])
@@ -39,7 +82,11 @@ async fn main() -> ExitCode {
             command_paths(options, &["--spec", "--output"])
                 .and_then(|paths| sources_build::build(&paths[0], &paths[1]))
         }
-        _ => Err("usage: cargo xtask native-verify <manifest.json> <directory> | native-probe <spec.json> | native-bundle --spec <input.json> --output <new.zip> --manifest <new.json> | native-catalog --distribution <directory> --runtime-manifest <json> --runtime-zip <zip> --output <new.json> | native-sources --spec <input.json> --output <new.zip>".into()),
+        [command, options @ ..] if command == "zero-python" => {
+            command_paths(options, &["--project", "--distribution"])
+                .and_then(|paths| python_gate::check(&paths[0], &paths[1]))
+        }
+        _ => Err("usage: cargo xtask architecture [--probe-violation] | cache-inventory --project <directory> | control-token --path <file> [--force] | portable-inspect <archive.zip> | portable-verify --archive <zip> --evidence-directory <directory> | portable --project <directory> --output <directory> [--offline] | zero-python --project <directory> --distribution <extracted-directory> | native-verify <manifest.json> <directory> | native-probe <spec.json> | native-bundle --spec <input.json> --output <new.zip> --manifest <new.json> | native-catalog --distribution <directory> --runtime-manifest <json> --runtime-zip <zip> --output <new.json> | native-sources --spec <input.json> --output <new.zip>".into()),
     };
     let (report, passed) = match result {
         Ok(result) => result,

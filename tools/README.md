@@ -25,16 +25,24 @@
 | `cargo xtask native-sources` | 明确输入的原生源码、registry 源包、项目 Git 源码与必要构建材料归档 |
 | `cargo xtask native-bundle` | 固定 worker、DLL、Ollama、许可和对应源码形成 Runtime ZIP 与独立 RuntimeManifest |
 | `cargo xtask native-catalog` | 用实际 Runtime ZIP/Manifest 和固定模型材料生成分发目录，不使用假摘要或浮动输入 |
+| `cargo xtask architecture` | 验证三个 Rust 工作区的内部依赖边界；`--probe-violation` 检查拒绝路径 |
+| `cargo xtask cache-inventory --project .` | 只读检查五个构建缓存目录；不删除文件，也不保证检查后可安全清理 |
+| `cargo xtask control-token --path <新文件>` | 创建控制令牌并拒绝覆盖；只有明确追加 `--force` 才轮换已有令牌 |
+| `cargo xtask portable-inspect <便携包 ZIP>` | 只读检查历史版本目录结构和 ZIP 条目；完整运行验证仍使用下面的便携包验证器 |
+| `cargo xtask portable-verify --archive <便携包 ZIP> --evidence-directory <现有目录>` | 在新证据目录中验证解压、摘要、无窗口启动、错误路径和离线回放 |
+| `cargo xtask zero-python --project . --distribution <已解压的便携包目录>` | 检查跟踪文件、Cargo 绑定、明确启动命令、分发文件与 PE 静态导入，列出剩余问题与检查限制 |
 
-后三项的参数、JSON 输入及严格构建顺序统一见[原生发行工具](../xtask/NATIVE_DISTRIBUTION.md)，不在这里维护另一套参数。工具读取显式输入、拒绝覆盖已有输出，不扫描私人模型，不执行或递归展开对应源码归档。源码与最终派生目录有明确分层，避免 Runtime SHA 与源码包循环引用。
+原生发行工具的参数、JSON 输入及严格构建顺序统一见[原生发行工具](../xtask/NATIVE_DISTRIBUTION.md)。工具读取显式输入、拒绝覆盖已有输出，不扫描私人模型，不执行或递归展开对应源码归档。源码与最终派生目录有明确分层，避免 Runtime SHA 与源码包循环引用。
+
+零 Python 检查当前会因保留的旧文件而失败；它不分析运行时动态加载、嵌入解释器、改名程序、嵌套压缩包或远程服务，也不能替代未安装 Python 的干净 Windows 验收。
 
 | 工具 | 用途与实际参数 |
 | --- | --- |
 | [check_architecture.ps1](check_architecture.ps1) | 读取核心工作区与独立桌面的 Cargo 元数据，校验内部依赖方向与包登记。无参数执行正常检查；`-ProbeViolation` 在内存中注入违规依赖，预期退出码为 1，不改写 Cargo 文件。 |
-| [create_control_token.ps1](create_control_token.ps1) | 生成随机控制令牌并写入 UTF-8 文件。`-Path` 指定文件，默认 `config/control.token`；目标存在时拒绝覆盖，只有明确轮换令牌才使用 `-Force`。 |
+| [create_control_token.ps1](create_control_token.ps1) | 通过 dev 入口构建 Rust 工具，再生成随机控制令牌。`-Path` 指定文件，默认调用目录下的 `config/control.token`；目标存在时拒绝覆盖，只有明确轮换令牌才使用 `-Force`。 |
 | [package_windows.ps1](package_windows.ps1) | 通过 dev 入口构建后打包桌面、服务、迁移器与平台助手，检查版本并生成 ZIP/SHA256。支持 `-OutputDirectory`、`-SkipBuild`、`-Offline`、`-Jobs`、`-MinimumFreeGiB`；使用两套固定目标，已有输出拒绝覆盖。 |
 | [test_development.ps1](test_development.ps1) | 用隔离 PowerShell 进程和假 Cargo 验证目录复用、增量策略、单包筛选、互斥及失败后环境恢复，不编译应用或调用设备。 |
-| [verify_windows_portable.ps1](verify_windows_portable.ps1) | 验证 ZIP 文件、版本、中文/空格路径与无窗口运行；兼容旧版布局，0.10 要求平台助手和专用画布入口在内的十文件包。`-ArchivePath` 必需；`-EvidenceDirectory` 指定证据父目录，默认 `target`。每次创建独立子目录并输出 JSON，不调用 Cargo。 |
+| [verify_windows_portable.ps1](verify_windows_portable.ps1) | 验证 ZIP 文件、版本、中文/空格路径与无窗口运行；兼容旧版布局，0.10 要求平台助手和专用画布入口在内的十文件包。`-ArchivePath` 必需；`-EvidenceDirectory` 指定证据父目录，默认 `target`。入口先通过 `dev.ps1` 构建 Rust 工具，每次创建独立子目录并输出 JSON。 |
 
 架构检查使用离线、锁定依赖的 Cargo 元数据：
 
@@ -67,17 +75,17 @@ pwsh -NoProfile -File tools/package_windows.ps1
 pwsh -NoProfile -File tools/verify_windows_portable.ps1 -ArchivePath $archivePath
 ```
 
-验证在中文和空格目录中解压，只检查公开分发模板与离线回放；缺少服务程序应明确报错。证据、解压目录与 JSON 报告保留在唯一子目录，不覆盖旧证据，也不清理用户文件。真实窗口、模型和设备仍按整体验收流程测试。
+验证入口需要 Rust 构建环境；已有构建结果时，也可直接运行 `target/debug/xtask.exe portable-verify --archive <便携包 ZIP> --evidence-directory <现有目录>`，无需调用 Cargo。验证在中文和空格目录中解压，只检查公开分发模板与离线回放；缺少服务程序应明确报错。证据、解压目录与 JSON 报告保留在唯一子目录，不覆盖旧证据，也不清理用户文件。真实窗口、模型和设备仍按整体验收流程测试。
 
 ## 架构检查的回归入口
 
-[test_architecture.ps1](test_architecture.ps1) 无参数，验证正常登记和违规依赖等情况。它使用测试元数据与独立临时目录，不编辑当前 Cargo 清单，不编译产品代码。
+[test_architecture.ps1](test_architecture.ps1) 无参数，通过开发入口运行 `xtask` 的架构单元测试，验证正常登记和违规依赖等情况。它使用测试元数据与独立临时目录，不编辑当前 Cargo 清单；首次运行可能构建 `xtask` 及其 Rust 依赖。
 
 ```powershell
 pwsh -NoProfile -File tools/test_architecture.ps1
 ```
 
-[architecture/validation.ps1](architecture/validation.ps1) 是检查与回归共用的内部验证逻辑，不是单独的用户命令。
+[architecture/validation.ps1](architecture/validation.ps1) 保留为历史验证逻辑，当前架构检查与回归均使用 Rust 实现，不再调用该文件。
 
 ## 历史 Python 工具
 
@@ -98,6 +106,8 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 ## Rust 离线迁移与检查
 
 新增 `ai-ex-service --validate-config` 离线验证和 `ai-ex-migrate --memory-backup` 旧备份文本/向量/元数据迁移与 `ai-ex-service --reindex-memory` 当前角色索引重建；使用步骤、格式与数据边界见[完全 Rust 化记录](../docs/RUST_ONLY_MIGRATION.md)。语句分块的 Release 对照基准在 `crates/ai-ex-text/benches/sentence_stream.rs`，记忆检索与启动缓存对照在 `crates/ai-ex-memory/benches/recall.rs`；均由 Cargo 执行，不需要 Python。
+
+旧 JSON 配置可先执行 `ai-ex-migrate --input OLD.json --preview`，在终端检查转换后的 TOML 和未映射字段提示；预览不会写文件。结果可能包含个人配置，请勿直接分享。确认后以 `--output NEW.toml` 代替 `--preview`，迁移器只写新文件并拒绝覆盖。未映射字段只报告名称，不自动迁移，需要自行核对。
 
 原生 BGE 重建使用 `ai-ex-service.exe --config <native-bootstrap.toml> --native-config <native-v1.toml> --reindex-memory`。先关闭使用这些文件的服务并备份记忆；只重建配置中当前人物的索引，不修改文本与来源。BGE 必须已准备，工具有界等待冷加载；失败不提交半套向量。日常写入仍保留两秒预算，冷启动或模型不可用时先保存文本并使用词法召回，需要时再显式重建。
 
@@ -154,4 +164,4 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 
 ### Chroma v2 快照桥接
 
-`ai-ex-migrate --chroma-export` 从明确指定的只读 v2 API 分页导出完整快照；`--chroma-snapshot` 将其中主记忆离线转换为新 JSONL。独立实体集合仅保留原始归档，不恢复实体图。操作、范围、固定 Rust CLI 版本和合成验收入口见 [Chroma 桥接说明](../docs/CHROMA_BRIDGE.md)。协议回归已通过，原生 SQLite/HNSW 临时库验收仍受官方二进制下载失败阻塞；不会自动启动 Python 或打开现用数据库。
+`ai-ex-migrate --chroma-copy-export` 用固定的原生服务打开明确指定的旧库工作副本并导出快照；`--chroma-export` 也可从指定的只读 v2 API 导出。`--chroma-snapshot` 将支持的主记忆、独立实体候选和声明的来源关联转换为新 JSONL，并保留原始归档。原生 SQLite/HNSW 合成库的复制、导出和导入已验证，真实旧库仍需用户用关闭后的副本验收。详细操作和边界见 [Chroma 桥接说明](../docs/CHROMA_BRIDGE.md)；工具不会自动打开现用数据库。
