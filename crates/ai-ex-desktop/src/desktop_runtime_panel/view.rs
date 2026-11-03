@@ -117,12 +117,53 @@ impl DesktopRuntimePanel {
                 {
                     requests.push(DesktopRuntimeRequest::DiscoverVts);
                 }
+                let parameter_pending = self.pending.values().any(|request| {
+                    matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { .. })
+                });
+                if ui
+                    .add_enabled(vts && !parameter_pending, egui::Button::new("查询 VTS 输入参数"))
+                    .clicked()
+                {
+                    requests.push(DesktopRuntimeRequest::DiscoverVtsParameters { offset: 0 });
+                }
             });
             ui.weak(
                 "诊断只包含版本、运行时长和已确认行为设置，不包含对话、原始日志、私人音频或路径。",
             );
             for key in &self.vts {
                 ui.label(format!("{} · {}", key.name, key.id));
+            }
+            if let Some(page) = &self.vts_parameters {
+                ui.weak("翻页时会重新读取当前参数；人物或参数变化时结果可能改变。");
+                if !page.model_loaded {
+                    ui.weak("VTS 当前没有载入人物，输入参数仍可查询。");
+                }
+                for parameter in &page.parameters {
+                    ui.label(format!(
+                        "{}{} · 当前 {} · 映射参考范围 {}–{} · 默认 {}",
+                        parameter.name,
+                        if parameter.is_custom { "（自定义）" } else { "" },
+                        parameter.value,
+                        parameter.min,
+                        parameter.max,
+                        parameter.default_value,
+                    ));
+                    if parameter.is_custom && !parameter.added_by.is_empty() {
+                        ui.weak(format!("来源：{}", parameter.added_by));
+                    }
+                }
+                let busy = self.pending.values().any(|request| {
+                    matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { .. })
+                });
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!busy && page.offset > 0, egui::Button::new("上一页")).clicked() {
+                        requests.push(DesktopRuntimeRequest::DiscoverVtsParameters { offset: page.offset.saturating_sub(16) });
+                    }
+                    ui.label(format!("{}–{} / {}", if page.parameters.is_empty() { page.offset } else { page.offset + 1 }, page.offset + page.parameters.len(), page.total));
+                    if ui.add_enabled(!busy && page.offset + page.parameters.len() < page.total, egui::Button::new("下一页")).clicked() {
+                        requests.push(DesktopRuntimeRequest::DiscoverVtsParameters { offset: page.offset + page.parameters.len() });
+                    }
+                });
             }
             if let Some(message) = &self.feedback {
                 ui.label(message);

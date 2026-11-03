@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use ai_ex_domain::{
     AppError, DesktopDiagnosticReport, DesktopRuntimeReply, DesktopRuntimeRequest,
-    DesktopRuntimeSettings, DesktopRuntimeSnapshot, DiscoveredVtsHotkey,
+    DesktopRuntimeSettings, DesktopRuntimeSnapshot, DiscoveredVtsHotkey, DiscoveredVtsParameter,
+    VtsParameterPage,
 };
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -33,6 +34,7 @@ pub(crate) trait DesktopRuntimeActions: Send + Sync {
 #[async_trait]
 pub(crate) trait VtsDiscoveryPort: Send + Sync {
     async fn discover(&self) -> Result<Vec<DiscoveredVtsHotkey>, AppError>;
+    async fn discover_parameters(&self) -> Result<ai_ex_vts::VtsParameterList, AppError>;
 }
 
 #[async_trait]
@@ -48,6 +50,46 @@ impl VtsDiscoveryPort for ai_ex_vts::VtsClient {
             })
             .collect())
     }
+
+    async fn discover_parameters(&self) -> Result<ai_ex_vts::VtsParameterList, AppError> {
+        ai_ex_vts::VtsClient::discover_parameters(self).await
+    }
+}
+
+fn parameter_page(
+    list: ai_ex_vts::VtsParameterList,
+    offset: usize,
+) -> Result<VtsParameterPage, AppError> {
+    const PAGE_SIZE: usize = 16;
+    let total = list.parameters.len();
+    let offset = offset.min(total);
+    let number = |value: f64| {
+        serde_json::Number::from_f64(value)
+            .ok_or_else(|| AppError::protocol("invalid VTS parameter value"))
+    };
+    let parameters = list
+        .parameters
+        .into_iter()
+        .skip(offset)
+        .take(PAGE_SIZE)
+        .map(|parameter| {
+            Ok(DiscoveredVtsParameter {
+                name: parameter.name,
+                added_by: parameter.added_by,
+                value: number(parameter.value)?,
+                min: number(parameter.min)?,
+                max: number(parameter.max)?,
+                default_value: number(parameter.default_value)?,
+                is_custom: parameter.is_custom,
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    Ok(VtsParameterPage {
+        model_loaded: list.model_loaded,
+        offset,
+        total,
+        parameters,
+    })
 }
 
 struct State {
@@ -315,6 +357,21 @@ impl DesktopRuntime {
                     .as_ref()
                     .ok_or_else(|| AppError::unavailable("VTS discovery is disabled"))?;
                 Ok(DesktopRuntimeReply::VtsDiscovery(port.discover().await?))
+            }
+            DesktopRuntimeRequest::DiscoverVtsParameters { offset } => {
+                if offset > 1024 {
+                    return Err(AppError::configuration(
+                        "VTS parameter offset exceeds limit",
+                    ));
+                }
+                let port = self
+                    .vts
+                    .as_ref()
+                    .ok_or_else(|| AppError::unavailable("VTS discovery is disabled"))?;
+                Ok(DesktopRuntimeReply::VtsParameters(parameter_page(
+                    port.discover_parameters().await?,
+                    offset,
+                )?))
             }
             DesktopRuntimeRequest::Diagnostics => {
                 Ok(DesktopRuntimeReply::Diagnostics(DesktopDiagnosticReport {

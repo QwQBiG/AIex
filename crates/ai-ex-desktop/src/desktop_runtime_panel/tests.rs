@@ -62,6 +62,52 @@ fn external_changes_preserve_dirty_draft_and_require_review_before_applying() {
 }
 
 #[test]
+fn vts_parameter_pages_are_correlated_and_cleared_on_disconnect() {
+    let id = Uuid::new_v4();
+    let mut panel = DesktopRuntimePanel::default();
+    panel.synchronize(Some(id), true);
+    let WorkerCommand::DesktopRuntime { request_id, .. } = panel
+        .begin(DesktopRuntimeRequest::DiscoverVtsParameters { offset: 16 })
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    let page = VtsParameterPage {
+        model_loaded: true,
+        offset: 16,
+        total: 18,
+        parameters: (0..2)
+            .map(|index| ai_ex_domain::DiscoveredVtsParameter {
+                name: format!("parameter-{index}"),
+                added_by: "fixture".into(),
+                value: 1.into(),
+                min: 0.into(),
+                max: 1.into(),
+                default_value: 0.into(),
+                is_custom: false,
+            })
+            .collect(),
+    };
+    let mut malformed = page.clone();
+    malformed.parameters.clear();
+    panel.receive(
+        request_id,
+        Ok(DesktopRuntimeReply::VtsParameters(malformed)),
+    );
+    assert!(panel.vts_parameters.is_none());
+    let WorkerCommand::DesktopRuntime { request_id, .. } = panel
+        .begin(DesktopRuntimeRequest::DiscoverVtsParameters { offset: 16 })
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    panel.receive(request_id, Ok(DesktopRuntimeReply::VtsParameters(page)));
+    assert_eq!(panel.vts_parameters.as_ref().unwrap().offset, 16);
+    panel.synchronize(Some(id), false);
+    assert!(panel.vts_parameters.is_none());
+}
+
+#[test]
 fn diagnostics_export_has_only_typed_allowlist_and_unique_create_new_files() {
     let report = ai_ex_domain::DesktopDiagnosticReport {
         schema_version: 1,

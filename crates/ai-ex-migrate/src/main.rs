@@ -122,16 +122,32 @@ async fn run() -> Result<(), AppError> {
             "legacy configuration exceeds 1 MiB",
         ));
     }
-    let legacy: LegacyConfig = serde_json::from_slice(&content).map_err(|error| {
+    let source: serde_json::Value = serde_json::from_slice(&content).map_err(|error| {
         AppError::configuration(format!(
             "invalid legacy JSON at line {} column {}",
             error.line(),
             error.column()
         ))
     })?;
-    let source: serde_json::Value = serde_json::from_slice(&content)
-        .map_err(|error| AppError::configuration(format!("invalid legacy JSON: {error}")))?;
+    let parsed = if source
+        .get("ollama")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        LegacyConfig::parse_nested(&content)
+    } else {
+        serde_json::from_slice(&content)
+    };
+    let mut legacy: LegacyConfig = parsed.map_err(|error| {
+        AppError::configuration(format!(
+            "invalid legacy JSON at line {} column {}",
+            error.line(),
+            error.column()
+        ))
+    })?;
     let unmapped = legacy::unmapped_fields(&source);
+    legacy
+        .apply_nested_format(&source)
+        .map_err(AppError::configuration)?;
     let migration = legacy.migrate();
     migration.config.validate()?;
     let output_content = toml::to_string_pretty(&migration.config)

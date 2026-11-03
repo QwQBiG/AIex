@@ -35,6 +35,10 @@ pub fn discover_hotkeys() -> Value {
     envelope("HotkeysInCurrentModelRequest", json!({}))
 }
 
+pub fn discover_parameters() -> Value {
+    envelope("InputParameterListRequest", json!({}))
+}
+
 pub fn authenticated(response: &Value) -> bool {
     response
         .get("data")

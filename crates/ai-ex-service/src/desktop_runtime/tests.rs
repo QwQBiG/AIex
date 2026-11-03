@@ -44,6 +44,64 @@ impl DesktopRuntimeActions for Actions {
 }
 
 struct Fixture(PathBuf);
+
+struct Parameters;
+
+#[async_trait]
+impl VtsDiscoveryPort for Parameters {
+    async fn discover(&self) -> Result<Vec<DiscoveredVtsHotkey>, AppError> {
+        Ok(Vec::new())
+    }
+
+    async fn discover_parameters(&self) -> Result<ai_ex_vts::VtsParameterList, AppError> {
+        Ok(ai_ex_vts::VtsParameterList {
+            model_loaded: true,
+            parameters: (0..18)
+                .map(|index| ai_ex_vts::VtsParameter {
+                    name: format!("parameter-{index}"),
+                    added_by: "fixture".into(),
+                    value: 1.5,
+                    min: 0.0,
+                    max: 1.0,
+                    default_value: 0.5,
+                    is_custom: index > 0,
+                })
+                .collect(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn vts_parameter_discovery_is_bounded_and_preserves_out_of_range_values() {
+    let fixture = Fixture::new();
+    let runtime = DesktopRuntime::new(
+        Uuid::new_v4(),
+        fixture.path(),
+        Arc::new(Actions::default()),
+        Some(Arc::new(Parameters)),
+    )
+    .unwrap();
+    let DesktopRuntimeReply::VtsParameters(page) = runtime
+        .handle(DesktopRuntimeRequest::DiscoverVtsParameters { offset: 16 })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected VTS response")
+    };
+    assert_eq!(
+        (page.offset, page.total, page.parameters.len()),
+        (16, 18, 2)
+    );
+    assert_eq!(page.parameters[0].value.as_f64(), Some(1.5));
+    assert!(
+        runtime
+            .handle(DesktopRuntimeRequest::DiscoverVtsParameters { offset: 1025 })
+            .await
+            .is_err()
+    );
+    runtime.stop().await.unwrap();
+}
+
 impl Fixture {
     fn new() -> Self {
         Self(std::env::temp_dir().join(format!("desktop-behavior-test-{}", Uuid::new_v4())))

@@ -1,7 +1,7 @@
 use crate::{ControlBackend, ControlClient, ControlCommand, ControlPayload, ControlServer};
 use ai_ex_domain::{
     AppError, DesktopRuntimeReply, DesktopRuntimeRequest, DesktopRuntimeSettings,
-    DesktopRuntimeSnapshot,
+    DesktopRuntimeSnapshot, DiscoveredVtsParameter, VtsParameterPage,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -27,6 +27,24 @@ impl ControlBackend for Backend {
                     vts_discovery_available: false,
                 }),
             ))),
+            ControlCommand::DesktopRuntime {
+                request: DesktopRuntimeRequest::DiscoverVtsParameters { offset: 0 },
+            } => Ok(ControlPayload::DesktopRuntime(Box::new(
+                DesktopRuntimeReply::VtsParameters(VtsParameterPage {
+                    model_loaded: true,
+                    offset: 0,
+                    total: 1,
+                    parameters: vec![DiscoveredVtsParameter {
+                        name: "MouthOpen".into(),
+                        added_by: "VTube Studio".into(),
+                        value: serde_json::Number::from_f64(1.5).unwrap(),
+                        min: 0.into(),
+                        max: 1.into(),
+                        default_value: 0.into(),
+                        is_custom: false,
+                    }],
+                }),
+            ))),
             _ => Err(AppError::protocol("unexpected test command")),
         }
     }
@@ -48,6 +66,14 @@ async fn behavior_settings_use_existing_authenticated_correlated_protocol() {
         panic!("expected state")
     };
     assert_eq!(snapshot.revision, 2);
+    let DesktopRuntimeReply::VtsParameters(page) = client
+        .desktop_runtime(DesktopRuntimeRequest::DiscoverVtsParameters { offset: 0 })
+        .await
+        .unwrap()
+    else {
+        panic!("expected parameters")
+    };
+    assert_eq!(page.parameters[0].value.as_f64(), Some(1.5));
     let invalid = DesktopRuntimeSettings {
         cooldown_seconds: 0,
         ..Default::default()

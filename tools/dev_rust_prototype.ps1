@@ -44,6 +44,12 @@ $leasePath = Join-Path $target '.development.lock'
 try {
     $lease = [IO.File]::Open($leasePath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 } catch [IO.IOException] {
+    if ($Workspace -eq 'desktop') {
+        # Desktop has its own target lease; keep it usable during a core build.
+        $arguments.Remove('Plan')
+        & (Join-Path $PSScriptRoot 'dev.ps1') @arguments
+        exit $LASTEXITCODE
+    }
     throw "Development target is already in use or inaccessible: $target. Wait for the current task to finish before starting another."
 }
 $temporary = Join-Path $target ('xtask-dev-' + [guid]::NewGuid().ToString('N') + '.exe')

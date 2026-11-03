@@ -4,7 +4,7 @@ mod discovery;
 #[cfg(test)]
 mod discovery_tests;
 mod protocol;
-pub use discovery::VtsHotkey;
+pub use discovery::{VtsHotkey, VtsParameter, VtsParameterList};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -34,6 +34,7 @@ enum Command {
     Mouth(f64),
     Hotkey(String),
     DiscoverHotkeys(oneshot::Sender<Result<Vec<VtsHotkey>, AppError>>),
+    DiscoverParameters(oneshot::Sender<Result<VtsParameterList, AppError>>),
 }
 
 #[derive(Clone)]
@@ -111,6 +112,26 @@ impl VtsClient {
         .map_err(|_| AppError::connectivity("VTS hotkey discovery timed out"))?
     }
 
+    /// Reads available tracking parameters without changing their values.
+    pub async fn discover_parameters(&self) -> Result<VtsParameterList, AppError> {
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| AppError::unavailable("VTS is not connected"))?;
+        let (reply, result) = oneshot::channel();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            sender
+                .send(Command::DiscoverParameters(reply))
+                .await
+                .map_err(|_| AppError::unavailable("VTS actor stopped"))?;
+            result
+                .await
+                .map_err(|_| AppError::unavailable("VTS closed during parameter discovery"))?
+        })
+        .await
+        .map_err(|_| AppError::connectivity("VTS parameter discovery timed out"))?
+    }
+
     async fn send(&self, command: Command) -> Result<(), AppError> {
         let Some(sender) = &self.sender else {
             return Ok(());
@@ -179,6 +200,31 @@ impl StageExecutor for VtsClient {
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+enum PendingDiscovery {
+    Hotkeys(oneshot::Sender<Result<Vec<VtsHotkey>, AppError>>),
+    Parameters(oneshot::Sender<Result<VtsParameterList, AppError>>),
+}
+
+impl PendingDiscovery {
+    fn is_closed(&self) -> bool {
+        match self {
+            Self::Hotkeys(reply) => reply.is_closed(),
+            Self::Parameters(reply) => reply.is_closed(),
+        }
+    }
+
+    fn respond(self, response: &Value) {
+        match self {
+            Self::Hotkeys(reply) => {
+                let _ignored = reply.send(discovery::hotkeys(response));
+            }
+            Self::Parameters(reply) => {
+                let _ignored = reply.send(discovery::parameters(response));
+            }
+        }
+    }
+}
+
 async fn read_token(path: &PathBuf) -> Result<String, AppError> {
     let content = tokio::fs::read_to_string(path).await.map_err(|error| {
         AppError::configuration(format!("cannot read VTS token {}: {error}", path.display()))
@@ -214,7 +260,7 @@ async fn authenticate_response(socket: &mut Socket) -> Result<(), AppError> {
 
 async fn run_actor(socket: Socket, mut receiver: mpsc::Receiver<Command>) {
     let (mut writer, mut reader) = socket.split();
-    let mut pending = BTreeMap::<String, oneshot::Sender<Result<Vec<VtsHotkey>, AppError>>>::new();
+    let mut pending = BTreeMap::<String, PendingDiscovery>::new();
     let mut cleanup = tokio::time::interval(std::time::Duration::from_secs(1));
     loop {
         tokio::select! {
@@ -236,7 +282,18 @@ async fn run_actor(socket: Socket, mut receiver: mpsc::Receiver<Command>) {
                         }
                         let request = protocol::discover_hotkeys();
                         let id = request["requestID"].as_str().expect("request ID").to_owned();
-                        pending.insert(id, reply);
+                        pending.insert(id, PendingDiscovery::Hotkeys(reply));
+                        request
+                    },
+                    Command::DiscoverParameters(reply) => {
+                        pending.retain(|_, reply| !reply.is_closed());
+                        if pending.len() >= 64 {
+                            let _ignored = reply.send(Err(AppError::unavailable("VTS discovery queue is full")));
+                            continue;
+                        }
+                        let request = protocol::discover_parameters();
+                        let id = request["requestID"].as_str().expect("request ID").to_owned();
+                        pending.insert(id, PendingDiscovery::Parameters(reply));
                         request
                     },
                 };
@@ -254,7 +311,7 @@ async fn run_actor(socket: Socket, mut receiver: mpsc::Receiver<Command>) {
                         if let Ok(response) = serde_json::from_str::<Value>(&text)
                             && let Some(id) = response.get("requestID").and_then(Value::as_str)
                             && let Some(reply) = pending.remove(id) {
-                            let _ignored = reply.send(discovery::hotkeys(&response));
+                            reply.respond(&response);
                         }
                     },
                     _ =>

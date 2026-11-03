@@ -3,10 +3,13 @@ use std::collections::BTreeMap;
 use ai_ex_config::{AppConfig, ModelBackend};
 use ai_ex_domain::Emotion;
 use serde::Deserialize;
+use serde_json::value::RawValue;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct LegacyConfig {
+    ollama: Option<Box<RawValue>>,
+    vts: Option<Box<RawValue>>,
     ollama_url: Option<String>,
     ollama_model: Option<String>,
     llm_backend: Option<String>,
@@ -25,8 +28,65 @@ pub struct LegacyConfig {
     sovits_prompt_text: Option<String>,
     sovits_prompt_lang: Option<String>,
     enable_memory_features: Option<bool>,
+    #[serde(default, deserialize_with = "default_if_null")]
     performance: LegacyPerformance,
+    #[serde(default, deserialize_with = "default_if_null")]
     agent: LegacyAgent,
+}
+
+#[derive(Deserialize)]
+struct NestedOllama {
+    #[serde(default = "legacy_ollama_url")]
+    base_url: String,
+    #[serde(default = "legacy_ollama_model")]
+    model: String,
+}
+
+#[derive(Deserialize)]
+struct NestedVts {
+    #[serde(default = "legacy_vts_port")]
+    port: u16,
+}
+
+// The legacy loader copies only these fields when the nested format is used.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct NestedLegacyInput {
+    ollama: Option<Box<RawValue>>,
+    vts: Option<Box<RawValue>>,
+    enable_expression_control: Option<bool>,
+    enable_voice_cloning: Option<bool>,
+    emotion_hotkey_map: Option<BTreeMap<String, String>>,
+    sovits_url: Option<String>,
+    sovits_timeout: Option<f64>,
+    sovits_language: Option<String>,
+    sovits_ref_audio_path: Option<String>,
+    sovits_prompt_text: Option<String>,
+    sovits_prompt_lang: Option<String>,
+    #[serde(default, deserialize_with = "default_if_null")]
+    performance: LegacyPerformance,
+    #[serde(default, deserialize_with = "default_if_null")]
+    agent: LegacyAgent,
+}
+
+fn default_if_null<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn legacy_ollama_url() -> String {
+    "http://localhost:11434".into()
+}
+
+fn legacy_ollama_model() -> String {
+    "llama3".into()
+}
+
+fn legacy_vts_port() -> u16 {
+    8001
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -94,7 +154,42 @@ pub fn unmapped_fields(value: &serde_json::Value) -> Vec<String> {
         }
     }
     let mut fields = Vec::new();
-    collect(value, "", ROOT, &mut fields);
+    let nested = value
+        .get("ollama")
+        .is_some_and(serde_json::Value::is_object);
+    if nested {
+        const IGNORED_FLAT: &[&str] = &[
+            "ollama_url",
+            "ollama_model",
+            "vts_port",
+            "llm_backend",
+            "koboldcpp_url",
+            "koboldcpp_max_context_length",
+            "koboldcpp_max_length",
+            "koboldcpp_temperature",
+            "enable_memory_features",
+        ];
+        for key in value
+            .as_object()
+            .into_iter()
+            .flat_map(|object| object.keys())
+        {
+            if IGNORED_FLAT.contains(&key.as_str())
+                || (!ROOT.contains(&key.as_str()) && key != "ollama" && key != "vts")
+            {
+                fields.push(key.clone());
+            }
+        }
+        collect(
+            &value["ollama"],
+            "ollama.",
+            &["base_url", "model"],
+            &mut fields,
+        );
+        collect(&value["vts"], "vts.", &["port"], &mut fields);
+    } else {
+        collect(value, "", ROOT, &mut fields);
+    }
     collect(
         &value["performance"],
         "performance.",
@@ -125,6 +220,61 @@ pub fn unmapped_fields(value: &serde_json::Value) -> Vec<String> {
 }
 
 impl LegacyConfig {
+    pub fn parse_nested(content: &[u8]) -> serde_json::Result<Self> {
+        let nested: NestedLegacyInput = serde_json::from_slice(content)?;
+        Ok(Self {
+            ollama: nested.ollama,
+            vts: nested.vts,
+            enable_expression_control: nested.enable_expression_control,
+            enable_voice_cloning: nested.enable_voice_cloning,
+            emotion_hotkey_map: nested.emotion_hotkey_map,
+            sovits_url: nested.sovits_url,
+            sovits_timeout: nested.sovits_timeout,
+            sovits_language: nested.sovits_language,
+            sovits_ref_audio_path: nested.sovits_ref_audio_path,
+            sovits_prompt_text: nested.sovits_prompt_text,
+            sovits_prompt_lang: nested.sovits_prompt_lang,
+            performance: nested.performance,
+            agent: nested.agent,
+            ..Self::default()
+        })
+    }
+
+    pub fn apply_nested_format(&mut self, source: &serde_json::Value) -> Result<(), String> {
+        if !source
+            .get("ollama")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            return Ok(());
+        }
+        let ollama: NestedOllama =
+            serde_json::from_str(self.ollama.as_ref().ok_or("missing nested ollama")?.get())
+                .map_err(|_| "invalid nested ollama settings".to_owned())?;
+        if ollama.base_url.trim().is_empty() || ollama.model.trim().is_empty() {
+            return Err("invalid nested ollama settings".to_owned());
+        }
+        let port = if source.get("vts").is_some() {
+            let raw = self.vts.as_ref().ok_or("invalid nested vts settings")?;
+            let nested: NestedVts = serde_json::from_str(raw.get())
+                .map_err(|_| "invalid nested vts settings".to_owned())?;
+            nested.port
+        } else {
+            legacy_vts_port()
+        };
+        self.ollama_url = Some(ollama.base_url);
+        self.ollama_model = Some(ollama.model);
+        self.vts_port = Some(port);
+        self.llm_backend = None;
+        self.koboldcpp_url = None;
+        self.koboldcpp_max_context_length = None;
+        self.koboldcpp_max_length = None;
+        self.koboldcpp_temperature = None;
+        self.enable_memory_features = None;
+        self.enable_expression_control.get_or_insert(false);
+        self.sovits_timeout.get_or_insert(10.0);
+        Ok(())
+    }
+
     pub fn migrate(self) -> Migration {
         let mut config = AppConfig::default();
         let mut warnings = Vec::new();
@@ -242,6 +392,67 @@ fn assign_positive_usize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_format_preserves_legacy_precedence_and_reports_ignored_fields() {
+        let text = br#"{
+            "ollama": {"base_url":"http://127.0.0.1:15000", "model":"nested-model", "other":1},
+            "vts": {"port":8123, "extra":true},
+            "ollama_model":"ignored-model", "vts_port":"ignored-invalid-value",
+            "llm_backend":"koboldcpp", "enable_voice_cloning":true
+        }"#;
+        let source: serde_json::Value = serde_json::from_slice(text).unwrap();
+        let mut legacy = LegacyConfig::parse_nested(text).unwrap();
+        legacy.apply_nested_format(&source).unwrap();
+        let result = legacy.migrate();
+        assert_eq!(result.config.ollama.base_url, "http://127.0.0.1:15000");
+        assert_eq!(result.config.ollama.model, "nested-model");
+        assert_eq!(result.config.vts.port, 8123);
+        assert_eq!(result.config.model.backend, ModelBackend::Ollama);
+        assert!(result.config.tts.enabled);
+        assert_eq!(
+            unmapped_fields(&source),
+            [
+                "llm_backend",
+                "ollama.other",
+                "ollama_model",
+                "vts.extra",
+                "vts_port"
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_format_uses_old_defaults_and_rejects_duplicate_mapped_fields() {
+        let text = br#"{"ollama":{},"ollama_model":"ignored","performance":null,"agent":null}"#;
+        let source = serde_json::from_slice(text).unwrap();
+        let mut legacy = LegacyConfig::parse_nested(text).unwrap();
+        legacy.apply_nested_format(&source).unwrap();
+        let result = legacy.migrate();
+        assert_eq!(result.config.ollama.base_url, "http://localhost:11434");
+        assert_eq!(result.config.ollama.model, "llama3");
+        assert_eq!(result.config.vts.port, 8001);
+        assert!(!result.config.vts.enabled);
+        assert_eq!(result.config.tts.timeout_seconds, 10);
+        let duplicate = br#"{"ollama":{"model":"one","model":"two"}}"#;
+        let mut legacy = LegacyConfig::parse_nested(duplicate).unwrap();
+        let source = serde_json::from_slice(duplicate).unwrap();
+        assert!(legacy.apply_nested_format(&source).is_err());
+        let empty = br#"{"ollama":{"model":""}}"#;
+        let mut legacy = LegacyConfig::parse_nested(empty).unwrap();
+        let source = serde_json::from_slice(empty).unwrap();
+        assert!(legacy.apply_nested_format(&source).is_err());
+    }
+
+    #[test]
+    fn nested_vts_without_an_ollama_object_does_not_change_flat_settings() {
+        let text = br#"{"ollama":null,"vts":{"port":9001},"vts_port":8123}"#;
+        let source = serde_json::from_slice(text).unwrap();
+        let mut legacy: LegacyConfig = serde_json::from_slice(text).unwrap();
+        legacy.apply_nested_format(&source).unwrap();
+        assert_eq!(legacy.migrate().config.vts.port, 8123);
+        assert_eq!(unmapped_fields(&source), ["ollama", "vts"]);
+    }
 
     #[test]
     fn maps_safe_fields_but_does_not_enable_automation() {

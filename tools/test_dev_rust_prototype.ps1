@@ -62,6 +62,18 @@ $env:CARGO_TARGET_DIR = $env:DEV_TEST_INHERITED
 $env:CARGO_INCREMENTAL = 'caller-incremental'
 $env:CARGO_BUILD_JOBS = '7'
 function global:cargo {
+    if ($env:DEV_TEST_DESKTOP_FALLBACK -eq '1') {
+        $desktopTarget = Join-Path $env:DEV_TEST_ROOT 'crates/ai-ex-desktop/target'
+        if ($env:CARGO_TARGET_DIR -cne $desktopTarget) { throw 'desktop fallback used the wrong target' }
+        try {
+            $handle = [IO.File]::Open((Join-Path $env:DEV_TEST_ROOT 'target/.development.lock'), 'Open', 'ReadWrite', 'None')
+            $handle.Dispose()
+            throw 'root build lock was unexpectedly released'
+        } catch [IO.IOException] { }
+        [IO.File]::AppendAllText($env:DEV_TEST_LOG, "desktop`n", [Text.UTF8Encoding]::new($false))
+        $global:LASTEXITCODE = 0
+        return
+    }
     [IO.File]::AppendAllText($env:DEV_TEST_LOG, "build`n", [Text.UTF8Encoding]::new($false))
     if ($env:CARGO_TARGET_DIR -cne (Join-Path $env:DEV_TEST_ROOT 'target') -or $env:CARGO_INCREMENTAL -cne '0' -or $env:CARGO_BUILD_JOBS -cne '3') { throw 'incorrect build environment' }
     try {
@@ -77,6 +89,7 @@ function global:cargo {
     $global:LASTEXITCODE = 0
 }
 $options = @{ Workspace = 'native'; Task = 'test'; Package = @('ai-ex-domain'); TestFilter = '中文 test filter'; Jobs = 3; MinimumFreeGiB = 1; Offline = $true; Release = $true; KeepIncremental = $true }
+if ($env:DEV_TEST_DESKTOP_FALLBACK -eq '1') { $options.Workspace = 'desktop' }
 if ($env:DEV_TEST_PLAN -eq '1') { $options.Plan = $true }
 if ($env:DEV_TEST_INVALID -eq '1') { $options.TestFilter = '--nocapture' }
 & $env:DEV_TEST_PROTOTYPE @options
@@ -98,7 +111,7 @@ function Invoke-Fixture([hashtable]$Overrides, [int]$ExpectedExit, [string]$Expe
     foreach ($entry in @{
         DEV_TEST_ROOT = $fixture; DEV_TEST_WORKING = $working; DEV_TEST_INHERITED = (Join-Path $working 'inherited target')
         DEV_TEST_LOG = $log; DEV_TEST_FAKE = $fake; DEV_TEST_PROTOTYPE = $prototype
-        DEV_TEST_PLAN = '0'; DEV_TEST_BUILD_FAIL = '0'; DEV_TEST_TOOL_FAIL = '0'; DEV_TEST_INVALID = '0'; DEV_TEST_THROW = '0'
+        DEV_TEST_PLAN = '0'; DEV_TEST_BUILD_FAIL = '0'; DEV_TEST_TOOL_FAIL = '0'; DEV_TEST_INVALID = '0'; DEV_TEST_THROW = '0'; DEV_TEST_DESKTOP_FALLBACK = '0'
         CARGO_BUILD_TARGET = ''
     }.GetEnumerator()) { $info.Environment[$entry.Key] = $entry.Value }
     foreach ($entry in $Overrides.GetEnumerator()) { $info.Environment[$entry.Key] = [string]$entry.Value }
@@ -145,6 +158,9 @@ try {
     [void](Invoke-Fixture @{ DEV_TEST_PLAN = '1' } 0)
     [void](Invoke-Fixture @{} 1)
     if (Test-Path -LiteralPath $log) { throw 'Busy target started Cargo.' }
+    [void](Invoke-Fixture @{ DEV_TEST_DESKTOP_FALLBACK = '1' } 0)
+    if ([IO.File]::ReadAllText($log, $encoding) -cne "desktop`n") { throw 'Desktop did not use its independent target.' }
+    Remove-Item -LiteralPath $log
 } finally { $lease.Dispose() }
 [void](Invoke-Fixture @{} 0)
 [void](Invoke-Fixture @{ DEV_TEST_BUILD_FAIL = '1' } 37)
@@ -159,12 +175,12 @@ $retry = [IO.File]::Open($lockPath, 'Open', 'ReadWrite', 'None')
 $retry.Dispose()
 
 # Delete only exact paths created by this fixture.
-foreach ($file in @($prototype, $development, $harness, $source, $fake, $log, (Join-Path $lockDirectory 'debug/xtask.exe'), $lockPath)) { Remove-Item -LiteralPath $file }
+foreach ($file in @($prototype, $development, $harness, $source, $fake, $log, (Join-Path $lockDirectory 'debug/xtask.exe'), $lockPath, (Join-Path $fixture 'crates/ai-ex-desktop/target/.development.lock'))) { Remove-Item -LiteralPath $file }
 $debugSymbols = [IO.Path]::ChangeExtension($fake, '.pdb')
 if (Test-Path -LiteralPath $debugSymbols -PathType Leaf) { Remove-Item -LiteralPath $debugSymbols }
-foreach ($directory in @($tools, $working, (Join-Path $lockDirectory 'debug'), $lockDirectory, $fixture)) {
+foreach ($directory in @($tools, $working, (Join-Path $lockDirectory 'debug'), $lockDirectory, (Join-Path $fixture 'crates/ai-ex-desktop/target'), (Join-Path $fixture 'crates/ai-ex-desktop'), (Join-Path $fixture 'crates'), $fixture)) {
     $unexpected = @(Get-ChildItem -LiteralPath $directory -Force)
     if ($unexpected.Count) { throw "Unexpected fixture entries in ${directory}: $($unexpected.Name -join ', ')" }
     [IO.Directory]::Delete($directory)
 }
-[pscustomobject]@{ status = 'passed'; checked_cases = 9; real_cargo_executed = $false } | ConvertTo-Json -Compress
+[pscustomobject]@{ status = 'passed'; checked_cases = 10; real_cargo_executed = $false } | ConvertTo-Json -Compress

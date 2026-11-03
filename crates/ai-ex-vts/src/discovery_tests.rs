@@ -166,3 +166,42 @@ async fn rejected_requests_and_closed_connections_return_errors_without_fabricat
     });
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn parameter_and_hotkey_discovery_correlate_out_of_order_responses() {
+    let (client, mut server) = connected().await;
+    let (parameters, hotkeys, ()) = tokio::join!(
+        client.discover_parameters(),
+        client.discover_hotkeys(),
+        async {
+            let first = request(&mut server).await;
+            let second = request(&mut server).await;
+            assert_eq!(first["messageType"], "InputParameterListRequest");
+            assert_eq!(first["data"], json!({}));
+            assert_eq!(second["messageType"], "HotkeysInCurrentModelRequest");
+            response(
+                &mut server,
+                &second["requestID"],
+                json!([{ "hotkeyID":"smile","name":"微笑"}]),
+            )
+            .await;
+            server.send(Message::Text(json!({
+                "messageType":"InputParameterListResponse", "requestID": first["requestID"],
+                "data": {"modelLoaded":true,"defaultParameters":[{"name":"MouthOpen","addedBy":"VTube Studio","value":0.5,"min":0,"max":1,"defaultValue":0}],"customParameters":[]}
+            }).to_string().into())).await.unwrap();
+        }
+    );
+    assert_eq!(hotkeys.unwrap()[0].id, "smile");
+    assert_eq!(parameters.unwrap().parameters[0].name, "MouthOpen");
+    assert!(VtsClient::disabled().discover_parameters().await.is_err());
+}
+
+#[tokio::test]
+async fn rejected_parameter_discovery_does_not_fabricate_values() {
+    let (client, mut server) = connected().await;
+    let (result, ()) = tokio::join!(client.discover_parameters(), async {
+        let request = request(&mut server).await;
+        server.send(Message::Text(json!({"messageType":"APIError","requestID":request["requestID"],"data":{"errorID":1}}).to_string().into())).await.unwrap();
+    });
+    assert!(result.is_err());
+}

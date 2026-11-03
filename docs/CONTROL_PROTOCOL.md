@@ -107,6 +107,7 @@ max_message_bytes = 65536
 {"type":"desktop_runtime","request":{"type":"state"}}
 {"type":"desktop_runtime","request":{"type":"diagnostics"}}
 {"type":"desktop_runtime","request":{"type":"discover_vts"}}
+{"type":"desktop_runtime","request":{"type":"discover_vts_parameters","offset":0}}
 ```
 
 `native_desktop` 返回 `NativeDesktopReply{snapshot,windows}`。窗口扫描只在显式 `windows` 请求时进行，最多 256 项且整份响应受 32 KiB 预算限制；完整授权路径不能截断，超出路径界限的项目不返回。服务启动、状态查询和界面预览不扫描窗口。
@@ -119,7 +120,7 @@ max_message_bytes = 65536
 
 `desktop_runtime` 的 `apply/reload` 使用实例和版本 CAS。Apply 只更新独立行为文件的主动输出、冷却、免打扰、静音时段、快捷键和字幕设置；Reload 只读取该文件，不声称重新加载模型、设备或整个服务配置。注册失败返回新版本的真实未注册/错误状态，不能把“已保存”当作“已注册”。
 
-`diagnostics` 使用专门的允许字段结构，不拼接运行日志或聊天快照；VTS 发现只返回有限 ID/名称，不触发热键。主动输出使用 `proactive_started` 事件启用输出代次，不发带伪造用户文本的 `turn_started`，也不写用户历史或记忆。
+`diagnostics` 使用专门的允许字段结构，不拼接运行日志或聊天快照；VTS 热键发现返回有限 ID/名称，不触发热键。输入参数发现每页最多返回 16 项，包含当前值、范围、默认值及来源；每次请求重新读取，参数变化时不同页不保证属于同一快照。主动输出使用 `proactive_started` 事件启用输出代次，不发带伪造用户文本的 `turn_started`，也不写用户历史或记忆。
 
 ## 记忆管理
 

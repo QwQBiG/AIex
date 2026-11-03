@@ -101,12 +101,34 @@ pub enum DesktopRuntimeRequest {
     },
     Diagnostics,
     DiscoverVts,
+    DiscoverVtsParameters {
+        offset: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscoveredVtsHotkey {
     pub id: String,
     pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoveredVtsParameter {
+    pub name: String,
+    pub added_by: String,
+    pub value: serde_json::Number,
+    pub min: serde_json::Number,
+    pub max: serde_json::Number,
+    pub default_value: serde_json::Number,
+    pub is_custom: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VtsParameterPage {
+    pub model_loaded: bool,
+    pub offset: usize,
+    pub total: usize,
+    pub parameters: Vec<DiscoveredVtsParameter>,
 }
 
 /// Deliberate allowlist: no messages, paths, window metadata, logs, or arbitrary detail.
@@ -124,4 +146,5 @@ pub enum DesktopRuntimeReply {
     State(DesktopRuntimeSnapshot),
     Diagnostics(DesktopDiagnosticReport),
     VtsDiscovery(Vec<DiscoveredVtsHotkey>),
+    VtsParameters(VtsParameterPage),
 }

@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use ai_ex_domain::{
     AppError, DesktopRuntimeReply, DesktopRuntimeRequest, DesktopRuntimeSettings,
-    DesktopRuntimeSnapshot, DiscoveredVtsHotkey,
+    DesktopRuntimeSnapshot, DiscoveredVtsHotkey, VtsParameterPage,
 };
 use eframe::egui;
 use uuid::Uuid;
@@ -26,6 +26,7 @@ pub struct DesktopRuntimePanel {
     fresh: bool,
     feedback: Option<String>,
     vts: Vec<DiscoveredVtsHotkey>,
+    vts_parameters: Option<VtsParameterPage>,
 }
 
 impl DesktopRuntimePanel {
@@ -37,11 +38,13 @@ impl DesktopRuntimePanel {
             self.fresh = false;
             self.poll_at = None;
             self.vts.clear();
+            self.vts_parameters = None;
         }
         if !connected {
             self.fresh = false;
             self.pending.clear();
             self.poll_at = None;
+            self.vts_parameters = None;
         }
         self.connected = connected && instance.is_some();
     }
@@ -116,7 +119,23 @@ impl DesktopRuntimePanel {
                 self.vts = hotkeys;
                 self.feedback = Some(format!("当前 VTS 模型有 {} 个热键。", self.vts.len()));
             }
+            Ok(DesktopRuntimeReply::VtsParameters(page)) => {
+                let valid = matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { offset } if page.offset == offset.min(page.total))
+                    && self.connected
+                    && page.total <= 1024
+                    && page.parameters.len() == page.total.saturating_sub(page.offset).min(16);
+                if valid {
+                    self.feedback = Some(format!("VTS 返回 {} 个参数。", page.total));
+                    self.vts_parameters = Some(page);
+                } else {
+                    self.vts_parameters = None;
+                    self.feedback = Some("VTS 参数结果无效，请重试。".into());
+                }
+            }
             Err(error) => {
+                if matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { .. }) {
+                    self.vts_parameters = None;
+                }
                 if matches!(
                     request,
                     DesktopRuntimeRequest::Apply { .. } | DesktopRuntimeRequest::Reload { .. }
