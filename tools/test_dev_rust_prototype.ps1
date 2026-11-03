@@ -160,5 +160,5 @@ $retry.Dispose()
 
 # Delete only exact paths created by this fixture.
 foreach ($file in @($prototype, $development, $harness, $source, $fake, $log, (Join-Path $lockDirectory 'debug/xtask.exe'), $lockPath)) { Remove-Item -LiteralPath $file }
-foreach ($directory in @($tools, $working, (Join-Path $lockDirectory 'debug'), $lockDirectory, $fixture)) { Remove-Item -LiteralPath $directory }
+foreach ($directory in @($tools, $working, (Join-Path $lockDirectory 'debug'), $lockDirectory, $fixture)) { [IO.Directory]::Delete($directory) }
 [pscustomobject]@{ status = 'passed'; checked_cases = 9; real_cargo_executed = $false } | ConvertTo-Json -Compress
