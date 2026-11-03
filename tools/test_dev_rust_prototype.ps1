@@ -160,5 +160,11 @@ $retry.Dispose()
 
 # Delete only exact paths created by this fixture.
 foreach ($file in @($prototype, $development, $harness, $source, $fake, $log, (Join-Path $lockDirectory 'debug/xtask.exe'), $lockPath)) { Remove-Item -LiteralPath $file }
-foreach ($directory in @($tools, $working, (Join-Path $lockDirectory 'debug'), $lockDirectory, $fixture)) { [IO.Directory]::Delete($directory) }
+$debugSymbols = [IO.Path]::ChangeExtension($fake, '.pdb')
+if (Test-Path -LiteralPath $debugSymbols -PathType Leaf) { Remove-Item -LiteralPath $debugSymbols }
+foreach ($directory in @($tools, $working, (Join-Path $lockDirectory 'debug'), $lockDirectory, $fixture)) {
+    $unexpected = @(Get-ChildItem -LiteralPath $directory -Force)
+    if ($unexpected.Count) { throw "Unexpected fixture entries in ${directory}: $($unexpected.Name -join ', ')" }
+    [IO.Directory]::Delete($directory)
+}
 [pscustomobject]@{ status = 'passed'; checked_cases = 9; real_cargo_executed = $false } | ConvertTo-Json -Compress
