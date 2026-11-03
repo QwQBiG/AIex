@@ -48,6 +48,10 @@ jobs:
         shell: pwsh
         run: ./tools/test_development.ps1
 
+      - name: Test native development prototype
+        shell: pwsh
+        run: ./tools/test_dev_rust_prototype.ps1 -FakeToolCompiler (Get-Command rustc).Source
+
       - name: Confirm forbidden dependencies are rejected
         shell: pwsh
         run: |
