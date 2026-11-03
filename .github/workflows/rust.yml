@@ -48,16 +48,30 @@ jobs:
         shell: pwsh
         run: ./tools/test_development.ps1
 
-      - name: Test native development prototype
-        shell: pwsh
-        run: ./tools/test_dev_rust_prototype.ps1 -FakeToolCompiler (Get-Command rustc).Source
-
       - name: Confirm forbidden dependencies are rejected
         shell: pwsh
         run: |
           pwsh -NoProfile -File ./tools/check_architecture.ps1 -ProbeViolation
           if ($LASTEXITCODE -ne 1) { throw 'Architecture probe must exit 1' }
           exit 0
+
+  development-prototype:
+    name: Native development prototype
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.96.0 --profile minimal
+
+      - name: Select Rust toolchain
+        run: rustup default 1.96.0
+
+      - name: Test prototype without Cargo or devices
+        shell: pwsh
+        run: ./tools/test_dev_rust_prototype.ps1 -FakeToolCompiler (Get-Command rustc).Source
 
   desktop:
     name: Native desktop
