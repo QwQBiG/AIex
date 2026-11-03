@@ -36,6 +36,7 @@ fn policy() -> Policy {
                 "ai-ex-model-catalog",
                 "ai-ex-model-manager",
                 "ai-ex-ollama",
+                "ai-ex-platform-windows",
             ][..],
         ),
         ("ai-ex-domain", &[][..]),

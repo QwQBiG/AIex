@@ -9,6 +9,8 @@ mod bundle_tests;
 mod bundle_zip;
 mod catalog_build;
 mod control_token;
+mod dev_plan;
+mod dev_run;
 mod native;
 mod pe_imports;
 mod portable;
@@ -28,6 +30,11 @@ use serde_json::json;
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if let [command, options @ ..] = arguments.as_slice()
+        && command == "dev"
+    {
+        return run_development(options);
+    }
     let result = match arguments.as_slice() {
         [command] if command == "architecture" => architecture::check(false),
         [command, probe] if command == "architecture" && probe == "--probe-violation" => {
@@ -46,6 +53,9 @@ async fn main() -> ExitCode {
                 command_paths(&paths, &["--path"])
                     .and_then(|paths| control_token::create(&paths[0], force_count == 1))
             }
+        }
+        [command, options @ ..] if command == "dev-plan" => {
+            dev_plan::prepare(options).map(|(_, report)| (report, true))
         }
         [command, options @ ..] if command == "portable" => {
             let offline_count = options.iter().filter(|option| *option == "--offline").count();
@@ -86,7 +96,7 @@ async fn main() -> ExitCode {
             command_paths(options, &["--project", "--distribution"])
                 .and_then(|paths| python_gate::check(&paths[0], &paths[1]))
         }
-        _ => Err("usage: cargo xtask architecture [--probe-violation] | cache-inventory --project <directory> | control-token --path <file> [--force] | portable-inspect <archive.zip> | portable-verify --archive <zip> --evidence-directory <directory> | portable --project <directory> --output <directory> [--offline] | zero-python --project <directory> --distribution <extracted-directory> | native-verify <manifest.json> <directory> | native-probe <spec.json> | native-bundle --spec <input.json> --output <new.zip> --manifest <new.json> | native-catalog --distribution <directory> --runtime-manifest <json> --runtime-zip <zip> --output <new.json> | native-sources --spec <input.json> --output <new.zip>".into()),
+        _ => Err("usage: cargo xtask architecture [--probe-violation] | dev-plan --project <directory> [options] | dev --project <directory> [options] | cache-inventory --project <directory> | control-token --path <file> [--force] | portable-inspect <archive.zip> | portable-verify --archive <zip> --evidence-directory <directory> | portable --project <directory> --output <directory> [--offline] | zero-python --project <directory> --distribution <extracted-directory> | native-verify <manifest.json> <directory> | native-probe <spec.json> | native-bundle --spec <input.json> --output <new.zip> --manifest <new.json> | native-catalog --distribution <directory> --runtime-manifest <json> --runtime-zip <zip> --output <new.json> | native-sources --spec <input.json> --output <new.zip>".into()),
     };
     let (report, passed) = match result {
         Ok(result) => result,
@@ -104,6 +114,22 @@ async fn main() -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+fn run_development(options: &[OsString]) -> ExitCode {
+    let result = dev_plan::prepare(options).and_then(|(root, report)| {
+        dev_run::ensure_not_running_from_build_output(&root)?;
+        dev_run::run(&root, &report)
+    });
+    let (report, exit_code) = match result {
+        Ok(outcome) => (
+            json!({"status": if outcome.exit_code == 0 { "passed" } else { "failed" }, "completed": outcome.completed, "failed_step": outcome.failed_step, "exit_code": outcome.exit_code}),
+            outcome.exit_code,
+        ),
+        Err(error) => (json!({"status": "failed", "error": error}), 1),
+    };
+    println!("{report}");
+    ExitCode::from(u8::try_from(exit_code).unwrap_or(1))
 }
 
 fn command_paths(

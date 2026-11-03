@@ -3066,6 +3066,7 @@ dependencies = [
  "ai-ex-model-catalog",
  "ai-ex-model-manager",
  "ai-ex-ollama",
+ "ai-ex-platform-windows",
  "base64",
  "object",
  "ring",

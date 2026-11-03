@@ -11,6 +11,7 @@ ai-ex-inference = { path = "../crates/ai-ex-inference" }
 ai-ex-model-catalog = { path = "../crates/ai-ex-model-catalog" }
 ai-ex-model-manager = { path = "../crates/ai-ex-model-manager" }
 ai-ex-ollama = { path = "../crates/ai-ex-ollama" }
+ai-ex-platform-windows = { path = "../crates/ai-ex-platform-windows" }
 base64 = "=0.22.1"
 object = { version = "=0.37.3", default-features = false, features = ["read_core", "pe", "std", "unaligned"] }
 ring = "0.17.14"

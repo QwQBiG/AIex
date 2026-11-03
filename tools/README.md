@@ -12,6 +12,8 @@
 
 频繁修改时用 `-Package ai-ex-core` 这类单包检查；`-Task test -Package ai-ex-service -TestFilter native_desktop` 只运行匹配测试。过滤器只允许用于 test，verify 保持完整验证。统一入口使用目标目录中的 `.development.lock` 持有进程锁，核心和原生互斥，桌面可以独立构建；任务结束或进程退出后锁释放，遗留空文件无需删除。裸 Cargo 仍使用 Cargo 自己的锁，不参与这个入口的互斥。
 
+`tools/dev_rust_prototype.ps1` 是 Rust 开发入口的试验路径，保留相同参数，先构建工具并运行临时副本；退出后移除该副本。它的桌面任务在准备工具时会短暂竞争根构建锁，首次使用也需编译工具；自举阶段按项目盘符检查空间，不覆盖跨卷挂载的 target，且目前依赖默认构建目标的输出位置。因此正式入口仍是 `dev.ps1`。`-Plan` 继续使用现有只读计划。隔离回归由 `tools/test_dev_rust_prototype.ps1 -FakeToolCompiler <rustc 路径>` 执行，额外链接器选项可通过 `-FakeCompilerArguments` 提供。
+
 项目的 dev/test 使用 `debug=1`，保留行号及模块调试信息，减少类型和变量调试信息；需要完整调试时，仅为该次进程设置 `CARGO_PROFILE_DEV_DEBUG=2` 或 `CARGO_PROFILE_TEST_DEBUG=2`。日常 check/build 沿用增量编译，一次性 test/clippy/verify 及 release 默认设置 `CARGO_INCREMENTAL=0`；频繁修改测试时可显式加 `-KeepIncremental`。工具链、目标和编译参数保持一致，有利于复用已编译依赖；本入口不改全局环境、链接器或 release 优化/断言策略。配置含义见 [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html#debug)。
 
 `./tools/manage_build_cache.ps1` 默认只查看五个已登记的增量缓存目录；停止所有 Cargo 构建后加 `-Apply` 才清理。工具先核对全部目录的仓库范围、忽略状态、链接、文件类型及锁，遇到源码、只读文件或活跃构建会拒绝；不清理模型、`deps`、成品、报告或临时验证源码。不要对混合存放这些内容的 `target` 直接执行整目录删除或无差别 `cargo clean`。首次清理后的编译会较慢，后续性能与空间应按实际使用权衡。

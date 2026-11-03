@@ -10,6 +10,20 @@ use std::path::PathBuf;
 pub mod desktop;
 pub mod hotkeys;
 
+#[cfg(windows)]
+mod disk;
+#[cfg(windows)]
+pub use disk::available_disk_space;
+
+/// This platform adapter provides disk space queries on Windows only.
+#[cfg(not(windows))]
+pub fn available_disk_space(_directory: &std::path::Path) -> std::io::Result<u64> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Windows disk space queries require Windows",
+    ))
+}
+
 /// Local wall-clock minute for configured quiet hours, using the OS timezone.
 #[cfg(windows)]
 pub fn local_minute() -> Option<u16> {
