@@ -128,8 +128,18 @@ impl DesktopRuntimePanel {
                 }
             });
             ui.weak(
-                "诊断只包含版本、运行时长和已确认行为设置，不包含对话、原始日志、私人音频或路径。",
+                "诊断包含版本、运行时长、行为设置和组件状态，不包含对话、原始日志、私人音频或路径。",
             );
+            if let Some(observations) = &self.component_observations {
+                ui.strong("组件状态记录");
+                ui.weak("显示导出时已有的记录，可能已过期；不代表模型或设备已通过实测。 ");
+                for (label, state) in [("记录为可用", Some(true)), ("关闭或不可用", Some(false)), ("暂无记录", None)] {
+                    let names = component_names(observations, state);
+                    if !names.is_empty() {
+                        ui.label(format!("{label}：{}", names.join("、")));
+                    }
+                }
+            }
             for key in &self.vts {
                 ui.label(format!("{} · {}", key.name, key.id));
             }
@@ -174,6 +184,40 @@ impl DesktopRuntimePanel {
             .filter_map(|request| self.begin(request))
             .collect()
     }
+}
+
+fn component_names(
+    observations: &[ai_ex_domain::DiagnosticComponentObservation],
+    expected: Option<bool>,
+) -> Vec<&'static str> {
+    use ai_ex_domain::DiagnosticComponent as Component;
+    const COMPONENTS: &[(Component, &str)] = &[
+        (Component::Native, "原生组件"),
+        (Component::Ollama, "Ollama"),
+        (Component::OllamaNative, "托管 Ollama"),
+        (Component::Deepseek, "DeepSeek"),
+        (Component::Koboldcpp, "KoboldCpp"),
+        (Component::Memory, "记忆"),
+        (Component::AudioQueue, "语音队列"),
+        (Component::AudioInput, "麦克风"),
+        (Component::AudioOutput, "扬声器"),
+        (Component::Asr, "语音识别"),
+        (Component::GptSovits, "外部语音"),
+        (Component::Vts, "VTube Studio"),
+        (Component::Vision, "视觉"),
+        (Component::Safety, "安全控制"),
+    ];
+    COMPONENTS
+        .iter()
+        .filter_map(|(component, label)| {
+            let state = observations
+                .iter()
+                .filter(|entry| entry.component == *component)
+                .map(|entry| entry.observed_ready)
+                .reduce(|left, right| left && right);
+            (state == expected).then_some(*label)
+        })
+        .collect()
 }
 
 fn minute_editor(ui: &mut egui::Ui, label: &str, minute: &mut u16) {

@@ -4,7 +4,7 @@ use ai_ex_ui_model::TurnStatus;
 pub(super) const COMPOSER_ID: &str = "conversation_input";
 
 impl DesktopApp {
-    pub(super) fn show_conversation(&self, ui: &mut egui::Ui) {
+    pub(super) fn show_conversation(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .id_salt("conversation_history")
             .max_height(ui.available_height())
@@ -25,6 +25,33 @@ impl DesktopApp {
                         ui.weak("今天发生了什么，或是想一起做点什么？");
                         if !self.can_submit() {
                             ui.weak("连接准备好后就能发送，也可以先写下想说的话。");
+                        }
+                        if self.input.is_empty() {
+                            ui.add_space(16.0);
+                            ui.weak("不知道说什么？可以从这里开始");
+                            ui.add_space(4.0);
+                            ui.horizontal_wrapped(|ui| {
+                                for suggestion in [
+                                    "你好，今天我们来聊聊吧。",
+                                    "你愿意介绍一下自己吗？",
+                                    "陪我聊聊今天发生的事。",
+                                ] {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(suggestion)
+                                                .fill(super::theme::SURFACE_ALT)
+                                                .stroke(egui::Stroke::NONE)
+                                                .corner_radius(9),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.input = suggestion.to_owned();
+                                        ui.ctx().memory_mut(|memory| {
+                                            memory.request_focus(egui::Id::new(COMPOSER_ID));
+                                        });
+                                    }
+                                }
+                            });
                         }
                     });
                 }

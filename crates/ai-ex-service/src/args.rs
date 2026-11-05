@@ -22,6 +22,7 @@ pub struct Args {
     pub replay_automation: Option<PathBuf>,
     pub replay_stage: Option<PathBuf>,
     pub template_game: Option<PathBuf>,
+    pub template_import: Option<PathBuf>,
     pub vision_image: Option<PathBuf>,
     pub vision_prompt: Option<String>,
 }
@@ -46,6 +47,7 @@ impl Args {
         let mut replay_automation = None;
         let mut replay_stage = None;
         let mut template_game = None;
+        let mut template_import = None;
         let mut vision_image = None;
         let mut vision_prompt = None;
         let mut values = values.into_iter();
@@ -119,6 +121,12 @@ impl Args {
                     })?;
                     template_game = Some(PathBuf::from(path));
                 }
+                "--template-import" => {
+                    let path = values.next().ok_or_else(|| {
+                        AppError::configuration("--template-import requires a request path")
+                    })?;
+                    template_import = Some(PathBuf::from(path));
+                }
                 "--prompt" => {
                     prompt = Some(
                         values
@@ -140,7 +148,7 @@ impl Args {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::configuration(
-                        "usage: ai-ex-service [--config PATH] [--validate-config | --reindex-memory | --maintain-media [--media-capacity N] [--apply-media-maintenance --archive-memory NEW.jsonl] | --serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --template-game MANIFEST.json | --prompt TEXT | \
+                        "usage: ai-ex-service [--config PATH] [--validate-config | --reindex-memory | --maintain-media [--media-capacity N] [--apply-media-maintenance --archive-memory NEW.jsonl] | --serve | --managed | --check | --replay-events PATH [--replay-report PATH] | --replay-automation PATH | --replay-stage PATH | --template-game MANIFEST.json | --template-import REQUEST.json | --prompt TEXT | \
                          --vision-image PATH --vision-prompt TEXT]",
                     ));
                 }
@@ -183,11 +191,12 @@ impl Args {
             + usize::from(replay_automation.is_some())
             + usize::from(replay_stage.is_some())
             + usize::from(template_game.is_some())
+            + usize::from(template_import.is_some())
             + usize::from(prompt.is_some())
             + usize::from(vision_image.is_some());
         if selected_modes > 1 {
             return Err(AppError::configuration(
-                "--validate-config, --reindex-memory, --maintain-media, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --template-game, --prompt, and vision analysis modes are mutually exclusive",
+                "--validate-config, --reindex-memory, --maintain-media, --serve, --managed, --check, --replay-events, --replay-automation, --replay-stage, --template-game, --template-import, --prompt, and vision analysis modes are mutually exclusive",
             ));
         }
         if native_setup && !(serve || managed) {
@@ -214,6 +223,7 @@ impl Args {
             replay_automation,
             replay_stage,
             template_game,
+            template_import,
             vision_image,
             vision_prompt,
         })
@@ -223,6 +233,21 @@ impl Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_import_is_offline_and_exclusive() {
+        let args =
+            Args::parse(["--template-import".to_owned(), "request.json".to_owned()]).unwrap();
+        assert_eq!(args.template_import, Some(PathBuf::from("request.json")));
+        assert!(
+            Args::parse([
+                "--template-import".to_owned(),
+                "request.json".to_owned(),
+                "--serve".to_owned()
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn background_modes_are_explicit_and_exclusive() {

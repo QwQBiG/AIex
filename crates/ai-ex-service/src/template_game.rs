@@ -387,7 +387,7 @@ fn resolve(base: &Path, path: &Path) -> PathBuf {
         base.join(path)
     }
 }
-fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, AppError> {
+pub(crate) fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
     File::open(path)
         .map_err(|_| AppError::configuration("template replay input is unavailable"))?
@@ -403,6 +403,10 @@ fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, AppError> {
 }
 fn load_image(path: &Path) -> Result<ScreenFrame, AppError> {
     let bytes = read_limited(path, MAX_IMAGE_BYTES)?;
+    load_image_bytes(bytes)
+}
+
+pub(crate) fn load_image_bytes(bytes: Vec<u8>) -> Result<ScreenFrame, AppError> {
     let mut reader = image::ImageReader::new(Cursor::new(bytes.as_slice()))
         .with_guessed_format()
         .map_err(|_| AppError::configuration("cannot identify template replay image"))?;

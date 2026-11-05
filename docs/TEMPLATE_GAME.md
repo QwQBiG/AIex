@@ -38,6 +38,28 @@ replay/
 
 `display_name`、`description`、`vlm_prompts`、`default_templates` 是 profile 字段，`action_cooldowns` 可省略。提示词和冷却时间保留在 profile 中；独立 CLI 入口不会调用 VLM，也不把 `action_cooldowns` 自动换算为反射循环间隔。循环间隔由 manifest 的 `interval_ms` 明确控制。
 
+## 将旧模板图片注册到独立副本
+
+旧工具保存图片时不一定会更新 profile。开发分支可用服务程序准备一份独立的离线回放 profile：先在新文件中写入以下请求，路径相对请求文件解析；省略 `output` 时只读预览，不写入任何文件。
+
+```json
+{
+  "profile": "legacy/profile.json",
+  "image": "selected.png",
+  "target": "primary_target"
+}
+```
+
+将下面的示例路径替换为自己的服务程序和请求文件，在 PowerShell 中执行：
+
+```powershell
+& 'D:\path\to\ai-ex-service.exe' --template-import 'D:\path\to\request.json'
+```
+
+检查预览；预览包含原 profile 的描述和提示词，分享前请检查内容。确认后可在请求中添加 `"output": "prepared"` 再执行一次：输出目录必须不存在，且其父目录必须已存在并位于旧 profile 目录之外。工具会复制旧 profile 已引用的所有图片和新图片，保存新的 `profile.json`，不覆盖原文件。若写入失败，可能留下本次新建的不完整目录，需要检查后自行处理。
+
+目标键必须是新键；同名文件内容不一致、缺少旧图片、非法图片或未知 profile 字段会明确报错。已支持字段是上述 profile 的五个字段；遇到未知字段时先检查原资料，不会静默丢弃。预览和写入各自重新读取输入，如果旧文件在两次操作间变化，需要重新核对。准备结果只用于上述离线回放，不会读取窗口或执行真实键鼠动作。
+
 ## Manifest schema 1
 
 将下面内容保存为 `replay/manifest.json`。图片需要自行准备；示例坐标适用于图像原点位于桌面物理坐标 `(-1800, 100)`、图像像素对应两倍物理像素的捕获副本。

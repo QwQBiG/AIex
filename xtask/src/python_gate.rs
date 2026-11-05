@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -95,11 +96,7 @@ pub fn check(project: &Path, distribution: &Path) -> Result<(Value, bool)> {
         }
         if path.extension().is_some_and(|extension| extension == "rs") {
             let source = read_text(&path)?;
-            let matches = rust_command_gate::scan(&source)
-                .map_err(|error| format!("cannot inspect Rust source {relative}: {error}"))?;
-            if matches > 0 {
-                issues.push(json!({"kind": "rust_command", "path": relative, "count": matches}));
-            }
+            check_rust(&source, &mut issues, relative)?;
         }
     }
     let mut distribution_files = 0;
@@ -119,8 +116,8 @@ pub fn check(project: &Path, distribution: &Path) -> Result<(Value, bool)> {
             "source_files_checked": source_files,
             "distribution_files_checked": distribution_files,
             "issues": issues,
-            "scope": "tracked files, Cargo manifests and locks, literal Rust launches, script commands, extracted distribution filenames, script commands and static PE imports",
-            "limitations": "does not inspect nested archives, renamed or extensionless PE files, cross-file import aliases, dynamic or macro-generated commands, runtime library loading, embedded interpreters, remote services, or concurrent file changes"
+            "scope": "tracked files, Cargo manifests and locks, literal Rust launches, script commands, extracted distribution filenames, script commands and static PE imports including renamed files",
+            "limitations": "nested archives are not inspected; unrecognized or renamed archives may not be detected. Cross-file import aliases, dynamic or macro-generated commands, runtime library loading, embedded interpreters, remote services, and concurrent file changes are not inspected"
         }),
         passed,
     ))
@@ -183,7 +180,7 @@ fn issue(issues: &mut Vec<Value>, kind: &str, path: &str, line: Option<usize>) {
     issues.push(json!({ "kind": kind, "path": path, "line": line }));
 }
 
-fn artifact_name(path: &str) -> bool {
+pub(crate) fn artifact_name(path: &str) -> bool {
     let name = path
         .rsplit(['/', '\\'])
         .next()
@@ -203,6 +200,32 @@ fn artifact_name(path: &str) -> bool {
         || crate::pe_imports::python_dll(&name)
 }
 
+pub(crate) fn archive_name(path: &str) -> bool {
+    let name = path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    [
+        ".zip", ".7z", ".rar", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".zst", ".npz", ".crate",
+    ]
+    .iter()
+    .any(|suffix| name.ends_with(suffix))
+}
+
+pub(crate) fn archive_signature(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"PK\x03\x04")
+        || bytes.starts_with(b"PK\x05\x06")
+        || bytes.starts_with(b"PK\x07\x08")
+        || bytes.starts_with(b"\x1f\x8b")
+        || bytes.starts_with(b"7z\xbc\xaf\x27\x1c")
+        || bytes.starts_with(b"\xfd7zXZ\0")
+        || bytes.starts_with(b"BZh")
+        || bytes.starts_with(b"\x28\xb5\x2f\xfd")
+        || bytes.starts_with(b"Rar!\x1a\x07")
+        || bytes.get(257..262) == Some(b"ustar")
+}
+
 fn interpreter_name(name: &str) -> bool {
     let name = name
         .strip_suffix(".exe")
@@ -214,7 +237,7 @@ fn interpreter_name(name: &str) -> bool {
         })
 }
 
-fn is_script(path: &Path) -> bool {
+pub(crate) fn is_script(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
         .is_some_and(|value| {
@@ -225,7 +248,7 @@ fn is_script(path: &Path) -> bool {
         })
 }
 
-fn command_line(line: &str) -> bool {
+pub(crate) fn command_line(line: &str) -> bool {
     let line = line.trim_start();
     if line.starts_with('#') || line.starts_with("::") {
         return false;
@@ -255,7 +278,16 @@ fn binding_name(value: &str) -> bool {
         })
 }
 
-fn check_toml(value: &toml::Value, issues: &mut Vec<Value>, path: &str) {
+pub(crate) fn check_rust(source: &str, issues: &mut Vec<Value>, path: &str) -> Result<()> {
+    let matches = rust_command_gate::scan(source)
+        .map_err(|error| format!("cannot inspect Rust source {path}: {error}"))?;
+    if matches > 0 {
+        issues.push(json!({"kind": "rust_command", "path": path, "count": matches}));
+    }
+    Ok(())
+}
+
+pub(crate) fn check_toml(value: &toml::Value, issues: &mut Vec<Value>, path: &str) {
     match value {
         toml::Value::Table(table) => {
             for (key, value) in table {
@@ -315,13 +347,23 @@ fn scan_distribution(
                     }
                 }
             }
-            if path
+            let pe_extension = path
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| {
                     extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("dll")
-                })
-            {
+                });
+            let mut file =
+                fs::File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+            let mut header = Vec::with_capacity(512);
+            file.by_ref()
+                .take(512)
+                .read_to_end(&mut header)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            if archive_name(&relative) || archive_signature(&header) {
+                issue(issues, "distribution_archive_uninspected", &relative, None);
+            }
+            if pe_extension || header.starts_with(b"MZ") {
                 let bytes =
                     fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
                 for import in crate::pe_imports::inspect(&bytes)
@@ -457,6 +499,8 @@ version = "0.1"
         )
         .unwrap();
         fs::write(root.join("startup.cmd"), b"python.exe worker.py\n").unwrap();
+        fs::write(root.join("extra.zip"), b"PK\x03\x04known archive").unwrap();
+        fs::write(root.join("renamed.bin"), b"PK\x03\x04renamed archive").unwrap();
         fs::create_dir(root.join("runtime")).unwrap();
         fs::write(
             root.join("runtime").join("python311.dll"),
@@ -466,8 +510,28 @@ version = "0.1"
         let mut count = 0;
         let mut issues = Vec::new();
         scan_distribution(&root, &root, &mut count, &mut issues).unwrap();
-        assert_eq!(count, 3);
-        assert_eq!(issues.len(), 4);
+        assert_eq!(count, 5);
+        assert_eq!(issues.len(), 6);
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|item| item["kind"] == "distribution_archive_uninspected"
+                    && item["path"] == "extra.zip")
+                .count(),
+            1
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|item| item["kind"] == "distribution_archive_uninspected"
+                    && item["path"] == "renamed.bin")
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|item| item["kind"] == "distribution_archive_uninspected"
+                    && item["path"] == "extra.zip")
+        );
         assert!(
             issues
                 .iter()
@@ -489,6 +553,8 @@ version = "0.1"
         fs::remove_file(root.join("runtime").join("python311.dll")).unwrap();
         fs::remove_dir(root.join("runtime")).unwrap();
         fs::remove_file(root.join("startup.cmd")).unwrap();
+        fs::remove_file(root.join("extra.zip")).unwrap();
+        fs::remove_file(root.join("renamed.bin")).unwrap();
         fs::remove_file(root.join("AIex.exe")).unwrap();
         fs::remove_dir(root).unwrap();
     }
@@ -504,6 +570,45 @@ version = "0.1"
         let error = scan_distribution(&root, &root, &mut count, &mut issues).unwrap_err();
         assert!(error.contains("cannot inspect PE broken.exe"), "{error}");
         fs::remove_file(root.join("broken.exe")).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn distribution_inspects_renamed_and_extensionless_pe_files() {
+        let root =
+            std::env::temp_dir().join(format!("aiex-gate-renamed-pe-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("worker"),
+            crate::pe_imports::tests::fixture(Some("python311.dll"), None),
+        )
+        .unwrap();
+        fs::write(
+            root.join("helper.dat"),
+            crate::pe_imports::tests::fixture(None, Some("PYTHON3.DLL")),
+        )
+        .unwrap();
+        fs::write(root.join("ordinary.dat"), b"ordinary data").unwrap();
+        let mut count = 0;
+        let mut issues = Vec::new();
+        scan_distribution(&root, &root, &mut count, &mut issues).unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(issues.len(), 2);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue["path"] == "worker" && issue["library"] == "python311.dll")
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue["path"] == "helper.dat" && issue["delayed"] == true)
+        );
+        fs::write(root.join("worker"), b"MZbad").unwrap();
+        assert!(scan_distribution(&root, &root, &mut 0, &mut Vec::new()).is_err());
+        for name in ["worker", "helper.dat", "ordinary.dat"] {
+            fs::remove_file(root.join(name)).unwrap();
+        }
         fs::remove_dir(root).unwrap();
     }
 

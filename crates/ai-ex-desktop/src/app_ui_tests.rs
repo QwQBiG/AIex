@@ -76,6 +76,95 @@ fn click(app: &mut DesktopApp, context: &egui::Context, position: egui::Pos2) {
 }
 
 #[test]
+fn leaving_native_page_cancels_a_pending_file_drop() {
+    let (mut app, _events, _sent) = app();
+    app.native_mode = true;
+    app.page = layout::Page::Native;
+    app.native.state = Some(ai_ex_domain::NativeState {
+        configured: true,
+        configuration_path: "synthetic.toml".into(),
+        preview_active: false,
+        preview_generation: 0,
+    });
+    app.native.packages = vec![ai_ex_domain::NativePackage {
+        id: "native-cpu".into(),
+        name: "运行组件".into(),
+        revision: "test".into(),
+        kind: ai_ex_domain::NativePackageKind::Runtime,
+        state: ai_ex_domain::NativePackageState::NotPrepared,
+        bytes: 1,
+        installed: false,
+        active_operation: None,
+        error: None,
+        required_packages: Vec::new(),
+        licenses: Vec::new(),
+    }];
+    let context = egui::Context::default();
+    configure_appearance(&context);
+    render(&mut app, &context, [1000.0, 720.0], Vec::new());
+    let output = render(&mut app, &context, [1000.0, 720.0], Vec::new());
+    click(
+        &mut app,
+        &context,
+        label_position(&output, "准备拖入此组件"),
+    );
+    let output = render(&mut app, &context, [1000.0, 720.0], Vec::new());
+    label_position(&output, "等待拖入：运行组件");
+    click(&mut app, &context, label_position(&output, "取消拖入"));
+    assert!(!app.native.waiting_for_drop());
+    let output = render(&mut app, &context, [1000.0, 720.0], Vec::new());
+    click(
+        &mut app,
+        &context,
+        label_position(&output, "准备拖入此组件"),
+    );
+    let output = render(&mut app, &context, [1000.0, 720.0], Vec::new());
+    label_position(&output, "等待拖入：运行组件");
+    click(&mut app, &context, label_position(&output, "聊天"));
+    assert_eq!(app.page, layout::Page::Conversation);
+    app.page = layout::Page::Native;
+    let _ = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 720.0),
+            )),
+            dropped_files: vec![egui::DroppedFile {
+                path: Some(r"D:\late.zip".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        |ui| app.show_contents(ui),
+    );
+    assert!(
+        app.native
+            .import_paths
+            .get("native-cpu")
+            .is_none_or(String::is_empty)
+    );
+}
+
+#[test]
+fn empty_chat_suggestion_only_fills_the_draft_and_status_remains_visible() {
+    let (mut app, _events, mut sent) = app();
+    let context = egui::Context::default();
+    configure_appearance(&context);
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    let output = render(&mut app, &context, [1000.0, 720.0], vec![]);
+    label_position(&output, "已连接");
+    let suggestion = "你好，今天我们来聊聊吧。";
+    click(&mut app, &context, label_position(&output, suggestion));
+    assert_eq!(app.input, suggestion);
+    assert!(sent.try_recv().is_err());
+    app.state.connection = ConnectionState::Disconnected;
+    let output = render(&mut app, &context, [1000.0, 720.0], vec![]);
+    label_position(&output, "未连接");
+    label_position(&output, "尚未连接，草稿可以先写");
+    assert_eq!(app.input, suggestion);
+}
+
+#[test]
 fn sending_requires_synchronization_and_keeps_drafts_when_the_worker_has_stopped() {
     let (mut app, _events, mut sent) = app();
     app.input = "  先保留这段草稿  ".to_owned();
@@ -98,6 +187,44 @@ fn sending_requires_synchronization_and_keeps_drafts_when_the_worker_has_stopped
     app.submit();
     assert_eq!(app.input, "线程关闭时也保留");
     assert!(app.last_error.is_some());
+}
+
+#[test]
+fn narrow_chat_shows_a_short_exchange_without_clipping() {
+    let (mut app, _events, _sent) = app();
+    app.state.turns.push(ai_ex_ui_model::UiTurn {
+        turn_id: ai_ex_domain::TurnId::new(),
+        user_text: "今天学习了很久，想休息一下再继续。".into(),
+        assistant_text:
+            "好啊，我陪你。先让肩膀放松一下，喝口水也好。\n等你想继续了，我们再一起看看剩下的安排。"
+                .into(),
+        status: ai_ex_ui_model::TurnStatus::Completed,
+    });
+    let context = egui::Context::default();
+    configure_appearance(&context);
+    render(&mut app, &context, [720.0, 600.0], vec![]);
+    let output = render(&mut app, &context, [720.0, 600.0], vec![]);
+    for label in [
+        "你",
+        app.state.turns[0].user_text.as_str(),
+        app.state.turns[0].assistant_text.as_str(),
+    ] {
+        let (clip, rect) = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => Some((
+                    shape.clip_rect,
+                    egui::Rect::from_min_size(text.pos, text.galley.size()),
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing conversation text: {label}"));
+        assert!(
+            clip.contains_rect(rect),
+            "{label}: rect={rect:?}, clip={clip:?}"
+        );
+    }
 }
 
 #[test]

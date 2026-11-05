@@ -65,14 +65,11 @@ pub(crate) fn package(
     if !cfg!(windows) {
         return Err("Portable packaging requires Windows".into());
     }
-    let output_root = std::path::absolute(output_root)
-        .map_err(|e| format!("cannot resolve output directory: {e}"))?;
-    let version = versions(repository, offline)?;
+    let (output_root, version) = preflight(repository, output_root, offline)?;
     let name = format!("AIex-Windows-x64-{version}");
     let destination = output_root.join(&name);
     let archive = output_root.join(format!("{name}.zip"));
     let checksum = output_root.join(format!("{name}.zip.sha256"));
-    reject_existing(&[&destination, &archive, &checksum])?;
 
     for (_, path, gui) in BINARIES {
         check_pe(&repository.join(path), gui)?;
@@ -98,6 +95,23 @@ pub(crate) fn package(
         json!({"version": version, "directory": destination, "archive": archive, "sha256": hash, "ready": true}),
         true,
     ))
+}
+
+pub(crate) fn preflight(
+    repository: &Path,
+    output_root: &Path,
+    offline: bool,
+) -> Result<(std::path::PathBuf, String), String> {
+    let output_root = std::path::absolute(output_root)
+        .map_err(|e| format!("cannot resolve output directory: {e}"))?;
+    let version = versions(repository, offline)?;
+    let name = format!("AIex-Windows-x64-{version}");
+    reject_existing(&[
+        &output_root.join(&name),
+        &output_root.join(format!("{name}.zip")),
+        &output_root.join(format!("{name}.zip.sha256")),
+    ])?;
+    Ok((output_root, version))
 }
 
 fn versions(repository: &Path, offline: bool) -> Result<String, String> {

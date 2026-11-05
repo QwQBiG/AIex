@@ -108,12 +108,81 @@ fn vts_parameter_pages_are_correlated_and_cleared_on_disconnect() {
 }
 
 #[test]
+fn diagnostic_observations_are_displayed_and_cleared_with_the_connection() {
+    use ai_ex_domain::{DiagnosticComponent, DiagnosticComponentObservation};
+    let id = Uuid::new_v4();
+    let mut panel = DesktopRuntimePanel::default();
+    panel.synchronize(Some(id), true);
+    let WorkerCommand::DesktopRuntime { request_id, .. } =
+        panel.begin(DesktopRuntimeRequest::Diagnostics).unwrap()
+    else {
+        unreachable!()
+    };
+    panel.receive(
+        request_id,
+        Ok(DesktopRuntimeReply::Diagnostics(
+            ai_ex_domain::DesktopDiagnosticReport {
+                schema_version: 1,
+                application_version: "test".into(),
+                desktop: snapshot(Uuid::new_v4(), 1, false),
+                uptime_seconds: 5,
+                component_observations: Vec::new(),
+            },
+        )),
+    );
+    assert!(panel.component_observations.is_none());
+    panel.component_observations = Some(vec![
+        DiagnosticComponentObservation {
+            component: DiagnosticComponent::Memory,
+            observed_ready: true,
+        },
+        DiagnosticComponentObservation {
+            component: DiagnosticComponent::Vts,
+            observed_ready: false,
+        },
+    ]);
+    let context = egui::Context::default();
+    let output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 1600.0),
+            )),
+            ..Default::default()
+        },
+        |ui| assert!(panel.show(ui).is_empty()),
+    );
+    let labels = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"记录为可用：记忆"));
+    assert!(labels.contains(&"关闭或不可用：VTube Studio"));
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with("暂无记录：") && label.contains("语音识别"))
+    );
+    assert!(labels.iter().any(|label| label.contains("可能已过期")));
+    panel.synchronize(Some(id), false);
+    assert!(panel.component_observations.is_none());
+    panel.component_observations = Some(Vec::new());
+    panel.synchronize(Some(Uuid::new_v4()), true);
+    assert!(panel.component_observations.is_none());
+}
+
+#[test]
 fn diagnostics_export_has_only_typed_allowlist_and_unique_create_new_files() {
     let report = ai_ex_domain::DesktopDiagnosticReport {
         schema_version: 1,
         application_version: "test".into(),
         desktop: snapshot(Uuid::new_v4(), 1, false),
         uptime_seconds: 5,
+        component_observations: Vec::new(),
     };
     let first = export_report(&report).unwrap();
     let second = export_report(&report).unwrap();

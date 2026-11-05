@@ -14,9 +14,11 @@ mod dev_run;
 mod native;
 mod pe_imports;
 mod portable;
+mod portable_build;
 mod portable_verify;
 mod portable_verify_archive;
 mod python_gate;
+mod runtime_python_gate;
 mod sources_build;
 mod spec;
 mod wav;
@@ -57,6 +59,9 @@ async fn main() -> ExitCode {
         [command, options @ ..] if command == "dev-plan" => {
             dev_plan::prepare(options).map(|(_, report)| (report, true))
         }
+        [command, options @ ..] if command == "portable-build" => {
+            portable_build::execute(options)
+        }
         [command, options @ ..] if command == "portable" => {
             let offline_count = options.iter().filter(|option| *option == "--offline").count();
             if offline_count > 1 {
@@ -96,7 +101,11 @@ async fn main() -> ExitCode {
             command_paths(options, &["--project", "--distribution"])
                 .and_then(|paths| python_gate::check(&paths[0], &paths[1]))
         }
-        _ => Err("usage: cargo xtask architecture [--probe-violation] | dev-plan --project <directory> [options] | dev --project <directory> [options] | cache-inventory --project <directory> | control-token --path <file> [--force] | portable-inspect <archive.zip> | portable-verify --archive <zip> --evidence-directory <directory> | portable --project <directory> --output <directory> [--offline] | zero-python --project <directory> --distribution <extracted-directory> | native-verify <manifest.json> <directory> | native-probe <spec.json> | native-bundle --spec <input.json> --output <new.zip> --manifest <new.json> | native-catalog --distribution <directory> --runtime-manifest <json> --runtime-zip <zip> --output <new.json> | native-sources --spec <input.json> --output <new.zip>".into()),
+        [command, options @ ..] if command == "zero-python-runtime" => {
+            command_paths(options, &["--catalog", "--archive"])
+                .and_then(|paths| runtime_python_gate::check(&paths[0], &paths[1]))
+        }
+        _ => Err("usage: cargo xtask architecture [--probe-violation] | dev-plan --project <directory> [options] | dev --project <directory> [options] | cache-inventory --project <directory> | control-token --path <file> [--force] | portable-inspect <archive.zip> | portable-verify --archive <zip> --evidence-directory <directory> | portable --project <directory> --output <directory> [--offline] | portable-build --project <directory> --output <directory> [--offline] [--skip-build] [--jobs N] [--minimum-free-gib N] | zero-python --project <directory> --distribution <extracted-directory> | zero-python-runtime --catalog <json> --archive <zip> | native-verify <manifest.json> <directory> | native-probe <spec.json> | native-bundle --spec <input.json> --output <new.zip> --manifest <new.json> | native-catalog --distribution <directory> --runtime-manifest <json> --runtime-zip <zip> --output <new.json> | native-sources --spec <input.json> --output <new.zip>".into()),
     };
     let (report, passed) = match result {
         Ok(result) => result,

@@ -27,6 +27,7 @@ pub struct DesktopRuntimePanel {
     feedback: Option<String>,
     vts: Vec<DiscoveredVtsHotkey>,
     vts_parameters: Option<VtsParameterPage>,
+    component_observations: Option<Vec<ai_ex_domain::DiagnosticComponentObservation>>,
 }
 
 impl DesktopRuntimePanel {
@@ -39,12 +40,14 @@ impl DesktopRuntimePanel {
             self.poll_at = None;
             self.vts.clear();
             self.vts_parameters = None;
+            self.component_observations = None;
         }
         if !connected {
             self.fresh = false;
             self.pending.clear();
             self.poll_at = None;
             self.vts_parameters = None;
+            self.component_observations = None;
         }
         self.connected = connected && instance.is_some();
     }
@@ -107,9 +110,13 @@ impl DesktopRuntimePanel {
                 self.confirmed = Some(snapshot);
             }
             Ok(DesktopRuntimeReply::Diagnostics(report)) => {
-                if Some(report.desktop.instance_id) != self.instance || !self.connected {
+                if !matches!(request, DesktopRuntimeRequest::Diagnostics)
+                    || Some(report.desktop.instance_id) != self.instance
+                    || !self.connected
+                {
                     return;
                 }
+                self.component_observations = Some(report.component_observations.clone());
                 self.feedback = Some(match export_report(&report) {
                     Ok(path) => format!("诊断已导出：{}", path.display()),
                     Err(error) => format!("诊断导出失败：{error}"),

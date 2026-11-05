@@ -150,6 +150,200 @@ fn render(
     (output, commands)
 }
 
+fn click_label(panel: &mut NativePanel, context: &egui::Context, label: &str) {
+    let (output, _) = render(panel, context, Vec::new());
+    let position = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == label => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing button: {label}"));
+    for pressed in [true, false] {
+        let _ = render(
+            panel,
+            context,
+            vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+    }
+}
+
+#[test]
+fn dropping_fills_only_the_explicitly_armed_model_draft_once() {
+    let mut panel = panel();
+    let context = egui::Context::default();
+    let _ = render(&mut panel, &context, Vec::new());
+    let file = egui::DroppedFile {
+        path: Some(r"D:\离线资源\运行包.zip".into()),
+        ..Default::default()
+    };
+    let _ = context.run_ui(
+        egui::RawInput {
+            dropped_files: vec![file.clone()],
+            ..Default::default()
+        },
+        |ui| {
+            let _ = panel.show(ui, "default", true);
+            assert_eq!(ui.input(|input| input.raw.dropped_files.len()), 1);
+        },
+    );
+    assert!(
+        panel
+            .import_paths
+            .get("native-cpu")
+            .is_none_or(String::is_empty)
+    );
+    click_label(&mut panel, &context, "准备拖入此组件");
+    assert_eq!(
+        panel.drop_target,
+        Some(DropTarget::Package("native-cpu".into()))
+    );
+    let mut commands = Vec::new();
+    let _ = context.run_ui(
+        egui::RawInput {
+            focused: false,
+            events: vec![egui::Event::PointerMoved(egui::pos2(999.0, 999.0))],
+            dropped_files: vec![file],
+            ..Default::default()
+        },
+        |ui| commands = panel.show(ui, "default", true),
+    );
+    assert_eq!(panel.import_paths["native-cpu"], r"D:\离线资源\运行包.zip");
+    assert!(panel.status.contains("核对后点击"));
+    assert!(panel.drop_target.is_none());
+    assert!(commands.iter().all(
+        |command| matches!(command, WorkerCommand::Native { request, .. } if !mutating(request))
+    ));
+
+    let _ = context.run_ui(
+        egui::RawInput {
+            dropped_files: vec![egui::DroppedFile {
+                path: Some(r"D:\wrong.zip".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        |ui| {
+            let _ = panel.show(ui, "default", true);
+        },
+    );
+    assert_eq!(panel.import_paths["native-cpu"], r"D:\离线资源\运行包.zip");
+}
+
+#[test]
+fn dropped_paths_reject_multiple_items_and_missing_system_paths() {
+    let context = egui::Context::default();
+    let mut panel = panel();
+    for files in [
+        vec![egui::DroppedFile::default()],
+        vec![egui::DroppedFile::default(), egui::DroppedFile::default()],
+    ] {
+        panel.arm_drop(DropTarget::Package("native-cpu".into()));
+        let _ = context.run_ui(
+            egui::RawInput {
+                dropped_files: files,
+                ..Default::default()
+            },
+            |ui| {
+                let _ = panel.show(ui, "default", true);
+            },
+        );
+        assert!(panel.drop_target.is_none());
+        assert!(!panel.status.is_empty());
+        assert!(
+            panel
+                .import_paths
+                .get("native-cpu")
+                .is_none_or(String::is_empty)
+        );
+    }
+}
+
+#[test]
+fn dropping_a_reference_wav_preserves_the_voice_draft_without_importing() {
+    let mut panel = panel();
+    panel.step = 2;
+    panel.reference_text = "已经填写的原文".into();
+    let context = egui::Context::default();
+    let (output, _) = render(&mut panel, &context, Vec::new());
+    let position = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text == "用参考音频制作专属声音" => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .expect("reference audio section is visible");
+    for pressed in [true, false] {
+        let _ = render(
+            &mut panel,
+            &context,
+            vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+    }
+    for _ in 0..20 {
+        let _ = render(&mut panel, &context, Vec::new());
+    }
+    click_label(&mut panel, &context, "准备拖入参考 WAV");
+    assert_eq!(panel.drop_target, Some(DropTarget::ReferenceWav));
+    let mut commands = Vec::new();
+    let _ = context.run_ui(
+        egui::RawInput {
+            dropped_files: vec![egui::DroppedFile {
+                path: Some(r"D:\声音\参考.wav".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        |ui| commands = panel.show(ui, "default", true),
+    );
+    assert_eq!(panel.reference_path, r"D:\声音\参考.wav");
+    assert!(panel.drop_target.is_none());
+    assert!(panel.status.contains("核对后点击"));
+    assert_eq!(panel.reference_text, "已经填写的原文");
+    assert!(commands.iter().all(
+        |command| matches!(command, WorkerCommand::Native { request, .. } if !mutating(request))
+    ));
+}
+
+#[test]
+fn armed_drop_is_cancelled_by_user_step_change_and_disconnect() {
+    let mut panel = panel();
+    let context = egui::Context::default();
+    click_label(&mut panel, &context, "准备拖入此组件");
+    assert!(panel.drop_target.is_some());
+    panel.cancel_drop();
+    assert!(panel.drop_target.is_none());
+    click_label(&mut panel, &context, "准备拖入此组件");
+    click_label(&mut panel, &context, "2 · 语音开关");
+    assert_eq!(panel.step, 1);
+    assert!(panel.drop_target.is_none());
+    panel.arm_drop(DropTarget::ReferenceWav);
+    panel.disconnected();
+    assert!(panel.drop_target.is_none());
+}
+
 #[test]
 fn opening_is_read_only_and_download_requires_the_visible_confirmation() {
     let mut panel = panel();

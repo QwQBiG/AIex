@@ -1,5 +1,6 @@
 /// Speech preparation options matching the old cleaner's user-facing switches.
-/// Inline code follows the existing Rust behavior: it is omitted from speech.
+/// Inline code is omitted only when the fragment has paired backticks.
+/// An odd number of backticks is discarded without treating text as code.
 #[derive(Debug, Clone, Copy)]
 pub struct SpeechCleanup {
     pub remove_emoji: bool,
@@ -21,9 +22,17 @@ impl SpeechCleanup {
     pub fn clean(self, input: &str) -> String {
         let mut filtered = String::with_capacity(input.len());
         let mut inside_code = false;
+        let paired_backticks = self.remove_markdown
+            && input
+                .bytes()
+                .filter(|byte| *byte == b'`')
+                .count()
+                .is_multiple_of(2);
         for character in input.chars() {
             if self.remove_markdown && character == '`' {
-                inside_code = !inside_code;
+                if paired_backticks {
+                    inside_code = !inside_code;
+                }
                 continue;
             }
             if inside_code
@@ -135,5 +144,37 @@ mod tests {
             SpeechCleanup::default().clean("**Hello** `ignored()` world"),
             "Hello world"
         );
+    }
+
+    #[test]
+    fn unpaired_backticks_do_not_silence_following_speech() {
+        for (input, expected) in [
+            ("这是 `未闭合的说明。", "这是 未闭合的说明。"),
+            ("片段` 后面的正文。", "片段 后面的正文。"),
+            ("`前面的正文。", "前面的正文。"),
+            (
+                "请看 `secret` 然后 `继续阅读。",
+                "请看 secret 然后 继续阅读。",
+            ),
+            (
+                "bar` 的函数，查看 `code` 后继续。",
+                "bar 的函数，查看 code 后继续。",
+            ),
+            ("`隐藏` 后面的正文。", "后面的正文。"),
+        ] {
+            assert_eq!(SpeechCleanup::default().clean(input), expected);
+        }
+    }
+
+    #[test]
+    fn sentence_fragments_do_not_lose_speech_after_a_split_inline_code() {
+        let mut buffer = crate::SentenceBuffer::default();
+        let sentences = buffer.push("这是 `foo.bar` 的函数。");
+        assert_eq!(sentences, ["这是 `foo.", "bar` 的函数。"]);
+        let speech: Vec<_> = sentences
+            .iter()
+            .map(|sentence| crate::clean_for_speech(sentence))
+            .collect();
+        assert_eq!(speech, ["这是 foo.", "bar 的函数。"]);
     }
 }

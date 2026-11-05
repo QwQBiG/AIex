@@ -7,11 +7,15 @@ use ring::digest::{Context, SHA256};
 use tokio::io::AsyncWriteExt;
 
 use crate::files::{self, io_error};
-use crate::manager::{Package, TaskContext};
+use crate::manager::{Cancellation, Package, TaskContext};
 use crate::{DownloadLocation, PackageSource};
 
 mod archive;
 mod copy;
+
+#[cfg(test)]
+#[path = "transfer/redirect_tests.rs"]
+mod redirect_tests;
 
 #[cfg(test)]
 pub(crate) use copy::copy as copy_for_test;
@@ -23,14 +27,8 @@ pub(crate) async fn download(
     staging: &Path,
     data: &Path,
 ) -> Result<(), AppError> {
-    let origin = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(15))
-        .build()
-        .map_err(network_error)?;
-    let direct = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
         .connect_timeout(Duration::from_secs(15))
         .build()
         .map_err(network_error)?;
@@ -54,8 +52,7 @@ pub(crate) async fn download(
                     DownloadLocation::Https { url } => {
                         download_file(
                             context,
-                            &origin,
-                            &direct,
+                            &client,
                             url,
                             data,
                             &source.path,
@@ -70,8 +67,7 @@ pub(crate) async fn download(
         PackageSource::Archive { url, bytes, sha256 } => {
             download_file(
                 context,
-                &origin,
-                &direct,
+                &client,
                 url,
                 staging,
                 "download.zip",
@@ -96,18 +92,16 @@ pub(crate) async fn download(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn download_file(
     context: &TaskContext,
-    origin: &reqwest::Client,
-    direct: &reqwest::Client,
+    client: &reqwest::Client,
     source: &str,
     root: &Path,
     relative: &str,
     expected: u64,
     digest: &str,
 ) -> Result<(), AppError> {
-    let response = response(context, origin, direct, source).await?;
+    let response = response(&context.cancel, client, source).await?;
     if !response.status().is_success() {
         return Err(AppError::connectivity(format!(
             "download HTTP {}",
@@ -164,17 +158,15 @@ async fn download_file(
 }
 
 async fn response(
-    context: &TaskContext,
-    origin: &reqwest::Client,
-    direct: &reqwest::Client,
+    cancel: &Cancellation,
+    client: &reqwest::Client,
     source: &str,
 ) -> Result<reqwest::Response, AppError> {
     let mut url =
         reqwest::Url::parse(source).map_err(|_| AppError::configuration("invalid source URL"))?;
-    for redirect in 0..=5 {
-        let client = if redirect == 0 { origin } else { direct };
+    for _redirect in 0..=5 {
         let response = tokio::select! {
-            _ = context.cancel.cancelled() => return Err(AppError::invalid_transition("model preparation cancelled")),
+            _ = cancel.cancelled() => return Err(AppError::invalid_transition("model preparation cancelled")),
             result = tokio::time::timeout(Duration::from_secs(30), client.get(url.clone()).send()) => result
                 .map_err(|_| AppError::connectivity("model download connection timed out"))?.map_err(network_error)?,
         };

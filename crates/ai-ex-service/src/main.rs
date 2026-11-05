@@ -6,6 +6,7 @@ mod control_snapshot;
 mod conversation_activity;
 mod desktop_runtime;
 mod desktop_runtime_actions;
+mod diagnostic_health;
 mod events;
 mod lifecycle;
 mod native_desktop;
@@ -16,6 +17,7 @@ mod playback;
 mod strategy_loop;
 mod template_game;
 mod template_host;
+mod template_import;
 
 #[cfg(test)]
 mod duplex_activity_tests;
@@ -148,6 +150,14 @@ async fn run() -> Result<(), AppError> {
         return Ok(());
     }
     let args = Args::parse(arguments)?;
+    if let Some(path) = args.template_import.as_ref() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&template_import::execute(path)?)
+                .map_err(|_| AppError::protocol("cannot encode template import report"))?
+        );
+        return Ok(());
+    }
     if let Some(path) = args.template_game.as_ref() {
         return template_game::replay(path).await;
     }
@@ -1547,9 +1557,15 @@ impl ControlBackend for ServiceControl {
                 let runtime = self.desktop_runtime.as_ref().ok_or_else(|| {
                     AppError::unavailable("desktop behavior settings are unavailable")
                 })?;
-                Ok(ControlPayload::DesktopRuntime(Box::new(
-                    runtime.handle(request).await?,
-                )))
+                let mut reply = runtime.handle(request).await?;
+                if let ai_ex_domain::DesktopRuntimeReply::Diagnostics(report) = &mut reply {
+                    report.component_observations =
+                        diagnostic_health::observations(&self.health.read().await);
+                    if !report.component_observations.is_empty() {
+                        report.schema_version = 2;
+                    }
+                }
+                Ok(ControlPayload::DesktopRuntime(Box::new(reply)))
             }
             ControlCommand::NativeDesktop { request } => {
                 let host = self

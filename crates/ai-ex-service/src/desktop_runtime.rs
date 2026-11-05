@@ -379,6 +379,7 @@ impl DesktopRuntime {
                     application_version: env!("CARGO_PKG_VERSION").into(),
                     desktop: self.snapshot().await,
                     uptime_seconds: self.started.elapsed().as_secs(),
+                    component_observations: Vec::new(),
                 }))
             }
             DesktopRuntimeRequest::State => Ok(DesktopRuntimeReply::State(self.snapshot().await)),

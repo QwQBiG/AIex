@@ -1,7 +1,7 @@
 use std::{fs, process::Command};
 
 #[test]
-fn preview_matches_saved_config_without_creating_or_overwriting_files() {
+fn flat_legacy_preview_matches_saved_config_without_creating_or_overwriting_files() {
     let dir = std::env::temp_dir().join(format!("aiex-config-preview-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&dir).unwrap();
     let input = dir.join("旧配置.json");
@@ -15,6 +15,16 @@ fn preview_matches_saved_config_without_creating_or_overwriting_files() {
         .output()
         .unwrap();
     assert!(preview.status.success());
+    let config: toml::Value =
+        toml::from_str(std::str::from_utf8(&preview.stdout).unwrap()).unwrap();
+    assert_eq!(config["ollama"]["model"].as_str(), Some("example"));
+    assert_eq!(
+        config["ollama"]["base_url"].as_str(),
+        Some("http://localhost:11434")
+    );
+    assert_eq!(config["vts"]["enabled"].as_bool(), Some(false));
+    assert_eq!(config["audio"]["queue_capacity"].as_integer(), Some(10));
+    assert_eq!(config["tts"]["timeout_seconds"].as_integer(), Some(10));
     assert!(!output.exists());
     assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
     assert_eq!(fs::read(&input).unwrap(), source);

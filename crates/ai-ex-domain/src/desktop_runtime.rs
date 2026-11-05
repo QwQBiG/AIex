@@ -131,6 +131,32 @@ pub struct VtsParameterPage {
     pub parameters: Vec<DiscoveredVtsParameter>,
 }
 
+/// Stable names for the service's previously observed component health.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticComponent {
+    Native,
+    Ollama,
+    OllamaNative,
+    Deepseek,
+    Koboldcpp,
+    Memory,
+    AudioQueue,
+    AudioInput,
+    AudioOutput,
+    Asr,
+    GptSovits,
+    Vts,
+    Vision,
+    Safety,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticComponentObservation {
+    pub component: DiagnosticComponent,
+    pub observed_ready: bool,
+}
+
 /// Deliberate allowlist: no messages, paths, window metadata, logs, or arbitrary detail.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DesktopDiagnosticReport {
@@ -138,6 +164,8 @@ pub struct DesktopDiagnosticReport {
     pub application_version: String,
     pub desktop: DesktopRuntimeSnapshot,
     pub uptime_seconds: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub component_observations: Vec<DiagnosticComponentObservation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

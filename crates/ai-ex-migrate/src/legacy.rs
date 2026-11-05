@@ -270,14 +270,24 @@ impl LegacyConfig {
         self.koboldcpp_max_length = None;
         self.koboldcpp_temperature = None;
         self.enable_memory_features = None;
-        self.enable_expression_control.get_or_insert(false);
-        self.sovits_timeout.get_or_insert(10.0);
         Ok(())
     }
 
     pub fn migrate(self) -> Migration {
         let mut config = AppConfig::default();
         let mut warnings = Vec::new();
+        if self.ollama_url.is_none() {
+            config.ollama.base_url = legacy_ollama_url();
+        }
+        if self.ollama_model.is_none() {
+            config.ollama.model = legacy_ollama_model();
+        }
+        if self.performance.max_queue_size.is_none() {
+            config.audio.queue_capacity = 10;
+        }
+        if self.sovits_timeout.is_none() {
+            config.tts.timeout_seconds = 10;
+        }
         assign_nonempty(&mut config.ollama.base_url, self.ollama_url);
         assign_nonempty(&mut config.ollama.model, self.ollama_model);
         assign_nonempty(&mut config.koboldcpp.base_url, self.koboldcpp_url);
@@ -310,9 +320,7 @@ impl LegacyConfig {
         if let Some(port) = self.vts_port {
             config.vts.port = port;
         }
-        if let Some(enabled) = self.enable_expression_control {
-            config.vts.enabled = enabled;
-        }
+        config.vts.enabled = self.enable_expression_control.unwrap_or(false);
         if let Some(mappings) = self.emotion_hotkey_map {
             for (emotion, hotkey) in mappings {
                 if Emotion::parse(&emotion).is_some() && !hotkey.trim().is_empty() {
@@ -392,6 +400,30 @@ fn assign_positive_usize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flat_legacy_defaults_and_explicit_values_survive_migration() {
+        let legacy: LegacyConfig = serde_json::from_str("{}").unwrap();
+        let result = legacy.migrate();
+        assert_eq!(result.config.ollama.base_url, "http://localhost:11434");
+        assert_eq!(result.config.ollama.model, "llama3");
+        assert!(!result.config.vts.enabled);
+        assert_eq!(result.config.audio.queue_capacity, 10);
+        assert_eq!(result.config.tts.timeout_seconds, 10);
+
+        let legacy: LegacyConfig = serde_json::from_str(
+            r#"{"ollama_url":"http://localhost:11500","ollama_model":"custom",
+                 "enable_expression_control":true,"sovits_timeout":15,
+                 "performance":{"max_queue_size":20}}"#,
+        )
+        .unwrap();
+        let result = legacy.migrate();
+        assert_eq!(result.config.ollama.base_url, "http://localhost:11500");
+        assert_eq!(result.config.ollama.model, "custom");
+        assert!(result.config.vts.enabled);
+        assert_eq!(result.config.audio.queue_capacity, 20);
+        assert_eq!(result.config.tts.timeout_seconds, 15);
+    }
 
     #[test]
     fn nested_format_preserves_legacy_precedence_and_reports_ignored_fields() {

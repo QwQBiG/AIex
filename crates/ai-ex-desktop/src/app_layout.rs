@@ -35,6 +35,17 @@ impl DesktopApp {
                     .stroke(egui::Stroke::new(1.0, super::theme::BORDER)),
             )
             .show(ui, |ui| self.show_header(ui));
+        if self.page != Page::Native {
+            self.native.cancel_drop();
+        } else if self.native.waiting_for_drop() {
+            egui::Panel::top("native_drop_banner")
+                .frame(
+                    egui::Frame::new()
+                        .fill(super::theme::ACCENT_SOFT)
+                        .inner_margin(12),
+                )
+                .show(ui, |ui| self.native.show_drop_banner(ui));
+        }
         match self.page {
             Page::Conversation => self.show_chat_page(ui),
             page => {
@@ -101,6 +112,31 @@ impl DesktopApp {
                 {
                     self.send(WorkerCommand::Interrupt);
                 }
+                let (label, color, fill) = match self.state.connection {
+                    ConnectionState::Connected
+                        if self.state.needs_resync || !self.persona_synced =>
+                    {
+                        ("同步中", super::theme::ACCENT, super::theme::ACCENT_SOFT)
+                    }
+                    ConnectionState::Connected => (
+                        "已连接",
+                        super::theme::SUCCESS,
+                        egui::Color32::from_rgb(225, 241, 232),
+                    ),
+                    ConnectionState::Connecting => {
+                        ("连接中", super::theme::ACCENT, super::theme::ACCENT_SOFT)
+                    }
+                    ConnectionState::Disconnected => {
+                        ("未连接", super::theme::MUTED, super::theme::SURFACE_ALT)
+                    }
+                };
+                egui::Frame::new()
+                    .fill(fill)
+                    .corner_radius(8)
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(label).small().color(color).strong());
+                    });
             });
         });
         ui.add_space(6.0);
@@ -230,8 +266,10 @@ impl DesktopApp {
         if self.memory.mutation_pending() {
             return "正在更新记忆";
         }
-        if self.state.connection != ConnectionState::Connected {
-            return "正在连接，草稿可以先写";
+        match self.state.connection {
+            ConnectionState::Disconnected => return "尚未连接，草稿可以先写",
+            ConnectionState::Connecting => return "正在连接，草稿可以先写",
+            ConnectionState::Connected => {}
         }
         if self.state.needs_resync || !self.persona_synced {
             return "正在同步角色与对话";
@@ -319,7 +357,7 @@ impl DesktopApp {
             .frame(
                 egui::Frame::new()
                     .fill(super::theme::BACKGROUND)
-                    .inner_margin(20),
+                    .inner_margin(if wide { 20 } else { 12 }),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -342,11 +380,13 @@ impl DesktopApp {
                         });
                 }
                 crate::speech_panel::show(ui, &self.state);
-                super::theme::card().show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.set_min_height(ui.available_height());
-                    self.show_conversation(ui);
-                });
+                super::theme::card()
+                    .inner_margin(if wide { 20 } else { 12 })
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.set_min_height(ui.available_height());
+                        self.show_conversation(ui);
+                    });
             });
     }
 
@@ -456,6 +496,7 @@ impl DesktopApp {
             }
         }
         if self.native.take_open_chat() {
+            self.native.cancel_drop();
             if self.native.microphone_restart_required() && self.owned_service.is_some() {
                 self.request_navigation(ui.ctx(), crate::navigation::Destination::NativeChat);
             } else {

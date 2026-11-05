@@ -15,6 +15,12 @@ use uuid::Uuid;
 
 use crate::worker::WorkerCommand;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DropTarget {
+    Package(String),
+    ReferenceWav,
+}
+
 pub struct NativePanel {
     pub(super) state: Option<NativeState>,
     pub(super) packages: Vec<NativePackage>,
@@ -30,7 +36,9 @@ pub struct NativePanel {
     pub(super) download_confirmation: Option<String>,
     pub(super) remove_confirmation: Option<String>,
     pub(super) import_paths: BTreeMap<String, String>,
+    drop_target: Option<DropTarget>,
     pub(super) selected_voice: String,
+    voice_edit: Option<voices::VoiceEdit>,
     profile_id: String,
     pub(super) voice_name: String,
     pub(super) reference_path: String,
@@ -64,7 +72,9 @@ impl Default for NativePanel {
             download_confirmation: None,
             remove_confirmation: None,
             import_paths: BTreeMap::new(),
+            drop_target: None,
             selected_voice: String::new(),
+            voice_edit: None,
             profile_id: String::new(),
             voice_name: "我的声音".into(),
             reference_path: String::new(),
@@ -84,6 +94,74 @@ impl Default for NativePanel {
 }
 
 impl NativePanel {
+    fn arm_drop(&mut self, target: DropTarget) {
+        self.drop_target = Some(target);
+    }
+
+    pub fn cancel_drop(&mut self) {
+        self.drop_target = None;
+    }
+
+    pub fn waiting_for_drop(&self) -> bool {
+        self.drop_target.is_some()
+    }
+
+    pub fn show_drop_banner(&mut self, ui: &mut egui::Ui) {
+        let Some(target) = &self.drop_target else {
+            return;
+        };
+        let name = match target {
+            DropTarget::Package(id) => self
+                .packages
+                .iter()
+                .find(|package| package.id == *id)
+                .map_or_else(|| id.clone(), |package| package.name.clone()),
+            DropTarget::ReferenceWav => "参考音频".to_owned(),
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(format!("等待拖入：{name}"));
+            ui.label("将一个文件或文件夹拖到本窗口任意位置，只填写路径，不自动导入。");
+            if ui.button("取消拖入").clicked() {
+                self.cancel_drop();
+                self.status = "已取消拖入。".into();
+            }
+        });
+    }
+
+    fn receive_drop(&mut self, ui: &mut egui::Ui) {
+        if self.drop_target.is_none() {
+            return;
+        }
+        let files = ui.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
+        if files.is_empty() {
+            return;
+        }
+        let target = self.drop_target.take().expect("drop target was present");
+        let path = if files.len() != 1 {
+            Err("请一次拖入一个文件或文件夹。")
+        } else if let Some(path) = files[0].path.as_ref().and_then(|path| path.to_str()) {
+            if path.is_empty() || path.chars().count() > 1024 {
+                Err("路径为空或过长，请手动填写。")
+            } else {
+                Ok(path.to_owned())
+            }
+        } else {
+            Err("系统未提供可用的本地路径，请手动填写。")
+        };
+        match (target, path) {
+            (DropTarget::Package(id), Ok(path)) => {
+                self.import_paths.insert(id, path);
+                self.status = "已填入路径，请核对后点击“从本地导入”。".into();
+            }
+            (DropTarget::ReferenceWav, Ok(path)) => {
+                self.reference_path = path;
+                self.status = "已填入参考音频路径，请核对后点击“导入并保存专属音色”。".into();
+            }
+            (_, Err(message)) => self.status = message.into(),
+        }
+        ui.ctx().request_repaint();
+    }
+
     pub fn receive(&mut self, request_id: u64, result: Result<NativeReply, AppError>) {
         let Some(request) = self.pending.remove(&request_id) else {
             return;
@@ -154,6 +232,14 @@ impl NativePanel {
                         self.refresh = true;
                         return;
                     }
+                    if self
+                        .config
+                        .as_ref()
+                        .is_some_and(|current| current.revision > revision)
+                    {
+                        self.refresh = true;
+                        return;
+                    }
                     if self.selected_voice.is_empty()
                         || !config
                             .voices
@@ -186,6 +272,7 @@ impl NativePanel {
                         self.device_draft = None;
                     }
                     self.confirm_voice_import(&config);
+                    self.confirm_voice_edit(&config);
                     self.config = Some(config);
                     if matches!(request, NativeRequest::ImportVoice { .. }) {
                         self.reference_path.clear();
@@ -288,6 +375,7 @@ impl NativePanel {
                 .as_ref()
                 .is_some_and(|state| state.preview_active)
             || self.device_draft.is_some()
+            || self.voice_edit_dirty()
             || !self.reference_path.is_empty()
             || !self.reference_text.is_empty()
     }
@@ -299,6 +387,7 @@ impl NativePanel {
     }
 
     pub fn disconnected(&mut self) {
+        self.cancel_drop();
         let initialized = self.state.is_some()
             || self.config.is_some()
             || !self.pending.is_empty()
@@ -344,9 +433,11 @@ impl NativePanel {
         ui.heading("准备本地伙伴");
         ui.weak("准备完成后可以离线对话。人物外形与其他设置随时可用。");
         if !connected {
+            self.cancel_drop();
             ui.label("正在连接本地服务，模型尚未准备也能打开此页面。");
             return Vec::new();
         }
+        self.receive_drop(ui);
         if self.profile_id != profile_id {
             self.profile_id = profile_id.into();
             if let Some(voice) = self

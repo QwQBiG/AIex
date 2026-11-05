@@ -4,6 +4,10 @@ use eframe::egui;
 use super::NativePanel;
 use crate::ui::theme;
 
+#[cfg(test)]
+#[path = "text_entry_tests.rs"]
+mod text_entry_tests;
+
 impl NativePanel {
     pub(super) fn contents(
         &mut self,
@@ -12,6 +16,7 @@ impl NativePanel {
         requests: &mut Vec<NativeRequest>,
     ) {
         ui.add_space(12.0);
+        let previous_step = self.step;
         ui.horizontal_wrapped(|ui| {
             for (index, title) in [
                 "1 · 本地对话",
@@ -28,6 +33,9 @@ impl NativePanel {
                 self.refresh = true;
             }
         });
+        if self.step != previous_step {
+            self.cancel_drop();
+        }
         if !self.status.is_empty() {
             egui::ScrollArea::vertical()
                 .id_salt("native_status")
@@ -56,6 +64,7 @@ impl NativePanel {
         ui.push_id(("native_step", self.step), |ui| match self.step {
             0 => {
                 ui.label("先准备运行组件和对话模型。下载后也可以在断网时使用。");
+                self.text_chat_entry(ui);
                 self.package(ui, "native-cpu", requests);
                 self.package(ui, "qwen3-4b", requests);
                 ui.collapsing("同时准备本地记忆检索", |ui| {
@@ -71,6 +80,7 @@ impl NativePanel {
             _ => self.preview_and_bind(ui, profile_id, requests),
         });
         ui.add_space(12.0);
+        let previous_step = self.step;
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(self.step > 0, egui::Button::new("上一步"))
@@ -85,6 +95,60 @@ impl NativePanel {
                 self.step += 1;
             }
         });
+        if self.step != previous_step {
+            self.cancel_drop();
+        }
+    }
+
+    pub(super) fn text_chat_entry(&mut self, ui: &mut egui::Ui) {
+        let reason = if self.state.is_none() {
+            Some("正在读取本地设置。")
+        } else if !self.state.as_ref().is_some_and(|state| state.configured) {
+            Some("先创建本地设置。")
+        } else if self.config.is_none() {
+            Some("正在读取本地设置。")
+        } else if self.uncertain {
+            Some("操作结果待核对，请先刷新状态。")
+        } else if self.has_pending() {
+            Some("请等待当前操作完成。")
+        } else if self
+            .config
+            .as_ref()
+            .is_none_or(|config| config.dialogue.is_none())
+        {
+            Some("当前设置未启用本地对话，请先调整本地设置。")
+        } else if !self.dialogue_ready() {
+            Some("请先准备当前对话模型及其运行组件。")
+        } else {
+            None
+        };
+        ui.add_space(8.0);
+        ui.label("本地对话准备好后即可进入，语音可在“2 · 语音开关”中调整。");
+        if let Some(config) = &self.config {
+            if config.devices.microphone_enabled || config.devices.playback_enabled {
+                ui.weak("已保存的语音设置中有设备开启，进入聊天不会自动关闭。");
+            } else {
+                ui.weak("已保存的麦克风和对话声音开关均为关闭。");
+            }
+            if self.device_draft.is_some() {
+                ui.weak("语音开关有未应用的修改，进入聊天不会自动保存。");
+            }
+            if self.voice_edit_dirty() {
+                ui.weak("声音修改尚未保存，进入聊天后仍使用已保存的声音。");
+            }
+            if self.microphone_restart_required() {
+                ui.weak("麦克风设置需要重新进入对话才能生效。");
+            }
+        }
+        if let Some(reason) = reason {
+            ui.weak(reason);
+        }
+        if ui
+            .add_enabled(reason.is_none(), theme::primary_button("进入聊天"))
+            .clicked()
+        {
+            self.open_chat = true;
+        }
     }
 
     pub(super) fn package(
@@ -166,13 +230,18 @@ impl NativePanel {
                             self.remove_confirmation = Some(package.id.clone());
                         }
                     });
+                    if ui.button("准备拖入此组件").clicked() {
+                        self.arm_drop(super::DropTarget::Package(package.id.clone()));
+                        ui.ctx().request_repaint();
+                    }
                     let path = self.import_paths.entry(package.id.clone()).or_default();
                     ui.add(
-                        egui::TextEdit::singleline(path)
+                        egui::TextEdit::singleline(&mut *path)
                             .hint_text("离线目录或 ZIP 文件路径")
                             .desired_width(f32::INFINITY)
                             .char_limit(1024),
                     );
+                    ui.weak("可手动填写路径；也可点击“准备拖入此组件”后拖放。需系统提供本地路径。");
                     if ui
                         .add_enabled(!path.trim().is_empty(), egui::Button::new("从本地导入"))
                         .clicked()

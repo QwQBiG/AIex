@@ -1,6 +1,6 @@
 path	category	retirement_status
 main.py	legacy-entry	retained-pending-contract-coverage
-models/offline_embedding.py	legacy-embedding	retained-pending-contract-coverage
+models/offline_embedding.py	legacy-embedding	retired-on-development-branch
 src/__init__.py	legacy-application	retained-pending-contract-coverage
 src/action_engine.py	legacy-application	retained-pending-contract-coverage
 src/adaptive_performance_tuner.py	legacy-application	retained-pending-contract-coverage
@@ -54,7 +54,7 @@ src/natural_behavior_gui.py	legacy-application	retained-pending-contract-coverag
 src/natural_speaker.py	legacy-application	retained-pending-contract-coverage
 src/natural_thinker.py	legacy-application	retained-pending-contract-coverage
 src/network_config.py	legacy-application	retained-pending-contract-coverage
-src/offline_config.py	legacy-application	retained-pending-contract-coverage
+src/offline_config.py	legacy-application	retired-on-development-branch
 src/performance_dashboard.py	legacy-application	retained-pending-contract-coverage
 src/performance_monitor.py	legacy-application	retained-pending-contract-coverage
 src/pink_theme.py	legacy-application	retained-pending-contract-coverage

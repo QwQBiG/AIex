@@ -31,18 +31,30 @@
 | `cargo xtask cache-inventory --project .` | 只读检查五个构建缓存目录；不删除文件，也不保证检查后可安全清理 |
 | `cargo xtask control-token --path <新文件>` | 创建控制令牌并拒绝覆盖；只有明确追加 `--force` 才轮换已有令牌 |
 | `cargo xtask portable-inspect <便携包 ZIP>` | 只读检查历史版本目录结构和 ZIP 条目；完整运行验证仍使用下面的便携包验证器 |
+| `cargo xtask portable-build --project . --output <目录>` | 检查输出冲突，按两个工作区 release 构建并打包；支持 `--offline`、`--skip-build`、`--jobs` 和 `--minimum-free-gib` |
 | `cargo xtask portable-verify --archive <便携包 ZIP> --evidence-directory <现有目录>` | 在新证据目录中验证解压、摘要、无窗口启动、错误路径和离线回放 |
 | `cargo xtask zero-python --project . --distribution <已解压的便携包目录>` | 检查跟踪文件、Cargo 绑定、明确启动命令、分发文件与 PE 静态导入，列出剩余问题与检查限制 |
+| `cargo xtask zero-python-runtime --catalog <模型目录 JSON> --archive <运行组件 ZIP>` | 只读核对所给目录中的大小与摘要，并检查运行文件名、脚本及 PE 静态导入；嵌套归档不递归检查，会标为未完成 |
 
 原生发行工具的参数、JSON 输入及严格构建顺序统一见[原生发行工具](../xtask/NATIVE_DISTRIBUTION.md)。工具读取显式输入、拒绝覆盖已有输出，不扫描私人模型，不执行或递归展开对应源码归档。源码与最终派生目录有明确分层，避免 Runtime SHA 与源码包循环引用。
 
-零 Python 检查当前会因保留的旧文件而失败；它不分析运行时动态加载、嵌入解释器、改名程序、嵌套压缩包或远程服务，也不能替代未安装 Python 的干净 Windows 验收。
+零 Python 检查当前会因保留的旧文件而失败；它不分析运行时动态加载、嵌入解释器或远程服务，也不能保证识别所有改名程序和归档，不能替代未安装 Python 的干净 Windows 验收。
+
+运行组件检查只证明所给 ZIP 与所给目录匹配，不验证目录来源；发布前应先核实目录来自预定发行版本。该命令不检查上游源码归档、其他模型包、动态加载或远程服务，不能单独当作全部发行内容通过。源码归档以 `uninspected_source_archives` 列出，其他可识别的嵌套归档以 `uninspected_nested_archives` 列出，两者均返回非零状态；合法模型容器也会列出，需另行核验并处理许可。
+
+当源码归档含 `project/source.zip` 时，`project_source_audits` 会检查项目源码文件名、脚本启动命令、Rust 中的字面量启动命令及 Cargo 的绑定依赖；历史文档提及不会作为命中。除核对运行包清单所需的摘要读取外，所有源码包共享 192 MiB 的附加源码包读取、128 MiB 项目 ZIP、32 MiB 文本和 2 万条目预算，并拒绝重复或不安全的路径。该检查不分析跨文件命令别名或动态生成的命令，也不检查上游源码或项目内部的其他嵌套归档，因此源码包仍列为未检查；输入过大、格式不支持或未包含项目 ZIP 时会报告原因。
+
+```powershell
+cargo xtask zero-python-runtime --catalog config/native-catalog.json --archive 'D:\Downloads\native-runtime.zip'
+```
+
+将示例路径替换为实际 ZIP 路径；含空格的路径使用引号。若报告 `incomplete`，表示仍有嵌套归档未检查，不能将其视为 1.0 门禁通过。
 
 | 工具 | 用途与实际参数 |
 | --- | --- |
 | [check_architecture.ps1](check_architecture.ps1) | 读取核心工作区与独立桌面的 Cargo 元数据，校验内部依赖方向与包登记。无参数执行正常检查；`-ProbeViolation` 在内存中注入违规依赖，预期退出码为 1，不改写 Cargo 文件。 |
 | [create_control_token.ps1](create_control_token.ps1) | 通过 dev 入口构建 Rust 工具，再生成随机控制令牌。`-Path` 指定文件，默认调用目录下的 `config/control.token`；目标存在时拒绝覆盖，只有明确轮换令牌才使用 `-Force`。 |
-| [package_windows.ps1](package_windows.ps1) | 通过 dev 入口构建后打包桌面、服务、迁移器与平台助手，检查版本并生成 ZIP/SHA256。支持 `-OutputDirectory`、`-SkipBuild`、`-Offline`、`-Jobs`、`-MinimumFreeGiB`；使用两套固定目标，已有输出拒绝覆盖。 |
+| [package_windows.ps1](package_windows.ps1) | 先构建 Rust 工具，再调用 `portable-build` 打包桌面、服务、迁移器与平台助手，检查版本并生成 ZIP/SHA256。支持 `-OutputDirectory`、`-SkipBuild`、`-Offline`、`-Jobs`、`-MinimumFreeGiB`；使用两套固定目标，已有输出拒绝覆盖。 |
 | [test_development.ps1](test_development.ps1) | 用隔离 PowerShell 进程和假 Cargo 验证目录复用、增量策略、单包筛选、互斥及失败后环境恢复，不编译应用或调用设备。 |
 | [verify_windows_portable.ps1](verify_windows_portable.ps1) | 验证 ZIP 文件、版本、中文/空格路径与无窗口运行；兼容旧版布局，0.10 要求平台助手和专用画布入口在内的十文件包。`-ArchivePath` 必需；`-EvidenceDirectory` 指定证据父目录，默认 `target`。入口先通过 `dev.ps1` 构建 Rust 工具，每次创建独立子目录并输出 JSON。 |
 
@@ -103,7 +115,7 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 | [check_vts_params.py](check_vts_params.py) | 使用旧 VTS 客户端连接并认证，列出嘴部和声音相关参数。 |
 | [list_vts_hotkeys.py](list_vts_hotkeys.py) | 连接 VTube Studio，获取当前模型的热键信息。 |
 
-排查当前版本优先使用[整体验收流程](../docs/MANUAL_TEST_PLAN.md)及桌面设置与诊断。旧脚本依赖 [`src/`](../src/README.md) 与历史 Python 环境；运行前应先阅读对应源码，核对配置写入、服务连接和设备操作。
+排查当前版本优先使用[整体验收流程](../docs/MANUAL_TEST_PLAN.md)及桌面设置与诊断。开发分支导出的诊断可包含服务已记录的组件就绪标志，不含原始错误、设备名称或路径；它不进行新的设备检查或服务连接，可能不是实时状态。旧脚本依赖 [`src/`](../src/README.md) 与历史 Python 环境；运行前应先阅读对应源码，核对配置写入、服务连接和设备操作。
 
 ## Rust 离线迁移与检查
 
