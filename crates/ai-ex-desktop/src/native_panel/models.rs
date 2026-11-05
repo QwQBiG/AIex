@@ -168,6 +168,7 @@ impl NativePanel {
             ui.weak(format!("正在读取组件信息：{id}"));
             return;
         };
+        let mut opened_confirmation = false;
         ui.push_id(("native_package", id), |ui| {
         theme::card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -229,6 +230,7 @@ impl NativePanel {
                             self.close_download_confirmation();
                             self.download_confirmation = Some(package.id.clone());
                             self.request_storage_space(requests);
+                            opened_confirmation = true;
                         }
                         if package.installed && ui.button("移除这项组件").clicked() {
                             self.remove_confirmation = Some(package.id.clone());
@@ -275,11 +277,27 @@ impl NativePanel {
                     ui.label("模型存储位置当前可用空间：未知。");
                 }
                 ui.weak("空间会随使用变化；下载、校验和替换还需要临时空间。即使可用空间大于文件合计，也不能保证准备成功。");
+                let blocked = if self.uncertain {
+                    Some("操作结果待核对，请先刷新状态；下载确认会保留。")
+                } else if self.has_pending() {
+                    Some("请等待当前操作完成后再确认下载。")
+                } else if self.pending.len() >= 16 {
+                    Some("请求较多，请稍等片刻再确认下载。")
+                } else if package.active_operation.is_some()
+                    || self.operations.values().any(|operation| operation.package_id == package.id)
+                {
+                    Some("这项组件正在准备，请等待结束后再确认下载。")
+                } else {
+                    None
+                };
+                if let Some(reason) = blocked {
+                    ui.weak(reason);
+                }
                 ui.horizontal(|ui| {
                     if ui.button("重新查询空间").clicked() {
                         self.request_storage_space(requests);
                     }
-                    if ui.button("确认下载").clicked() {
+                    if ui.add_enabled(blocked.is_none(), egui::Button::new("确认下载")).clicked() {
                         requests.push(NativeRequest::Download {
                             package_id: package.id.clone(),
                         });
@@ -289,6 +307,9 @@ impl NativePanel {
                         self.close_download_confirmation();
                     }
                 });
+                if opened_confirmation {
+                    ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                }
             }
             if self.remove_confirmation.as_deref() == Some(&package.id) {
                 ui.label("移除后，使用这项组件的能力会暂时停止，可随时重新准备。");

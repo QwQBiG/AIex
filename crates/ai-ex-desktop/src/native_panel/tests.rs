@@ -553,7 +553,28 @@ fn opening_is_read_only_and_download_requires_the_visible_confirmation() {
     let context = egui::Context::default();
     crate::ui::theme::configure_appearance(&context);
     panel.download_confirmation = Some("qwen3-4b".into());
-    let (output, commands) = render(&mut panel, &context, Vec::new());
+    let render_scrolled = |panel: &mut NativePanel, events| {
+        let mut commands = Vec::new();
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 1000.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical()
+                    .vertical_scroll_offset(400.0)
+                    .show(ui, |ui| {
+                        commands = panel.show(ui, "default", true);
+                    });
+            },
+        );
+        (output, commands)
+    };
+    let (output, commands) = render_scrolled(&mut panel, Vec::new());
     assert!(commands.iter().all(
         |command| matches!(command, WorkerCommand::Native { request, .. } if !mutating(request))
     ));
@@ -569,9 +590,8 @@ fn opening_is_read_only_and_download_requires_the_visible_confirmation() {
         .expect("download confirmation is visible");
     let mut sent = Vec::new();
     for pressed in [true, false] {
-        let (_, commands) = render(
+        let (_, commands) = render_scrolled(
             &mut panel,
-            &context,
             vec![
                 egui::Event::PointerMoved(position),
                 egui::Event::PointerButton {
@@ -585,6 +605,137 @@ fn opening_is_read_only_and_download_requires_the_visible_confirmation() {
         sent.extend(commands);
     }
     assert!(sent.iter().any(|command| matches!(command, WorkerCommand::Native { request: NativeRequest::Download { package_id }, .. } if package_id == "qwen3-4b")));
+}
+
+#[test]
+fn download_confirmation_waits_for_uncertain_or_pending_operations() {
+    let mut panel = panel();
+    panel.download_confirmation = Some("qwen3-4b".into());
+    panel.uncertain = true;
+    let context = egui::Context::default();
+    let render_card = |panel: &mut NativePanel, events| {
+        let mut requests = Vec::new();
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 1600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| panel.package(ui, "qwen3-4b", &mut requests),
+        );
+        (output, requests)
+    };
+    let click = |panel: &mut NativePanel, label: &str| {
+        let (output, _) = render_card(panel, Vec::new());
+        let position = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("button visible");
+        let mut result = Vec::new();
+        for pressed in [true, false] {
+            let (_, requests) = render_card(
+                panel,
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+            result.extend(requests);
+        }
+        result
+    };
+    let (output, _) = render_card(&mut panel, Vec::new());
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains("操作结果待核对"))));
+    assert!(click(&mut panel, "确认下载").is_empty());
+    assert_eq!(panel.download_confirmation.as_deref(), Some("qwen3-4b"));
+    panel.uncertain = false;
+    let pending = id(panel.begin(NativeRequest::CreateDefaults).unwrap());
+    assert!(click(&mut panel, "确认下载").is_empty());
+    assert!(panel.download_confirmation.is_some());
+    panel.pending.remove(&pending);
+    assert!(
+        matches!(click(&mut panel, "确认下载").as_slice(), [NativeRequest::Download { package_id }] if package_id == "qwen3-4b")
+    );
+    assert!(panel.download_confirmation.is_none());
+    panel.download_confirmation = Some("qwen3-4b".into());
+    panel.uncertain = true;
+    assert!(click(&mut panel, "暂不下载").is_empty());
+    assert!(panel.download_confirmation.is_none());
+}
+
+#[test]
+fn opening_download_confirmation_scrolls_it_into_view() {
+    let mut panel = panel();
+    let context = egui::Context::default();
+    crate::ui::theme::configure_appearance(&context);
+    let render_scroll = |panel: &mut NativePanel, events| {
+        context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 1000.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical().animated(false).show(ui, |ui| {
+                    panel.show(ui, "default", true);
+                });
+            },
+        )
+    };
+    let output = render_scroll(&mut panel, Vec::new());
+    let position = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "下载准备" => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .next_back()
+        .expect("second package download button");
+    for pressed in [true, false] {
+        let _ = render_scroll(
+            &mut panel,
+            vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+    }
+    assert_eq!(panel.download_confirmation.as_deref(), Some("qwen3-4b"));
+    let output = render_scroll(&mut panel, Vec::new());
+    assert!(
+        output.shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "确认下载" => shape
+                .clip_rect
+                .contains(text.pos + text.galley.size() * 0.5),
+            _ => false,
+        }),
+        "confirmation must scroll into the visible area"
+    );
 }
 
 #[test]

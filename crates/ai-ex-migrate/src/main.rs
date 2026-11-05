@@ -2,6 +2,7 @@
 
 mod jsonl_upgrade;
 mod legacy;
+mod legacy_check;
 
 use std::path::PathBuf;
 
@@ -28,6 +29,17 @@ async fn run() -> Result<(), AppError> {
         println!("ai-ex-migrate {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    let checks = arguments
+        .iter()
+        .filter(|argument| *argument == "--check-legacy-config")
+        .count();
+    if checks > 0 {
+        if checks != 1 {
+            return Err(AppError::configuration("duplicate legacy check mode"));
+        }
+        arguments.retain(|argument| argument != "--check-legacy-config");
+        return legacy_check::run(arguments).await;
+    }
     let upgrades = arguments
         .iter()
         .filter(|argument| *argument == "--upgrade-memory")
@@ -53,6 +65,9 @@ async fn run() -> Result<(), AppError> {
         return jsonl_upgrade::run(arguments).await;
     }
     if arguments == ["--help"] || arguments == ["-h"] {
+        println!(
+            "Read-only partial legacy check: ai-ex-migrate --check-legacy-config --input OLD.json. Checks selected fields only; no network or device access."
+        );
         println!(
             "Memory format upgrade: ai-ex-migrate --upgrade-memory --input OLD.jsonl (--preview | --output NEW.jsonl). Input, identities and vector spaces are preserved; an existing output is rejected."
         );
