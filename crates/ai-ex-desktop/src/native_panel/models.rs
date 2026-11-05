@@ -35,6 +35,7 @@ impl NativePanel {
         });
         if self.step != previous_step {
             self.cancel_drop();
+            self.close_download_confirmation();
         }
         if !self.status.is_empty() {
             egui::ScrollArea::vertical()
@@ -97,6 +98,7 @@ impl NativePanel {
         });
         if self.step != previous_step {
             self.cancel_drop();
+            self.close_download_confirmation();
         }
     }
 
@@ -224,7 +226,9 @@ impl NativePanel {
                             })
                             .clicked()
                         {
+                            self.close_download_confirmation();
                             self.download_confirmation = Some(package.id.clone());
+                            self.request_storage_space(requests);
                         }
                         if package.installed && ui.button("移除这项组件").clicked() {
                             self.remove_confirmation = Some(package.id.clone());
@@ -259,15 +263,30 @@ impl NativePanel {
                     "组件文件合计约 {:.1} MiB，下载与校验还需要临时空间。确认以上许可后，将从固定来源下载。",
                     package.bytes as f64 / 1_048_576.0
                 ));
+                if let Some(available) = self.storage_space.as_ref()
+                    .filter(|space| space.package_id == package.id)
+                    .and_then(|space| space.available_bytes)
+                {
+                    ui.label(format!("模型存储位置当前可用空间：{:.1} MiB", available as f64 / 1_048_576.0));
+                    if available < package.bytes {
+                        ui.colored_label(ui.visuals().warn_fg_color, "当前可用空间小于组件文件合计，可能无法完成准备。");
+                    }
+                } else {
+                    ui.label("模型存储位置当前可用空间：未知。");
+                }
+                ui.weak("空间会随使用变化；下载、校验和替换还需要临时空间。即使可用空间大于文件合计，也不能保证准备成功。");
                 ui.horizontal(|ui| {
+                    if ui.button("重新查询空间").clicked() {
+                        self.request_storage_space(requests);
+                    }
                     if ui.button("确认下载").clicked() {
                         requests.push(NativeRequest::Download {
                             package_id: package.id.clone(),
                         });
-                        self.download_confirmation = None;
+                        self.close_download_confirmation();
                     }
                     if ui.button("暂不下载").clicked() {
-                        self.download_confirmation = None;
+                        self.close_download_confirmation();
                     }
                 });
             }

@@ -7,6 +7,7 @@ mod operations;
 mod packages;
 mod preview;
 mod settings;
+mod storage_space;
 mod voices;
 
 #[cfg(test)]

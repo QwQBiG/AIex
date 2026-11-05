@@ -31,6 +31,7 @@ pub(super) fn route(
         NativeRequest::State
         | NativeRequest::Packages
         | NativeRequest::Settings
+        | NativeRequest::StorageSpace { .. }
         | NativeRequest::Operation { .. } => 1,
         _ => 0,
     };

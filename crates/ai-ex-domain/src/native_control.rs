@@ -14,6 +14,9 @@ pub const NATIVE_MAX_ERROR_BYTES: usize = 8192;
 pub enum NativeRequest {
     State,
     Packages,
+    StorageSpace {
+        expected_revision: u64,
+    },
     Download {
         package_id: String,
     },
@@ -66,7 +69,14 @@ pub enum NativeRequest {
 pub enum NativeReply {
     State(NativeState),
     Packages(Vec<NativePackage>),
-    Settings { revision: u64, document: String },
+    StorageSpace {
+        revision: u64,
+        available_bytes: Option<u64>,
+    },
+    Settings {
+        revision: u64,
+        document: String,
+    },
     Operation(NativeOperation),
     Accepted,
 }
@@ -165,6 +175,7 @@ fn bounded(value: &str, max: usize, empty: bool) -> Result<(), AppError> {
 impl NativeRequest {
     pub fn validate(&self) -> Result<(), AppError> {
         match self {
+            Self::StorageSpace { expected_revision } => revision(*expected_revision),
             Self::Download { package_id } | Self::Remove { package_id } => {
                 bounded(package_id, 256, false)
             }
@@ -221,6 +232,9 @@ impl NativeRequest {
 impl NativeReply {
     pub fn validate(&self) -> Result<(), AppError> {
         match self {
+            Self::StorageSpace {
+                revision: value, ..
+            } => revision(*value),
             Self::State(state) => bounded(&state.configuration_path, 4096, true),
             Self::Settings {
                 revision: value,

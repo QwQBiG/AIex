@@ -37,6 +37,7 @@ impl DesktopApp {
             .show(ui, |ui| self.show_header(ui));
         if self.page != Page::Native {
             self.native.cancel_drop();
+            self.native.close_download_confirmation();
         } else if self.native.waiting_for_drop() {
             egui::Panel::top("native_drop_banner")
                 .frame(

@@ -38,6 +38,209 @@ fn panel() -> NativePanel {
     }
 }
 
+fn begin_space_check(panel: &mut NativePanel, package_id: &str) -> u64 {
+    panel.close_download_confirmation();
+    panel.download_confirmation = Some(package_id.to_owned());
+    let mut requests = Vec::new();
+    panel.request_storage_space(&mut requests);
+    assert_eq!(requests.len(), 1);
+    let request = requests.pop().unwrap();
+    assert!(!mutating(&request));
+    id(panel.begin(request).unwrap())
+}
+
+fn space_labels(panel: &mut NativePanel) -> Vec<String> {
+    let context = egui::Context::default();
+    let output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 1600.0),
+            )),
+            ..Default::default()
+        },
+        |ui| panel.package(ui, "qwen3-4b", &mut Vec::new()),
+    );
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn storage_space_confirmation_distinguishes_unknown_insufficient_and_snapshot() {
+    let mut panel = panel();
+    let revision = panel.config.as_ref().unwrap().revision;
+    let request = begin_space_check(&mut panel, "qwen3-4b");
+    assert!(!panel.has_pending());
+    assert!(
+        space_labels(&mut panel)
+            .iter()
+            .any(|text| text.contains("可用空间：未知"))
+    );
+    panel.receive(
+        request,
+        Ok(NativeReply::StorageSpace {
+            revision,
+            available_bytes: Some(100),
+        }),
+    );
+    let labels = space_labels(&mut panel);
+    assert!(labels.iter().any(|text| text.contains("当前可用空间小于")));
+    assert!(labels.iter().any(|text| text.contains("临时空间")));
+    let request = begin_space_check(&mut panel, "qwen3-4b");
+    panel.receive(
+        request,
+        Ok(NativeReply::StorageSpace {
+            revision,
+            available_bytes: Some(2 * 1024 * 1024),
+        }),
+    );
+    assert!(
+        !space_labels(&mut panel)
+            .iter()
+            .any(|text| text.contains("当前可用空间小于"))
+    );
+    assert!(
+        space_labels(&mut panel)
+            .iter()
+            .any(|text| text == "确认下载")
+    );
+}
+
+#[test]
+fn storage_space_old_replies_cannot_cross_target_close_settings_or_disconnect() {
+    let mut panel = panel();
+    let revision = panel.config.as_ref().unwrap().revision;
+    let old = begin_space_check(&mut panel, "qwen3-4b");
+    let current = begin_space_check(&mut panel, "native-cpu");
+    panel.receive(
+        old,
+        Ok(NativeReply::StorageSpace {
+            revision,
+            available_bytes: Some(1),
+        }),
+    );
+    assert_eq!(panel.storage_space.as_ref().unwrap().available_bytes, None);
+    panel.close_download_confirmation();
+    panel.receive(
+        current,
+        Ok(NativeReply::StorageSpace {
+            revision,
+            available_bytes: Some(1),
+        }),
+    );
+    assert!(panel.storage_space.is_none());
+    let old = begin_space_check(&mut panel, "qwen3-4b");
+    let settings = id(panel.begin(NativeRequest::Settings).unwrap());
+    let config = panel.config.as_ref().unwrap();
+    panel.receive(
+        settings,
+        Ok(NativeReply::Settings {
+            revision,
+            document: config.to_toml().unwrap(),
+        }),
+    );
+    panel.receive(
+        old,
+        Ok(NativeReply::StorageSpace {
+            revision,
+            available_bytes: Some(1),
+        }),
+    );
+    assert!(panel.storage_space.is_none());
+    let old = begin_space_check(&mut panel, "qwen3-4b");
+    panel.disconnected();
+    panel.receive(
+        old,
+        Ok(NativeReply::StorageSpace {
+            revision,
+            available_bytes: Some(1),
+        }),
+    );
+    assert!(panel.download_confirmation.is_none());
+    assert!(panel.storage_space.is_none());
+}
+
+#[test]
+fn storage_space_failure_leaves_download_confirmation_usable() {
+    let mut panel = panel();
+    let request = begin_space_check(&mut panel, "qwen3-4b");
+    panel.receive(request, Err(AppError::connectivity("fixture")));
+    assert!(!panel.uncertain);
+    assert!(
+        space_labels(&mut panel)
+            .iter()
+            .any(|text| text.contains("可用空间：未知"))
+    );
+    assert!(
+        space_labels(&mut panel)
+            .iter()
+            .any(|text| text == "确认下载")
+    );
+}
+
+#[test]
+fn storage_space_is_requested_by_opening_download_confirmation() {
+    let mut panel = panel();
+    let revision = panel.config.as_ref().unwrap().revision;
+    let context = egui::Context::default();
+    let render = |panel: &mut NativePanel, events| {
+        let mut requests = Vec::new();
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 1600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| panel.package(ui, "qwen3-4b", &mut requests),
+        );
+        (output, requests)
+    };
+    let (output, requests) = render(&mut panel, Vec::new());
+    assert!(requests.is_empty());
+    let position = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "下载准备" => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .expect("download button");
+    let mut sent = Vec::new();
+    for pressed in [true, false] {
+        let (_, requests) = render(
+            &mut panel,
+            vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        sent.extend(requests);
+    }
+    assert_eq!(
+        sent,
+        vec![NativeRequest::StorageSpace {
+            expected_revision: revision
+        }]
+    );
+    assert_eq!(panel.download_confirmation.as_deref(), Some("qwen3-4b"));
+}
+
 #[test]
 fn asynchronous_voice_import_selects_confirmed_voice_and_preserves_a_changed_draft() {
     use ai_ex_config::native::{ModelSelection, NativeBackend, VoiceLanguage, VoiceSource};

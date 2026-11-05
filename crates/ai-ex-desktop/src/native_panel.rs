@@ -21,6 +21,12 @@ enum DropTarget {
     ReferenceWav,
 }
 
+struct StorageSpaceCheck {
+    package_id: String,
+    revision: u64,
+    available_bytes: Option<u64>,
+}
+
 pub struct NativePanel {
     pub(super) state: Option<NativeState>,
     pub(super) packages: Vec<NativePackage>,
@@ -34,6 +40,7 @@ pub struct NativePanel {
     pub(super) uncertain: bool,
     unconfirmed: Option<NativeRequest>,
     pub(super) download_confirmation: Option<String>,
+    storage_space: Option<StorageSpaceCheck>,
     pub(super) remove_confirmation: Option<String>,
     pub(super) import_paths: BTreeMap<String, String>,
     drop_target: Option<DropTarget>,
@@ -70,6 +77,7 @@ impl Default for NativePanel {
             uncertain: false,
             unconfirmed: None,
             download_confirmation: None,
+            storage_space: None,
             remove_confirmation: None,
             import_paths: BTreeMap::new(),
             drop_target: None,
@@ -94,6 +102,31 @@ impl Default for NativePanel {
 }
 
 impl NativePanel {
+    fn clear_storage_space(&mut self) {
+        self.storage_space = None;
+        self.pending
+            .retain(|_, request| !matches!(request, NativeRequest::StorageSpace { .. }));
+    }
+
+    pub fn close_download_confirmation(&mut self) {
+        self.download_confirmation = None;
+        self.clear_storage_space();
+    }
+
+    fn request_storage_space(&mut self, requests: &mut Vec<NativeRequest>) {
+        self.clear_storage_space();
+        if let (Some(package_id), Some(config)) = (&self.download_confirmation, &self.config) {
+            self.storage_space = Some(StorageSpaceCheck {
+                package_id: package_id.clone(),
+                revision: config.revision,
+                available_bytes: None,
+            });
+            requests.push(NativeRequest::StorageSpace {
+                expected_revision: config.revision,
+            });
+        }
+    }
+
     fn arm_drop(&mut self, target: DropTarget) {
         self.drop_target = Some(target);
     }
@@ -169,6 +202,12 @@ impl NativePanel {
         let reply = match result {
             Ok(reply) => reply,
             Err(error) => {
+                if matches!(request, NativeRequest::StorageSpace { .. }) {
+                    if let Some(space) = &mut self.storage_space {
+                        space.available_bytes = None;
+                    }
+                    return;
+                }
                 if mutating(&request) {
                     self.uncertain = matches!(
                         error.kind,
@@ -191,6 +230,7 @@ impl NativePanel {
             NativeReply::State(state) => {
                 if !state.configured {
                     self.config = None;
+                    self.clear_storage_space();
                 }
                 if self
                     .state
@@ -225,86 +265,90 @@ impl NativePanel {
                     self.confirm_outcome();
                 }
             }
-            NativeReply::Settings { revision, document } => match NativeConfig::parse(&document) {
-                Ok(config) => {
-                    if config.revision != revision {
-                        self.status = "服务返回的设置版本不一致，请刷新状态。".into();
-                        self.refresh = true;
-                        return;
-                    }
-                    if self
-                        .config
-                        .as_ref()
-                        .is_some_and(|current| current.revision > revision)
-                    {
-                        self.refresh = true;
-                        return;
-                    }
-                    if self.selected_voice.is_empty()
-                        || !config
-                            .voices
-                            .iter()
-                            .any(|voice| voice.id == self.selected_voice)
-                    {
-                        self.selected_voice = config
-                            .voice_for_profile(&self.profile_id)
-                            .map(|voice| voice.id.clone())
-                            .unwrap_or_default();
-                    }
-                    let baseline = *self
-                        .applied_microphone
-                        .get_or_insert(config.devices.microphone_enabled);
-                    self.microphone_restart_required =
-                        baseline != config.devices.microphone_enabled;
-                    if let (Some(previous), Some(mut draft)) = (&self.config, self.device_draft) {
-                        if draft.microphone_enabled == previous.devices.microphone_enabled {
-                            draft.microphone_enabled = config.devices.microphone_enabled;
+            NativeReply::Settings { revision, document } => {
+                self.clear_storage_space();
+                match NativeConfig::parse(&document) {
+                    Ok(config) => {
+                        if config.revision != revision {
+                            self.status = "服务返回的设置版本不一致，请刷新状态。".into();
+                            self.refresh = true;
+                            return;
                         }
-                        if draft.playback_enabled == previous.devices.playback_enabled {
-                            draft.playback_enabled = config.devices.playback_enabled;
-                        }
-                        self.device_draft = (draft != config.devices).then_some(draft);
-                    }
-                    if self
-                        .device_draft
-                        .is_some_and(|draft| draft == config.devices)
-                    {
-                        self.device_draft = None;
-                    }
-                    self.confirm_voice_import(&config);
-                    self.confirm_voice_edit(&config);
-                    self.config = Some(config);
-                    if matches!(request, NativeRequest::ImportVoice { .. }) {
-                        self.reference_path.clear();
-                        self.reference_text.clear();
-                        if let Some(voice) =
-                            self.config.as_ref().and_then(|config| config.voices.last())
+                        if self
+                            .config
+                            .as_ref()
+                            .is_some_and(|current| current.revision > revision)
                         {
-                            self.selected_voice = voice.id.clone();
+                            self.refresh = true;
+                            return;
+                        }
+                        if self.selected_voice.is_empty()
+                            || !config
+                                .voices
+                                .iter()
+                                .any(|voice| voice.id == self.selected_voice)
+                        {
+                            self.selected_voice = config
+                                .voice_for_profile(&self.profile_id)
+                                .map(|voice| voice.id.clone())
+                                .unwrap_or_default();
+                        }
+                        let baseline = *self
+                            .applied_microphone
+                            .get_or_insert(config.devices.microphone_enabled);
+                        self.microphone_restart_required =
+                            baseline != config.devices.microphone_enabled;
+                        if let (Some(previous), Some(mut draft)) = (&self.config, self.device_draft)
+                        {
+                            if draft.microphone_enabled == previous.devices.microphone_enabled {
+                                draft.microphone_enabled = config.devices.microphone_enabled;
+                            }
+                            if draft.playback_enabled == previous.devices.playback_enabled {
+                                draft.playback_enabled = config.devices.playback_enabled;
+                            }
+                            self.device_draft = (draft != config.devices).then_some(draft);
+                        }
+                        if self
+                            .device_draft
+                            .is_some_and(|draft| draft == config.devices)
+                        {
+                            self.device_draft = None;
+                        }
+                        self.confirm_voice_import(&config);
+                        self.confirm_voice_edit(&config);
+                        self.config = Some(config);
+                        if matches!(request, NativeRequest::ImportVoice { .. }) {
+                            self.reference_path.clear();
+                            self.reference_text.clear();
+                            if let Some(voice) =
+                                self.config.as_ref().and_then(|config| config.voices.last())
+                            {
+                                self.selected_voice = voice.id.clone();
+                            }
+                        }
+                        if matches!(
+                            &self.unconfirmed,
+                            Some(
+                                NativeRequest::SaveSettings { .. }
+                                    | NativeRequest::ImportVoice { .. }
+                                    | NativeRequest::BindVoice { .. }
+                                    | NativeRequest::CreateDefaults
+                                    | NativeRequest::Settings
+                            )
+                        ) {
+                            self.confirm_outcome();
+                        }
+                        if mutating(&request) {
+                            self.status = if self.microphone_restart_required {
+                                "设置已保存。麦克风开关重新进入对话后生效。".into()
+                            } else {
+                                "设置已保存。".into()
+                            };
                         }
                     }
-                    if matches!(
-                        &self.unconfirmed,
-                        Some(
-                            NativeRequest::SaveSettings { .. }
-                                | NativeRequest::ImportVoice { .. }
-                                | NativeRequest::BindVoice { .. }
-                                | NativeRequest::CreateDefaults
-                                | NativeRequest::Settings
-                        )
-                    ) {
-                        self.confirm_outcome();
-                    }
-                    if mutating(&request) {
-                        self.status = if self.microphone_restart_required {
-                            "设置已保存。麦克风开关重新进入对话后生效。".into()
-                        } else {
-                            "设置已保存。".into()
-                        };
-                    }
+                    Err(error) => self.status = format!("无法读取原生设置：{error}"),
                 }
-                Err(error) => self.status = format!("无法读取原生设置：{error}"),
-            },
+            }
             NativeReply::Operation(operation) => {
                 self.track_voice_import(&request, &operation);
                 if matches!(request, NativeRequest::PreviewVoice { .. }) {
@@ -339,6 +383,22 @@ impl NativePanel {
             }
             NativeReply::Accepted => {
                 self.refresh = true;
+            }
+            NativeReply::StorageSpace {
+                revision,
+                available_bytes,
+            } => {
+                if matches!(request, NativeRequest::StorageSpace { expected_revision } if expected_revision == revision)
+                    && self
+                        .config
+                        .as_ref()
+                        .is_some_and(|config| config.revision == revision)
+                    && let Some(space) = &mut self.storage_space
+                    && space.revision == revision
+                    && self.download_confirmation.as_deref() == Some(&space.package_id)
+                {
+                    space.available_bytes = available_bytes;
+                }
             }
         }
     }
@@ -388,6 +448,7 @@ impl NativePanel {
 
     pub fn disconnected(&mut self) {
         self.cancel_drop();
+        self.close_download_confirmation();
         let initialized = self.state.is_some()
             || self.config.is_some()
             || !self.pending.is_empty()
@@ -434,6 +495,7 @@ impl NativePanel {
         ui.weak("准备完成后可以离线对话。人物外形与其他设置随时可用。");
         if !connected {
             self.cancel_drop();
+            self.close_download_confirmation();
             ui.label("正在连接本地服务，模型尚未准备也能打开此页面。");
             return Vec::new();
         }
@@ -492,6 +554,7 @@ fn mutating(request: &NativeRequest) -> bool {
         NativeRequest::State
             | NativeRequest::Packages
             | NativeRequest::Settings
+            | NativeRequest::StorageSpace { .. }
             | NativeRequest::Operation { .. }
     )
 }

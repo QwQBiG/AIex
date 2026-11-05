@@ -7,6 +7,7 @@ use ai_ex_domain::{Message, NativeOperationPhase, NativeReply, NativeRequest, Ro
 use super::*;
 
 mod preview;
+mod storage_space;
 
 struct Fixture(PathBuf);
 impl Fixture {

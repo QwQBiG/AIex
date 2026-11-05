@@ -23,6 +23,9 @@ impl NativeRuntime {
             }
             NativeRequest::Settings => self.settings_reply()?,
             NativeRequest::Packages => NativeReply::Packages(self.packages()?),
+            NativeRequest::StorageSpace { expected_revision } => {
+                self.storage_space(expected_revision).await?
+            }
             NativeRequest::Download { package_id } => {
                 let _mutation = self.mutation.lock().await;
                 let manager = self.manager()?;
