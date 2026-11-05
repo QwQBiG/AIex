@@ -180,6 +180,9 @@ fn inspect_project(
         entry
             .read_exact(&mut header)
             .map_err(|error| error.to_string())?;
+        if crate::python_gate::python_shebang_for_path(&name, &header) {
+            issues.push(json!({"kind":"source_command", "path":name, "line":1}));
+        }
         if crate::python_gate::archive_name(&name) || crate::python_gate::archive_signature(&header)
         {
             nested.push(name);

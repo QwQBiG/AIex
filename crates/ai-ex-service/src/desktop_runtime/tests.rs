@@ -53,6 +53,18 @@ impl VtsDiscoveryPort for Parameters {
         Ok(Vec::new())
     }
 
+    async fn check_mappings(&self) -> Result<VtsMappingCheck, AppError> {
+        Ok(VtsMappingCheck {
+            model_loaded: true,
+            mappings: vec![ai_ex_domain::VtsMappingStatus {
+                emotion: ai_ex_domain::Emotion::Happy,
+                status: ai_ex_domain::VtsMappingState::Matched,
+                hotkey_id: Some("smile".into()),
+                id_truncated: false,
+            }],
+        })
+    }
+
     async fn discover_parameters(&self) -> Result<ai_ex_vts::VtsParameterList, AppError> {
         Ok(ai_ex_vts::VtsParameterList {
             model_loaded: true,
@@ -69,6 +81,46 @@ impl VtsDiscoveryPort for Parameters {
                 .collect(),
         })
     }
+}
+
+#[tokio::test]
+async fn mapping_check_forwards_the_port_result_and_reports_unavailable() {
+    let fixture = Fixture::new();
+    let runtime = DesktopRuntime::new(
+        Uuid::new_v4(),
+        fixture.path(),
+        Arc::new(Actions::default()),
+        Some(Arc::new(Parameters)),
+    )
+    .unwrap();
+    let DesktopRuntimeReply::VtsMappingCheck(check) = runtime
+        .handle(DesktopRuntimeRequest::CheckVtsMappings)
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected VTS response")
+    };
+    assert!(check.model_loaded);
+    assert_eq!(
+        check.mappings[0].status,
+        ai_ex_domain::VtsMappingState::Matched
+    );
+    runtime.stop().await.unwrap();
+
+    let disabled = DesktopRuntime::new(
+        Uuid::new_v4(),
+        fixture.path(),
+        Arc::new(Actions::default()),
+        None,
+    )
+    .unwrap();
+    assert!(
+        disabled
+            .handle(DesktopRuntimeRequest::CheckVtsMappings)
+            .await
+            .is_err()
+    );
+    disabled.stop().await.unwrap();
 }
 
 #[tokio::test]

@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use ai_ex_domain::{
     AppError, DesktopRuntimeReply, DesktopRuntimeRequest, DesktopRuntimeSettings,
-    DesktopRuntimeSnapshot, DiscoveredVtsHotkey, VtsParameterPage,
+    DesktopRuntimeSnapshot, DiscoveredVtsHotkey, VtsMappingCheck, VtsMappingState,
+    VtsParameterPage,
 };
 use eframe::egui;
 use uuid::Uuid;
@@ -27,6 +28,7 @@ pub struct DesktopRuntimePanel {
     feedback: Option<String>,
     vts: Vec<DiscoveredVtsHotkey>,
     vts_parameters: Option<VtsParameterPage>,
+    vts_mappings: Option<VtsMappingCheck>,
     component_observations: Option<Vec<ai_ex_domain::DiagnosticComponentObservation>>,
 }
 
@@ -40,6 +42,7 @@ impl DesktopRuntimePanel {
             self.poll_at = None;
             self.vts.clear();
             self.vts_parameters = None;
+            self.vts_mappings = None;
             self.component_observations = None;
         }
         if !connected {
@@ -47,6 +50,7 @@ impl DesktopRuntimePanel {
             self.pending.clear();
             self.poll_at = None;
             self.vts_parameters = None;
+            self.vts_mappings = None;
             self.component_observations = None;
         }
         self.connected = connected && instance.is_some();
@@ -71,6 +75,17 @@ impl DesktopRuntimePanel {
     pub fn begin(&mut self, request: DesktopRuntimeRequest) -> Option<WorkerCommand> {
         if !self.connected || self.pending.len() >= 8 {
             return None;
+        }
+        if matches!(request, DesktopRuntimeRequest::CheckVtsMappings) {
+            if self
+                .pending
+                .values()
+                .any(|pending| matches!(pending, DesktopRuntimeRequest::CheckVtsMappings))
+            {
+                return None;
+            }
+            self.vts_mappings = None;
+            self.feedback = None;
         }
         self.sequence = self.sequence.checked_add(1)?;
         self.pending.insert(self.sequence, request.clone());
@@ -139,7 +154,49 @@ impl DesktopRuntimePanel {
                     self.feedback = Some("VTS 参数结果无效，请重试。".into());
                 }
             }
+            Ok(DesktopRuntimeReply::VtsMappingCheck(check)) => {
+                let valid = matches!(request, DesktopRuntimeRequest::CheckVtsMappings)
+                    && self.connected
+                    && check.mappings.len() == 5
+                    && [
+                        ai_ex_domain::Emotion::Neutral,
+                        ai_ex_domain::Emotion::Happy,
+                        ai_ex_domain::Emotion::Sad,
+                        ai_ex_domain::Emotion::Angry,
+                        ai_ex_domain::Emotion::Surprised,
+                    ]
+                    .iter()
+                    .all(|emotion| {
+                        check
+                            .mappings
+                            .iter()
+                            .filter(|item| item.emotion == *emotion)
+                            .count()
+                            == 1
+                    })
+                    && (check.model_loaded
+                        || check.mappings.iter().all(|item| {
+                            matches!(
+                                item.status,
+                                VtsMappingState::Unconfigured | VtsMappingState::Unknown
+                            )
+                        }));
+                if valid {
+                    self.vts_mappings = Some(check);
+                    self.feedback = None;
+                } else {
+                    self.vts_mappings = None;
+                    self.feedback = Some("表情映射结果无效，请重新核对。".into());
+                }
+            }
             Err(error) => {
+                if matches!(request, DesktopRuntimeRequest::CheckVtsMappings) {
+                    self.vts_mappings = None;
+                    self.feedback = Some(format!(
+                        "暂时无法核对表情映射，请检查 VTS 连接后重试：{error}"
+                    ));
+                    return;
+                }
                 if matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { .. }) {
                     self.vts_parameters = None;
                 }

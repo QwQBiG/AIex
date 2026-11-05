@@ -101,6 +101,7 @@ pub enum DesktopRuntimeRequest {
     },
     Diagnostics,
     DiscoverVts,
+    CheckVtsMappings,
     DiscoverVtsParameters {
         offset: usize,
     },
@@ -110,6 +111,30 @@ pub enum DesktopRuntimeRequest {
 pub struct DiscoveredVtsHotkey {
     pub id: String,
     pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VtsMappingState {
+    Unconfigured,
+    Matched,
+    Missing,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VtsMappingStatus {
+    pub emotion: crate::Emotion,
+    pub status: VtsMappingState,
+    pub hotkey_id: Option<String>,
+    pub id_truncated: bool,
+}
+
+/// An observation of the active configuration against one VTS model snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VtsMappingCheck {
+    pub model_loaded: bool,
+    pub mappings: Vec<VtsMappingStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,5 +199,6 @@ pub enum DesktopRuntimeReply {
     State(DesktopRuntimeSnapshot),
     Diagnostics(DesktopDiagnosticReport),
     VtsDiscovery(Vec<DiscoveredVtsHotkey>),
+    VtsMappingCheck(VtsMappingCheck),
     VtsParameters(VtsParameterPage),
 }

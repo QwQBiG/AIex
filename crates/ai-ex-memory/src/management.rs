@@ -1,4 +1,4 @@
-use ai_ex_domain::{MemoryPage, MemoryRequest, MemoryResponse};
+use ai_ex_domain::{MemoryPage, MemoryRequest, MemoryResponse, MemoryTextField, MemoryTextSegment};
 
 use super::*;
 
@@ -13,6 +13,39 @@ impl MemoryStore {
         }
         if let Some(response) = self.knowledge_query(&request, &profile_id).await? {
             return Ok(response);
+        }
+        if let MemoryRequest::ReadSegment {
+            id,
+            expected_revision,
+            field,
+            offset,
+            ..
+        } = &request
+        {
+            let records = self.inner.records.read().await;
+            let index = find_record(&records, &profile_id, *id, *expected_revision)?;
+            let entry = &records[index];
+            let text = match field {
+                MemoryTextField::User => &entry.user_text,
+                MemoryTextField::Assistant => &entry.assistant_text,
+            };
+            if *offset > text.len() || !text.is_char_boundary(*offset) {
+                return Err(AppError::configuration("invalid memory text offset"));
+            }
+            // Bound the serialized reply even when every byte requires JSON escaping.
+            let mut end = offset.saturating_add(4096).min(text.len());
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            return Ok(MemoryResponse::Segment(MemoryTextSegment {
+                profile_id: profile_id.clone(),
+                id: *id,
+                revision: *expected_revision,
+                field: *field,
+                offset: *offset,
+                text: text[*offset..end].to_owned(),
+                next_offset: (end < text.len()).then_some(end),
+            }));
         }
         if let MemoryRequest::List {
             query,

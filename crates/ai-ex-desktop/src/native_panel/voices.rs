@@ -50,6 +50,25 @@ impl VoiceEdit {
             || matches!(&self.original.source, VoiceSource::ReferenceAudio { text, .. } if self.text != *text)
     }
 
+    fn validation_message(&self) -> Option<&'static str> {
+        if self.desired().validate().is_ok() {
+            return None;
+        }
+        if self.label.trim().is_empty()
+            || self.label.chars().count() > 128
+            || self.label.chars().any(char::is_control)
+        {
+            Some("请填写声音名称，最多 128 个字符，不能包含控制字符。")
+        } else if self.text.trim().is_empty()
+            || self.text.len() > 64 * 1024
+            || self.text.contains('\0')
+        {
+            Some("请填写有效的录音对应文字；内容过长时请适当缩短。")
+        } else {
+            Some("声音设置无效，请刷新设置并核对。")
+        }
+    }
+
     fn current<'a>(&self, config: &'a NativeConfig) -> Option<&'a VoicePreset> {
         config
             .voices
@@ -319,10 +338,18 @@ impl NativePanel {
             } else if edit.dirty() {
                 ui.weak("修改尚未保存。");
             }
+            let validation = if edit.dirty() && !conflict {
+                edit.validation_message()
+            } else {
+                None
+            };
+            if let Some(message) = validation {
+                ui.colored_label(ui.visuals().error_fg_color, message);
+            }
             ui.horizontal_wrapped(|ui| {
                 save = ui
                     .add_enabled(
-                        !blocked && !conflict && edit.dirty(),
+                        !blocked && !conflict && edit.dirty() && validation.is_none(),
                         theme::primary_button("保存声音修改"),
                     )
                     .clicked();

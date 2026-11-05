@@ -4,13 +4,15 @@ mod discovery;
 #[cfg(test)]
 mod discovery_tests;
 mod protocol;
-pub use discovery::{VtsHotkey, VtsParameter, VtsParameterList};
+pub use discovery::{VtsHotkey, VtsHotkeyList, VtsParameter, VtsParameterList};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use ai_ex_core::AvatarPort;
-use ai_ex_domain::{AppError, ComponentHealth, Emotion};
+use ai_ex_domain::{
+    AppError, ComponentHealth, Emotion, VtsMappingCheck, VtsMappingState, VtsMappingStatus,
+};
 use ai_ex_stage::{StageAction, StageCapability, StageExecutor};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -33,7 +35,7 @@ pub struct VtsSettings {
 enum Command {
     Mouth(f64),
     Hotkey(String),
-    DiscoverHotkeys(oneshot::Sender<Result<Vec<VtsHotkey>, AppError>>),
+    DiscoverHotkeys(oneshot::Sender<Result<VtsHotkeyList, AppError>>),
     DiscoverParameters(oneshot::Sender<Result<VtsParameterList, AppError>>),
 }
 
@@ -94,6 +96,45 @@ impl VtsClient {
 
     /// Reads the current model's hotkeys without triggering any action.
     pub async fn discover_hotkeys(&self) -> Result<Vec<VtsHotkey>, AppError> {
+        Ok(self.discover_hotkey_list().await?.hotkeys)
+    }
+
+    /// Compares the running client's mappings with the current model snapshot.
+    pub async fn check_mappings(&self) -> Result<VtsMappingCheck, AppError> {
+        let snapshot = self.discover_hotkey_list().await?;
+        let mappings = [
+            Emotion::Neutral,
+            Emotion::Happy,
+            Emotion::Angry,
+            Emotion::Sad,
+            Emotion::Surprised,
+        ]
+        .into_iter()
+        .map(|emotion| {
+            let configured = self.expression_hotkeys.get(emotion.as_str());
+            let status = match configured {
+                None => VtsMappingState::Unconfigured,
+                Some(_) if !snapshot.model_loaded => VtsMappingState::Unknown,
+                Some(id) if snapshot.hotkeys.iter().any(|key| &key.id == id) => {
+                    VtsMappingState::Matched
+                }
+                Some(_) => VtsMappingState::Missing,
+            };
+            VtsMappingStatus {
+                emotion,
+                status,
+                hotkey_id: configured.map(|id| id.chars().take(256).collect()),
+                id_truncated: configured.is_some_and(|id| id.chars().count() > 256),
+            }
+        })
+        .collect();
+        Ok(VtsMappingCheck {
+            model_loaded: snapshot.model_loaded,
+            mappings,
+        })
+    }
+
+    async fn discover_hotkey_list(&self) -> Result<VtsHotkeyList, AppError> {
         let sender = self
             .sender
             .as_ref()
@@ -201,7 +242,7 @@ impl StageExecutor for VtsClient {
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 enum PendingDiscovery {
-    Hotkeys(oneshot::Sender<Result<Vec<VtsHotkey>, AppError>>),
+    Hotkeys(oneshot::Sender<Result<VtsHotkeyList, AppError>>),
     Parameters(oneshot::Sender<Result<VtsParameterList, AppError>>),
 }
 

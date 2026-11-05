@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use ai_ex_domain::{
     AppError, MemoryEntityPage, MemoryEntry, MemoryKind, MemoryKnowledge, MemoryMedia,
-    MemoryModality, MemoryPage, MemoryRequest, MemoryResponse,
+    MemoryModality, MemoryPage, MemoryRequest, MemoryResponse, MemoryTextField, MemoryTextSegment,
 };
 
 #[path = "memory_panel_editor.rs"]
@@ -38,6 +38,13 @@ struct Pending {
     request: MemoryRequest,
 }
 
+struct SegmentReader {
+    id: uuid::Uuid,
+    revision: u64,
+    field: MemoryTextField,
+    segment: Option<MemoryTextSegment>,
+}
+
 #[derive(Default)]
 struct SavedDraft {
     text: String,
@@ -70,6 +77,7 @@ pub struct MemoryPanel {
     requires_review: bool,
     focus_editor: bool,
     offsets: Vec<usize>,
+    segment_reader: Option<SegmentReader>,
 }
 
 impl MemoryPanel {
@@ -109,6 +117,18 @@ impl MemoryPanel {
         self.feedback = None;
         self.focus_editor = false;
         self.offsets.clear();
+        self.segment_reader = None;
+    }
+
+    pub fn connection_changed(&mut self) {
+        self.segment_reader = None;
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| matches!(pending.request, MemoryRequest::ReadSegment { .. }))
+        {
+            self.pending = None;
+        }
     }
 
     pub fn mutation_pending(&self) -> bool {
@@ -134,6 +154,9 @@ impl MemoryPanel {
         if request.profile_id() != self.profile_id || request.validate().is_err() {
             self.feedback = Some("请检查记忆内容与当前角色后重试。".to_owned());
             return None;
+        }
+        if !matches!(request, MemoryRequest::ReadSegment { .. }) {
+            self.segment_reader = None;
         }
         self.next_id = self.next_id.wrapping_add(1);
         let clear_draft = matches!(
@@ -167,6 +190,14 @@ impl MemoryPanel {
         }
         let pending = self.pending.take().expect("matching request");
         match result {
+            Ok(MemoryResponse::Segment(segment))
+                if self.accept_segment(&pending.request, &segment) =>
+            {
+                if let Some(reader) = &mut self.segment_reader {
+                    reader.segment = Some(segment);
+                }
+                self.feedback = None;
+            }
             Ok(MemoryResponse::Page(page)) if self.accept_page(&pending.request, &page) => {
                 self.record_offset(page.offset);
                 self.storage_enabled = Some(page.enabled);
@@ -196,10 +227,16 @@ impl MemoryPanel {
                 return true;
             }
             Ok(_) => {
+                if matches!(pending.request, MemoryRequest::ReadSegment { .. }) {
+                    self.segment_reader = None;
+                }
                 self.requires_review |= pending.mutation;
                 self.feedback = Some("记忆响应与当前操作不一致，请刷新后核对。".to_owned());
             }
             Err(error) => {
+                if matches!(pending.request, MemoryRequest::ReadSegment { .. }) {
+                    self.segment_reader = None;
+                }
                 let uncertain = pending.mutation
                     && matches!(
                         error.kind,
@@ -225,6 +262,40 @@ impl MemoryPanel {
             }
         }
         false
+    }
+
+    fn accept_segment(&self, request: &MemoryRequest, segment: &MemoryTextSegment) -> bool {
+        let MemoryRequest::ReadSegment {
+            profile_id,
+            id,
+            expected_revision,
+            field,
+            offset,
+        } = request
+        else {
+            return false;
+        };
+        let Some(reader) = &self.segment_reader else {
+            return false;
+        };
+        profile_id == &self.profile_id
+            && segment.profile_id == *profile_id
+            && segment.id == *id
+            && reader.id == *id
+            && segment.revision == *expected_revision
+            && reader.revision == *expected_revision
+            && segment.field == *field
+            && reader.field == *field
+            && segment.offset == *offset
+            && segment.text.len() <= 4096
+            && segment.next_offset.is_none_or(|next| {
+                !segment.text.is_empty() && offset.checked_add(segment.text.len()) == Some(next)
+            })
+            && self.page.as_ref().is_some_and(|page| {
+                page.entries
+                    .iter()
+                    .any(|entry| entry.id == *id && entry.revision == *expected_revision)
+            })
     }
 
     fn accept_page(&self, request: &MemoryRequest, page: &MemoryPage) -> bool {
@@ -278,6 +349,7 @@ impl MemoryPanel {
     }
 
     fn invalidate_results(&mut self) {
+        self.segment_reader = None;
         self.page = None;
         self.entity_page = None;
         self.offsets.clear();
@@ -325,6 +397,7 @@ impl MemoryPanel {
         knowledge: Option<&MemoryKnowledge>,
         truncated: bool,
     ) {
+        self.segment_reader = None;
         self.draft = if truncated {
             String::new()
         } else {

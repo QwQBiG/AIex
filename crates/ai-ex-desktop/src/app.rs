@@ -267,6 +267,7 @@ impl DesktopApp {
                 WorkerEvent::Connection(connected) => {
                     self.reflex_runtime_ready = false;
                     self.reflex.disconnected();
+                    self.memory.connection_changed();
                     if !connected {
                         self.persona_synced = false;
                         self.native.disconnected();

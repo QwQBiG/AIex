@@ -62,7 +62,7 @@ pub(crate) fn check(catalog: &Path, archive: &Path) -> Result<(Value, bool), Str
             "uninspected_source_archives": sources,
             "uninspected_nested_archives": nested,
             "project_source_audits": project_sources,
-            "scope": "supplied catalog and runtime archive; names, script commands, static PE imports and partial project source checks",
+            "scope": "supplied catalog and runtime archive; names, script commands, common file-header shebangs, static PE imports and partial project source checks",
             "limitations": "catalog authenticity is not established; upstream or other nested archives, cross-file command aliases, dynamic or macro-generated commands, dynamic loading, embedded interpreters, other packages, concurrent file changes and remote services are not inspected"
         }),
         passed,
@@ -135,6 +135,9 @@ fn inspect(archive: &mut ZipArchive<File>, artifacts: &[Artifact]) -> Result<Sca
         entry
             .read_exact(&mut header)
             .map_err(|error| error.to_string())?;
+        if crate::python_gate::python_shebang_for_path(name, &header) {
+            issues.push(json!({"kind": "runtime_command", "path": name, "line": 1}));
+        }
         if crate::python_gate::archive_name(name) || crate::python_gate::archive_signature(&header)
         {
             nested.push(name.clone());

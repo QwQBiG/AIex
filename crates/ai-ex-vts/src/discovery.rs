@@ -7,6 +7,12 @@ pub struct VtsHotkey {
     pub name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VtsHotkeyList {
+    pub model_loaded: bool,
+    pub hotkeys: Vec<VtsHotkey>,
+}
+
 /// One available VTube Studio input parameter and its current value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VtsParameter {
@@ -86,7 +92,7 @@ pub(super) fn parameters(response: &Value) -> Result<VtsParameterList, AppError>
     })
 }
 
-pub(super) fn hotkeys(response: &Value) -> Result<Vec<VtsHotkey>, AppError> {
+pub(super) fn hotkeys(response: &Value) -> Result<VtsHotkeyList, AppError> {
     let invalid = || AppError::protocol("invalid or rejected VTS hotkey discovery response");
     if response.get("messageType").and_then(Value::as_str) != Some("HotkeysInCurrentModelResponse")
     {
@@ -105,7 +111,8 @@ pub(super) fn hotkeys(response: &Value) -> Result<Vec<VtsHotkey>, AppError> {
         return Err(invalid());
     }
     let mut ids = std::collections::BTreeSet::new();
-    list.iter()
+    let hotkeys = list
+        .iter()
         .map(|item| {
             let id = item
                 .get("hotkeyID")
@@ -127,7 +134,11 @@ pub(super) fn hotkeys(response: &Value) -> Result<Vec<VtsHotkey>, AppError> {
                 name: name.into(),
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, AppError>>()?;
+    Ok(VtsHotkeyList {
+        model_loaded: loaded,
+        hotkeys,
+    })
 }
 
 #[cfg(test)]
@@ -160,10 +171,11 @@ mod tests {
                 .map(|index| json!({"hotkeyID":index.to_string(),"name":"n"}))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(hotkeys(&response(boundary)).unwrap().len(), 128);
+        assert_eq!(hotkeys(&response(boundary)).unwrap().hotkeys.len(), 128);
         let mut unloaded = response(json!([]));
         unloaded["data"]["modelLoaded"] = json!(false);
-        assert!(hotkeys(&unloaded).unwrap().is_empty());
+        let result = hotkeys(&unloaded).unwrap();
+        assert!(!result.model_loaded && result.hotkeys.is_empty());
         assert!(hotkeys(&json!({"messageType":"APIError"})).is_err());
     }
 

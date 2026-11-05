@@ -1,7 +1,7 @@
 use ai_ex_control::{ControlPayload, ControlResponse, MemoryReply};
 use ai_ex_domain::{
     ConversationState, Emotion, MemoryEntry, MemoryKind, MemoryPage, MemoryResponse, MemorySource,
-    SpeechPlaybackSnapshot, TurnId,
+    MemoryTextField, MemoryTextSegment, SpeechPlaybackSnapshot, TurnId,
 };
 
 use super::*;
@@ -81,7 +81,20 @@ fn long_unicode_and_escaped_text_preserve_identity_and_fit_complete_control_repl
         knowledge: Default::default(),
     };
     assert!(serde_json::to_vec(&page).unwrap().len() <= 48 * 1024);
-    for response in [MemoryResponse::Page(page), MemoryResponse::Changed] {
+    let segment = MemoryTextSegment {
+        profile_id: "default".to_owned(),
+        id,
+        revision: 1,
+        field: MemoryTextField::User,
+        offset: 0,
+        text: "\u{0001}".repeat(4096),
+        next_offset: Some(4096),
+    };
+    for response in [
+        MemoryResponse::Page(page),
+        MemoryResponse::Segment(segment),
+        MemoryResponse::Changed,
+    ] {
         let reply = ControlResponse::Success {
             request_id: id,
             payload: ControlPayload::Memory(Box::new(MemoryReply {

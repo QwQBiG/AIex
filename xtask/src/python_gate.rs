@@ -77,6 +77,7 @@ pub fn check(project: &Path, distribution: &Path) -> Result<(Value, bool)> {
         if missing {
             continue;
         }
+        check_source_shebang(&path, relative, &mut issues)?;
         let filename = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -116,7 +117,7 @@ pub fn check(project: &Path, distribution: &Path) -> Result<(Value, bool)> {
             "source_files_checked": source_files,
             "distribution_files_checked": distribution_files,
             "issues": issues,
-            "scope": "tracked files, Cargo manifests and locks, literal Rust launches, script commands, extracted distribution filenames, script commands and static PE imports including renamed files",
+            "scope": "tracked files, Cargo manifests and locks, literal Rust launches, script commands and common file-header shebangs, extracted distribution filenames, script commands and static PE imports including renamed files",
             "limitations": "nested archives are not inspected; unrecognized or renamed archives may not be detected. Cross-file import aliases, dynamic or macro-generated commands, runtime library loading, embedded interpreters, remote services, and concurrent file changes are not inspected"
         }),
         passed,
@@ -153,6 +154,20 @@ fn inspect_tracked_path(path: &Path, relative: &str, issues: &mut Vec<Value>) ->
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && artifact => Ok(true),
         Err(error) => Err(format!("tracked file {relative}: {error}")),
     }
+}
+
+fn check_source_shebang(path: &Path, relative: &str, issues: &mut Vec<Value>) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.is_file() && !is_link_or_reparse(&metadata) {
+        let mut header = Vec::with_capacity(512);
+        fs::File::open(path)
+            .and_then(|file| file.take(512).read_to_end(&mut header))
+            .map_err(|error| format!("{relative}: {error}"))?;
+        if python_shebang_for_path(relative, &header) {
+            issue(issues, "source_command", relative, Some(1));
+        }
+    }
+    Ok(())
 }
 
 fn read_text(path: &Path) -> Result<String> {
@@ -246,6 +261,65 @@ pub(crate) fn is_script(path: &Path) -> bool {
                 "ps1" | "cmd" | "bat" | "sh" | "yml" | "yaml"
             )
         })
+}
+
+pub(crate) fn python_shebang_for_path(path: &str, header: &[u8]) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let lower = name.to_ascii_lowercase();
+    let extension = lower.rsplit_once('.').map(|(_, extension)| extension);
+    if matches!(extension, Some("md" | "markdown" | "rst" | "txt"))
+        || matches!(
+            lower.as_str(),
+            "readme" | "license" | "licence" | "notice" | "copying"
+        )
+    {
+        return false;
+    }
+    python_shebang(header)
+}
+
+fn python_shebang(header: &[u8]) -> bool {
+    let Some(line) = header.strip_prefix(b"#!") else {
+        return false;
+    };
+    let end = line
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(line.len());
+    let line = String::from_utf8_lossy(&line[..end]);
+    let mut words = line.split_whitespace();
+    let Some(program) = words.next() else {
+        return false;
+    };
+    let basename = |path: &str| {
+        path.rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(path)
+            .to_ascii_lowercase()
+    };
+    let program = basename(program);
+    if interpreter_name(&program) {
+        return true;
+    }
+    if program != "env" {
+        return false;
+    }
+    let mut skip_value = false;
+    for word in words {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if matches!(word, "-u" | "--unset" | "-C" | "--chdir" | "-a" | "--argv0") {
+            skip_value = true;
+            continue;
+        }
+        if word.starts_with('-') || word.contains('=') {
+            continue;
+        }
+        return interpreter_name(&basename(word));
+    }
+    false
 }
 
 pub(crate) fn command_line(line: &str) -> bool {
@@ -360,6 +434,9 @@ fn scan_distribution(
                 .take(512)
                 .read_to_end(&mut header)
                 .map_err(|error| format!("{}: {error}", path.display()))?;
+            if python_shebang_for_path(&relative, &header) {
+                issue(issues, "distribution_command", &relative, Some(1));
+            }
             if archive_name(&relative) || archive_signature(&header) {
                 issue(issues, "distribution_archive_uninspected", &relative, None);
             }
@@ -468,6 +545,33 @@ mod tests {
         ] {
             assert!(!command_line(line), "{line}");
         }
+    }
+
+    #[test]
+    fn detects_python_shebang_in_tracked_and_distribution_files() {
+        let root = std::env::temp_dir().join(format!("aiex-shebang-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let script = root.join("start");
+        fs::write(&script, b"#!/usr/bin/env -S python3 -u\nprint('ok')\n").unwrap();
+        let mut issues = Vec::new();
+        check_source_shebang(&script, "start", &mut issues).unwrap();
+        assert_eq!(issues[0]["kind"], "source_command");
+        issues.clear();
+        let mut count = 0;
+        scan_distribution(&root, &root, &mut count, &mut issues).unwrap();
+        assert_eq!(issues[0]["kind"], "distribution_command");
+        assert!(python_shebang(b"#!/usr/bin/python3.11\n"));
+        assert!(!python_shebang(b"# python3 is historical documentation\n"));
+        assert!(!python_shebang(b"#!/usr/bin/env bash python3\n"));
+        assert!(python_shebang(b"#!/usr/bin/env -C /tmp python3\n"));
+        assert!(!python_shebang(b"#!/usr/bin/env -C python3 bash\n"));
+        assert!(!python_shebang_for_path(
+            "docs/history.md",
+            b"#!/usr/bin/python3\n"
+        ));
+        assert!(python_shebang_for_path("start.sh", b"#!/usr/bin/python3\n"));
+        fs::remove_file(script).unwrap();
+        fs::remove_dir(root).unwrap();
     }
 
     #[test]

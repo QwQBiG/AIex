@@ -72,6 +72,27 @@ pub struct MemoryEntry {
     pub revision: u64,
 }
 
+/// Which original text field to read from a memory record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryTextField {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryTextSegment {
+    pub profile_id: String,
+    pub id: Uuid,
+    pub revision: u64,
+    pub field: MemoryTextField,
+    /// UTF-8 byte offset of this segment in the selected field.
+    pub offset: usize,
+    pub text: String,
+    /// UTF-8 byte offset for the next request, or None at the end.
+    pub next_offset: Option<usize>,
+}
+
 fn default_profile() -> String {
     "default".to_owned()
 }
@@ -83,6 +104,13 @@ fn initial_revision() -> u64 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MemoryRequest {
+    ReadSegment {
+        profile_id: String,
+        id: Uuid,
+        expected_revision: u64,
+        field: MemoryTextField,
+        offset: usize,
+    },
     List {
         profile_id: String,
         query: String,
@@ -143,7 +171,8 @@ pub enum MemoryRequest {
 impl MemoryRequest {
     pub fn profile_id(&self) -> &str {
         match self {
-            Self::List { profile_id, .. }
+            Self::ReadSegment { profile_id, .. }
+            | Self::List { profile_id, .. }
             | Self::Entities { profile_id, .. }
             | Self::Evidence { profile_id, .. }
             | Self::QueryMedia { profile_id, .. }
@@ -158,7 +187,8 @@ impl MemoryRequest {
     pub fn is_mutation(&self) -> bool {
         !matches!(
             self,
-            Self::List { .. }
+            Self::ReadSegment { .. }
+                | Self::List { .. }
                 | Self::Entities { .. }
                 | Self::Evidence { .. }
                 | Self::QueryMedia { .. }
@@ -210,7 +240,7 @@ impl MemoryRequest {
                     ));
                 }
             }
-            Self::Forget { .. } => {}
+            Self::Forget { .. } | Self::ReadSegment { .. } => {}
         }
         if let Self::RememberMedia { media, .. } | Self::CorrectMedia { media, .. } = self {
             media.validate()?;
@@ -230,7 +260,10 @@ impl MemoryRequest {
         }
         if matches!(
             self,
-            Self::Correct {
+            Self::ReadSegment {
+                expected_revision: 0,
+                ..
+            } | Self::Correct {
                 expected_revision: 0,
                 ..
             } | Self::CorrectMedia {
@@ -276,5 +309,6 @@ pub struct MemoryPage {
 pub enum MemoryResponse {
     Page(MemoryPage),
     Entities(MemoryEntityPage),
+    Segment(MemoryTextSegment),
     Changed,
 }

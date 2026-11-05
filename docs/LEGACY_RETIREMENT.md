@@ -24,7 +24,7 @@
 | D | `tts_pipeline.py`、`tts_player.py`、`full_duplex_engine/` | audio/tts/duplex/asr/capture | 默认逻辑覆盖 | native playback/capture 编译与设备实测 |
 | E | `memory_core/` | memory | 基础检索/持久化覆盖 | ChromaDB/多模态数据导入或明确放弃旧数据 |
 | F | `gui_controller.py`、`subtitle_window.py`、主题和提示组件 | control/ui-model/desktop | 0.7 发布记录已包含桌面构建、离屏画面和交互回归；尚不等于旧功能全部完成实机替代 | 对照旧能力的窗口、模型与设备验收 |
-| G | `vision_client.py`、`screen_capturer.py`、`action_engine.py`、`agent_manager.py`、`safety_manager.py` | vision/safety/automation/audit | 安全核心覆盖，平台动作未实现 | Windows 捕获/输入适配器、急停实测、审计验收 |
+| G | `vision_client.py`、`screen_capturer.py`、`action_engine.py`、`agent_manager.py`、`safety_manager.py` | vision/safety/automation/audit | 0.10 已提供受控 Windows 捕获和输入；旧能力对照与真实窗口验收未完成 | 逐项核对旧能力、专用窗口和急停实测、审计验收 |
 | H | `*_optimized.py`、`*_monitor.py`、预加载/热重载/自然行为等旁支 | 可观察性与后续明确功能 | 不在 Rust 主链 | 逐项确认无独有产品能力后删除 |
 | I | 对应 Python 测试、诊断工具、`requirements.txt`、`main.py` | Rust 测试、服务、桌面端 | 最后处理 | 所有前置批次完成，发布包可启动 |
 

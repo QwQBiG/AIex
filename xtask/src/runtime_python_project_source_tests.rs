@@ -18,6 +18,9 @@ fn project_python_and_launches_are_reported_but_upstream_is_not_claimed() {
     let project = zip(&[
         ("src/old.py", b"pass"),
         ("tools/start.ps1", b"python worker.py\n"),
+        ("tools/start", b"#!/usr/bin/env python3\nprint('ok')\n"),
+        ("tools/history", b"# python3 was previously used\n"),
+        ("docs/history.md", b"#!/usr/bin/python3\nAn old example.\n"),
         (
             "src/main.rs",
             b"use std::process::Command; fn main() { Command::new(\"python\"); }",
@@ -44,8 +47,19 @@ fn project_python_and_launches_are_reported_but_upstream_is_not_claimed() {
     let report = inspect("sources.zip", sources, &mut Budget::default()).unwrap();
     assert_eq!(report["status"], "partial");
     let issues = report["issues"].as_array().unwrap();
-    assert_eq!(issues.len(), 5);
+    assert_eq!(issues.len(), 6);
     assert!(issues.iter().any(|issue| issue["path"] == "src/old.py"));
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue["path"] == "tools/start" && issue["line"] == 1)
+    );
+    assert!(!issues.iter().any(|issue| issue["path"] == "tools/history"));
+    assert!(
+        !issues
+            .iter()
+            .any(|issue| issue["path"] == "docs/history.md")
+    );
     assert!(
         issues
             .iter()

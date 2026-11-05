@@ -23,6 +23,8 @@ mod persistence_tests;
 mod management_tests;
 #[cfg(test)]
 mod profile_tests;
+#[cfg(test)]
+mod segment_tests;
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};

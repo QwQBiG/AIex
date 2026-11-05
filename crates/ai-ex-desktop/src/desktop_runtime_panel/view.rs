@@ -117,6 +117,15 @@ impl DesktopRuntimePanel {
                 {
                     requests.push(DesktopRuntimeRequest::DiscoverVts);
                 }
+                let mappings_pending = self.pending.values().any(|request| {
+                    matches!(request, DesktopRuntimeRequest::CheckVtsMappings)
+                });
+                if ui
+                    .add_enabled(vts && !mappings_pending, egui::Button::new("核对 VTS 表情映射"))
+                    .clicked()
+                {
+                    requests.push(DesktopRuntimeRequest::CheckVtsMappings);
+                }
                 let parameter_pending = self.pending.values().any(|request| {
                     matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { .. })
                 });
@@ -130,6 +139,34 @@ impl DesktopRuntimePanel {
             ui.weak(
                 "诊断包含版本、运行时长、行为设置和组件状态，不包含对话、原始日志、私人音频或路径。",
             );
+            if let Some(check) = &self.vts_mappings {
+                ui.strong("当前生效的表情映射");
+                ui.weak("这是核对时的人物与配置快照；更换人物或修改配置后请重新核对。");
+                if !check.model_loaded {
+                    ui.weak("VTS 尚未载入人物，已设置的映射暂时无法核对。");
+                }
+                for item in &check.mappings {
+                    let emotion = match item.emotion {
+                        ai_ex_domain::Emotion::Neutral => "平静",
+                        ai_ex_domain::Emotion::Happy => "开心",
+                        ai_ex_domain::Emotion::Sad => "低落",
+                        ai_ex_domain::Emotion::Angry => "生气",
+                        ai_ex_domain::Emotion::Surprised => "惊讶",
+                    };
+                    let status = match item.status {
+                        VtsMappingState::Unconfigured => "未设置",
+                        VtsMappingState::Matched => "匹配",
+                        VtsMappingState::Missing => "未找到热键",
+                        VtsMappingState::Unknown => "无法核对",
+                    };
+                    let id = item.hotkey_id.as_deref().unwrap_or("—");
+                    ui.label(format!("{emotion}：{status} · {id}{}", if item.id_truncated { "（已截短）" } else { "" }));
+                }
+            } else if !self.connected {
+                ui.weak("表情映射暂时无法核对：请先连接服务。");
+            } else if self.confirmed.as_ref().is_some_and(|state| !state.vts_discovery_available) {
+                ui.weak("表情映射暂时无法核对：请确认 VTS 已启用并连接。");
+            }
             if let Some(observations) = &self.component_observations {
                 ui.strong("组件状态记录");
                 ui.weak("显示导出时已有的记录，可能已过期；不代表模型或设备已通过实测。 ");

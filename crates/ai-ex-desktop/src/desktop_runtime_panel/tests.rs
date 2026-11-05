@@ -107,6 +107,139 @@ fn vts_parameter_pages_are_correlated_and_cleared_on_disconnect() {
     assert!(panel.vts_parameters.is_none());
 }
 
+fn mappings(model_loaded: bool) -> VtsMappingCheck {
+    use ai_ex_domain::{Emotion, VtsMappingStatus};
+    VtsMappingCheck {
+        model_loaded,
+        mappings: [
+            Emotion::Neutral,
+            Emotion::Happy,
+            Emotion::Sad,
+            Emotion::Angry,
+            Emotion::Surprised,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, emotion)| VtsMappingStatus {
+            emotion,
+            status: if index == 0 {
+                VtsMappingState::Unconfigured
+            } else if !model_loaded {
+                VtsMappingState::Unknown
+            } else if index == 1 {
+                VtsMappingState::Matched
+            } else {
+                VtsMappingState::Missing
+            },
+            hotkey_id: (index != 0).then(|| format!("fixture-{index}")),
+            id_truncated: index == 4,
+        })
+        .collect(),
+    }
+}
+
+fn begin_mapping_check(panel: &mut DesktopRuntimePanel) -> u64 {
+    let WorkerCommand::DesktopRuntime { request_id, .. } = panel
+        .begin(DesktopRuntimeRequest::CheckVtsMappings)
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    request_id
+}
+
+#[test]
+fn vts_mapping_check_displays_saved_ids_and_distinct_states() {
+    let id = Uuid::new_v4();
+    let mut panel = DesktopRuntimePanel::default();
+    panel.synchronize(Some(id), true);
+    let request = begin_mapping_check(&mut panel);
+    assert!(
+        panel
+            .begin(DesktopRuntimeRequest::CheckVtsMappings)
+            .is_none()
+    );
+    panel.receive(
+        request,
+        Ok(DesktopRuntimeReply::VtsMappingCheck(mappings(true))),
+    );
+    let context = egui::Context::default();
+    let output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 1600.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui);
+        },
+    );
+    let labels = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(labels.contains(&"平静：未设置 · —"));
+    assert!(labels.contains(&"开心：匹配 · fixture-1"));
+    assert!(labels.contains(&"低落：未找到热键 · fixture-2"));
+    assert!(labels.contains(&"惊讶：未找到热键 · fixture-4（已截短）"));
+    assert!(labels.iter().any(|label| label.contains("快照")));
+}
+
+#[test]
+fn vts_mapping_check_no_model_disconnect_and_old_reply_are_not_missing() {
+    let id = Uuid::new_v4();
+    let mut panel = DesktopRuntimePanel::default();
+    panel.synchronize(Some(id), true);
+    let request = begin_mapping_check(&mut panel);
+    panel.receive(
+        request,
+        Ok(DesktopRuntimeReply::VtsMappingCheck(mappings(false))),
+    );
+    let result = panel.vts_mappings.as_ref().unwrap();
+    assert!(result.mappings.iter().all(|item| matches!(
+        item.status,
+        VtsMappingState::Unconfigured | VtsMappingState::Unknown
+    )));
+    let request = begin_mapping_check(&mut panel);
+    assert!(panel.vts_mappings.is_none());
+    panel.synchronize(Some(id), false);
+    panel.synchronize(Some(id), true);
+    let newer = begin_mapping_check(&mut panel);
+    panel.receive(
+        request,
+        Ok(DesktopRuntimeReply::VtsMappingCheck(mappings(true))),
+    );
+    assert!(panel.vts_mappings.is_none());
+    panel.receive(
+        newer,
+        Ok(DesktopRuntimeReply::VtsMappingCheck(mappings(false))),
+    );
+    assert!(!panel.vts_mappings.as_ref().unwrap().model_loaded);
+}
+
+#[test]
+fn vts_mapping_check_error_and_invalid_no_model_snapshot_clear_previous_result() {
+    let mut panel = DesktopRuntimePanel::default();
+    panel.synchronize(Some(Uuid::new_v4()), true);
+    let request = begin_mapping_check(&mut panel);
+    panel.receive(request, Err(AppError::connectivity("fixture")));
+    assert!(panel.vts_mappings.is_none());
+    assert!(panel.feedback.as_ref().unwrap().contains("无法核对"));
+    let request = begin_mapping_check(&mut panel);
+    assert!(panel.feedback.is_none());
+    let mut malformed = mappings(false);
+    malformed.mappings[1].status = VtsMappingState::Missing;
+    panel.receive(request, Ok(DesktopRuntimeReply::VtsMappingCheck(malformed)));
+    assert!(panel.vts_mappings.is_none());
+    assert!(panel.feedback.is_some());
+}
+
 #[test]
 fn diagnostic_observations_are_displayed_and_cleared_with_the_connection() {
     use ai_ex_domain::{DiagnosticComponent, DiagnosticComponentObservation};

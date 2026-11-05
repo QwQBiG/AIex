@@ -205,3 +205,68 @@ async fn rejected_parameter_discovery_does_not_fabricate_values() {
     });
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn mapping_check_uses_active_exact_keys_and_never_triggers_actions() {
+    let (mut client, mut server) = connected().await;
+    client.expression_hotkeys = BTreeMap::from([
+        ("happy".into(), "smile".into()),
+        ("angry".into(), "missing".into()),
+        ("sad".into(), "z".repeat(300)),
+        (" SURPRISED ".into(), "alias-not-active".into()),
+    ]);
+    let (result, ()) = tokio::join!(client.check_mappings(), async {
+        let request = request(&mut server).await;
+        assert_eq!(request["messageType"], "HotkeysInCurrentModelRequest");
+        response(
+            &mut server,
+            &request["requestID"],
+            json!([
+                {"hotkeyID":"smile","name":"微笑"},
+                {"hotkeyID":"alias-not-active","name":"alias"}
+            ]),
+        )
+        .await;
+    });
+    let result = result.unwrap();
+    assert!(result.model_loaded);
+    assert_eq!(
+        result.mappings.iter().map(|m| m.status).collect::<Vec<_>>(),
+        vec![
+            VtsMappingState::Unconfigured,
+            VtsMappingState::Matched,
+            VtsMappingState::Missing,
+            VtsMappingState::Missing,
+            VtsMappingState::Unconfigured,
+        ]
+    );
+    assert_eq!(result.mappings[1].hotkey_id.as_deref(), Some("smile"));
+    assert_eq!(result.mappings[3].hotkey_id.as_ref().unwrap().len(), 256);
+    assert!(result.mappings[3].id_truncated);
+    assert!(result.mappings[4].hotkey_id.is_none());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), server.next())
+            .await
+            .is_err()
+    );
+
+    let (unloaded, ()) =
+        tokio::join!(client.check_mappings(), async {
+            let request = request(&mut server).await;
+            server.send(Message::Text(json!({
+            "messageType":"HotkeysInCurrentModelResponse", "requestID":request["requestID"],
+            "data":{"modelLoaded":false,"availableHotkeys":[]}
+        }).to_string().into())).await.unwrap();
+        });
+    let unloaded = unloaded.unwrap();
+    assert!(!unloaded.model_loaded);
+    assert_eq!(unloaded.mappings[0].status, VtsMappingState::Unconfigured);
+    assert_eq!(unloaded.mappings[1].status, VtsMappingState::Unknown);
+
+    let (empty, ()) = tokio::join!(client.check_mappings(), async {
+        let request = request(&mut server).await;
+        response(&mut server, &request["requestID"], json!([])).await;
+    });
+    assert_eq!(empty.unwrap().mappings[1].status, VtsMappingState::Missing);
+    assert!(VtsClient::disabled().check_mappings().await.is_err());
+}

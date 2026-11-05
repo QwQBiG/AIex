@@ -57,6 +57,21 @@ impl Fixture {
                 "configuration",
                 b"run: python3 worker.py\n".to_vec(),
             ));
+            files.push((
+                "start",
+                "configuration",
+                b"#!/usr/bin/env python3\nprint('ok')\n".to_vec(),
+            ));
+            files.push((
+                "history",
+                "configuration",
+                b"# python3 was previously used\n".to_vec(),
+            ));
+            files.push((
+                "history.md",
+                "configuration",
+                b"#!/usr/bin/python3\nAn old example.\n".to_vec(),
+            ));
         }
         if nested {
             files.push(("weights.npz", "model", b"model container".to_vec()));
@@ -172,6 +187,13 @@ fn detects_static_imports_and_script_commands() {
             .iter()
             .any(|entry| entry["kind"] == "runtime_command")
     );
+    assert!(
+        issues
+            .iter()
+            .any(|entry| entry["path"] == "start" && entry["line"] == 1)
+    );
+    assert!(!issues.iter().any(|entry| entry["path"] == "history"));
+    assert!(!issues.iter().any(|entry| entry["path"] == "history.md"));
     assert_eq!(
         report["uninspected_source_archives"]
             .as_array()

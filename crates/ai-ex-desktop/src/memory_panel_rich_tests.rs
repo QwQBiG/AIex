@@ -90,6 +90,181 @@ fn begin(panel: &mut MemoryPanel, request: MemoryRequest) -> u64 {
     request_id
 }
 
+fn reader_fixture() -> (MemoryPanel, MemoryEntry) {
+    let mut panel = MemoryPanel::default();
+    panel.set_profile("first");
+    let entry = entry("first");
+    let mut page = records("first", 0);
+    page.truncated_ids.push(entry.id);
+    page.entries.push(entry.clone());
+    panel.page = Some(page);
+    panel.storage_enabled = Some(true);
+    panel.loaded = true;
+    (panel, entry)
+}
+
+fn segment_request(panel: &mut MemoryPanel, entry: &MemoryEntry, offset: usize) -> u64 {
+    panel.segment_reader = Some(SegmentReader {
+        id: entry.id,
+        revision: entry.revision,
+        field: MemoryTextField::User,
+        segment: None,
+    });
+    begin(
+        panel,
+        MemoryRequest::ReadSegment {
+            profile_id: "first".to_owned(),
+            id: entry.id,
+            expected_revision: entry.revision,
+            field: MemoryTextField::User,
+            offset,
+        },
+    )
+}
+
+fn segment(entry: &MemoryEntry) -> MemoryTextSegment {
+    MemoryTextSegment {
+        profile_id: "first".to_owned(),
+        id: entry.id,
+        revision: entry.revision,
+        field: MemoryTextField::User,
+        offset: 0,
+        text: "中文".to_owned(),
+        next_offset: Some(6),
+    }
+}
+
+#[test]
+fn segmented_reading_requires_explicit_requests_and_keeps_editing_separate() {
+    let (mut panel, entry) = reader_fixture();
+    let context = eframe::egui::Context::default();
+    let mut action = None;
+    let _ = context.run_ui(Default::default(), |ui| {
+        action = panel.show(ui, "伙伴", true, true);
+    });
+    assert!(action.is_none());
+    let first = segment_request(&mut panel, &entry, 0);
+    assert!(!panel.receive(first, Ok(MemoryResponse::Segment(segment(&entry)))));
+    let reader = panel.segment_reader.as_ref().unwrap();
+    assert_eq!(reader.segment.as_ref().unwrap().next_offset, Some(6));
+    assert!(panel.draft.is_empty());
+    let next = segment_request(&mut panel, &entry, 6);
+    let mut last = segment(&entry);
+    last.offset = 6;
+    last.text = "结束".to_owned();
+    last.next_offset = None;
+    panel.receive(next, Ok(MemoryResponse::Segment(last)));
+    assert_eq!(
+        panel
+            .segment_reader
+            .as_ref()
+            .unwrap()
+            .segment
+            .as_ref()
+            .unwrap()
+            .text,
+        "结束"
+    );
+    panel.start_edit(&entry, None, true);
+    assert!(panel.segment_reader.is_none());
+    assert!(panel.draft.is_empty());
+}
+
+#[test]
+fn segmented_reading_discards_wrong_identity_and_old_connections() {
+    let (mut panel, entry) = reader_fixture();
+    let request = segment_request(&mut panel, &entry, 0);
+    let mut wrong = segment(&entry);
+    wrong.revision += 1;
+    panel.receive(request, Ok(MemoryResponse::Segment(wrong)));
+    assert!(panel.segment_reader.is_none());
+    assert!(panel.feedback.is_some());
+    let request = segment_request(&mut panel, &entry, 0);
+    panel.connection_changed();
+    panel.receive(request, Ok(MemoryResponse::Segment(segment(&entry))));
+    assert!(panel.segment_reader.is_none());
+    let request = segment_request(&mut panel, &entry, 0);
+    panel.set_profile("second");
+    panel.receive(request, Ok(MemoryResponse::Segment(segment(&entry))));
+    assert!(panel.segment_reader.is_none());
+    assert_eq!(panel.profile_id, "second");
+}
+
+#[test]
+fn segmented_reading_discards_failed_or_invalid_offsets() {
+    let (mut panel, entry) = reader_fixture();
+    let request = segment_request(&mut panel, &entry, 0);
+    let mut wrong = segment(&entry);
+    wrong.next_offset = Some(5);
+    panel.receive(request, Ok(MemoryResponse::Segment(wrong)));
+    assert!(panel.segment_reader.is_none());
+    let request = segment_request(&mut panel, &entry, 0);
+    panel.receive(request, Err(AppError::invalid_transition("record changed")));
+    assert!(panel.segment_reader.is_none());
+    assert!(panel.feedback.is_some());
+}
+
+#[test]
+fn segmented_reading_buttons_request_one_chunk_at_a_time() {
+    use eframe::egui;
+    let (mut panel, entry) = reader_fixture();
+    let context = egui::Context::default();
+    let render = |panel: &mut MemoryPanel, events| {
+        let mut action = None;
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 1600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| action = panel.show(ui, "伙伴", true, true),
+        );
+        (output, action)
+    };
+    let click = |panel: &mut MemoryPanel, label: &str| {
+        let (output, action) = render(panel, vec![]);
+        assert!(action.is_none());
+        let position = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("reading button");
+        let mut result = None;
+        for pressed in [true, false] {
+            let (_, action) = render(
+                panel,
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+            if action.is_some() {
+                result = action;
+            }
+        }
+        result.expect("explicit click requests a segment")
+    };
+    let request = click(&mut panel, "分段查看原文");
+    assert!(matches!(request, MemoryRequest::ReadSegment { id, offset: 0, .. } if id == entry.id));
+    let request_id = begin(&mut panel, request);
+    panel.receive(request_id, Ok(MemoryResponse::Segment(segment(&entry))));
+    let request = click(&mut panel, "读取下一段");
+    assert!(matches!(request, MemoryRequest::ReadSegment { id, offset: 6, .. } if id == entry.id));
+}
+
 #[test]
 fn editing_media_preserves_nested_features_and_metadata() {
     let mut panel = MemoryPanel::default();

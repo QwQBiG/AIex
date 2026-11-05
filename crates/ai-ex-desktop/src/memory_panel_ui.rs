@@ -342,6 +342,8 @@ impl MemoryPanel {
         let mut edit = None;
         let mut forget = None;
         let mut evidence = None;
+        let mut read = None;
+        let mut close_reader = false;
         for entry in &page.entries {
             let truncated = page.truncated_ids.contains(&entry.id);
             let knowledge = page.knowledge.get(&entry.id);
@@ -449,6 +451,54 @@ impl MemoryPanel {
                     }
                     if truncated {
                         ui.weak("较长记录，仅显示片段；更正时请重新写下准确的事实。");
+                        ui.horizontal_wrapped(|ui| {
+                            for (field, label) in [
+                                (MemoryTextField::User, "分段查看原文"),
+                                (MemoryTextField::Assistant, "分段查看回复"),
+                            ] {
+                                if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
+                                    read = Some((entry.id, entry.revision, field, 0));
+                                }
+                            }
+                        });
+                        if let Some(reader) = self.segment_reader.as_ref().filter(|reader| {
+                            reader.id == entry.id && reader.revision == entry.revision
+                        }) {
+                            ui.weak("每次读取一段；分段内容不会自动填入更正或遗忘操作。");
+                            if let Some(segment) = &reader.segment {
+                                ui.strong(match reader.field {
+                                    MemoryTextField::User => "原文片段",
+                                    MemoryTextField::Assistant => "回复片段",
+                                });
+                                egui::ScrollArea::vertical()
+                                    .max_height(220.0)
+                                    .show(ui, |ui| {
+                                        ui.add(egui::Label::new(&segment.text).wrap());
+                                    });
+                                ui.horizontal_wrapped(|ui| {
+                                    if let Some(offset) = segment.next_offset {
+                                        if ui
+                                            .add_enabled(ready, egui::Button::new("读取下一段"))
+                                            .clicked()
+                                        {
+                                            read = Some((
+                                                entry.id,
+                                                entry.revision,
+                                                reader.field,
+                                                offset,
+                                            ));
+                                        }
+                                    } else {
+                                        ui.weak("已读到结尾");
+                                    }
+                                    if ui.button("收起分段").clicked() {
+                                        close_reader = true;
+                                    }
+                                });
+                            } else {
+                                ui.weak("正在读取所选片段…");
+                            }
+                        }
                     }
                     egui::CollapsingHeader::new(if truncated {
                         "查看片段"
@@ -474,10 +524,29 @@ impl MemoryPanel {
             self.start_edit(&entry, knowledge.as_ref(), truncated);
         }
         if let Some(entry) = forget {
+            self.segment_reader = None;
             self.forget = Some(entry);
         }
         if let Some((key, name)) = evidence {
             self.set_view(MemoryView::Evidence { key, name });
+        }
+        if close_reader {
+            self.segment_reader = None;
+        }
+        if let Some((id, revision, field, offset)) = read {
+            self.segment_reader = Some(SegmentReader {
+                id,
+                revision,
+                field,
+                segment: None,
+            });
+            *action = Some(MemoryRequest::ReadSegment {
+                profile_id: self.profile_id.clone(),
+                id,
+                expected_revision: revision,
+                field,
+                offset,
+            });
         }
     }
 

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use ai_ex_domain::{
     AppError, DesktopDiagnosticReport, DesktopRuntimeReply, DesktopRuntimeRequest,
     DesktopRuntimeSettings, DesktopRuntimeSnapshot, DiscoveredVtsHotkey, DiscoveredVtsParameter,
-    VtsParameterPage,
+    VtsMappingCheck, VtsParameterPage,
 };
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -34,6 +34,7 @@ pub(crate) trait DesktopRuntimeActions: Send + Sync {
 #[async_trait]
 pub(crate) trait VtsDiscoveryPort: Send + Sync {
     async fn discover(&self) -> Result<Vec<DiscoveredVtsHotkey>, AppError>;
+    async fn check_mappings(&self) -> Result<VtsMappingCheck, AppError>;
     async fn discover_parameters(&self) -> Result<ai_ex_vts::VtsParameterList, AppError>;
 }
 
@@ -49,6 +50,10 @@ impl VtsDiscoveryPort for ai_ex_vts::VtsClient {
                 name: key.name,
             })
             .collect())
+    }
+
+    async fn check_mappings(&self) -> Result<VtsMappingCheck, AppError> {
+        ai_ex_vts::VtsClient::check_mappings(self).await
     }
 
     async fn discover_parameters(&self) -> Result<ai_ex_vts::VtsParameterList, AppError> {
@@ -357,6 +362,15 @@ impl DesktopRuntime {
                     .as_ref()
                     .ok_or_else(|| AppError::unavailable("VTS discovery is disabled"))?;
                 Ok(DesktopRuntimeReply::VtsDiscovery(port.discover().await?))
+            }
+            DesktopRuntimeRequest::CheckVtsMappings => {
+                let port = self
+                    .vts
+                    .as_ref()
+                    .ok_or_else(|| AppError::unavailable("VTS discovery is disabled"))?;
+                Ok(DesktopRuntimeReply::VtsMappingCheck(
+                    port.check_mappings().await?,
+                ))
             }
             DesktopRuntimeRequest::DiscoverVtsParameters { offset } => {
                 if offset > 1024 {

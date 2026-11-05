@@ -107,6 +107,7 @@ max_message_bytes = 65536
 {"type":"desktop_runtime","request":{"type":"state"}}
 {"type":"desktop_runtime","request":{"type":"diagnostics"}}
 {"type":"desktop_runtime","request":{"type":"discover_vts"}}
+{"type":"desktop_runtime","request":{"type":"check_vts_mappings"}}
 {"type":"desktop_runtime","request":{"type":"discover_vts_parameters","offset":0}}
 ```
 
@@ -122,14 +123,19 @@ max_message_bytes = 65536
 
 `diagnostics` 使用专门的允许字段结构，不拼接运行日志或聊天快照。开发分支的版本 2 报告可包含固定名称的组件及其最近一次已记录的就绪标志；缺少组件表示未知，`false` 可能是未启用或不可用，不包括错误详情，读取报告不会主动检查设备或外部服务。状态可能已经过期，不能据此认定模型已完成推理或设备可用。VTS 热键发现返回有限 ID/名称，不触发热键。输入参数发现每页最多返回 16 项，包含当前值、范围、默认值及来源；每次请求重新读取，参数变化时不同页不保证属于同一快照。主动输出使用 `proactive_started` 事件启用输出代次，不发带伪造用户文本的 `turn_started`，也不写用户历史或记忆。
 
+开发分支的 `check_vts_mappings` 以一次发现结果核对运行中使用的表情映射，返回人物载入状态和五种情绪的 `unconfigured`、`matched`、`missing` 或 `unknown`。显示用的热键 ID 最多 256 个字符，截短时 `id_truncated` 为真，比较仍使用完整 ID。未载入人物时已配置项为 `unknown`；连接失败返回错误。结果是查询时的快照，不修改配置或触发热键；旧版服务不提供此请求。
+
 ## 记忆管理
 
 `memory` 命令包装领域层的 `MemoryRequest`，仍使用相同请求 UUID 和令牌。以下契约适用于 0.8.0-alpha.1；实体及媒体请求需要同版服务，旧 0.7.1 仅支持原有基础记忆操作。
+
+开发分支增加只读 `read_segment` 操作，需要支持该操作的服务；旧版服务不提供此功能。
 
 每行都是独立命令，发送时仍需放入前述请求信封：
 
 ```json
 {"type":"memory","request":{"type":"list","profile_id":"default","query":"偏好","kind":"persona","offset":0,"limit":12}}
+{"type":"memory","request":{"type":"read_segment","profile_id":"default","id":"00000000-0000-0000-0000-000000000002","expected_revision":1,"field":"user","offset":0}}
 {"type":"memory","request":{"type":"entities","profile_id":"default","query":"coffee","offset":0,"limit":12}}
 {"type":"memory","request":{"type":"evidence","profile_id":"default","key":"preference:coffee","offset":0,"limit":12}}
 {"type":"memory","request":{"type":"query_media","profile_id":"default","query":"","modality":"visual","tags":["旅行","风景"],"min_importance":500,"offset":0,"limit":12}}
@@ -161,7 +167,7 @@ max_message_bytes = 65536
 
 成功 payload 的 `type` 为 `memory`，其 `data` 对应 `MemoryReply`，包含两个字段：
 
-- `response`：`{"type":"changed"}`、`{"type":"page","data":{...}}` 或 `{"type":"entities","data":{...}}`。
+- `response`：`{"type":"changed"}`、`{"type":"page","data":{...}}`、`{"type":"entities","data":{...}}` 或开发分支的 `{"type":"segment","data":{...}}`。
 - `snapshot`：操作完成后取得的完整 `RuntimeSnapshot` 结构，含 `instance_id` 与 `last_sequence`；文字字段受下述预算限制。
 
 Rust 内部使用 `Box<MemoryReply>`，JSON 不增加额外包装层。`page.data` 包含 `profile_id`、`enabled`、`total`、`offset`、`entries`、`truncated_ids`，以及非空时才输出的 `knowledge`。记录携带 ID、角色 ID、回合 ID、分类、输入/回复、来源、记录版本及创建/更新时间；缺少来源和版本的旧记录默认 `automatic` / `1`。毫秒时间戳通常是 JSON 整数，超出 `u64` 范围时使用十进制字符串。
@@ -182,6 +188,8 @@ Rust 内部使用 `Box<MemoryReply>`，JSON 不增加额外包装层。`page.dat
 记录页和实体页分别使用 **48 KiB 序列化 JSON 预算**，因此实际返回条数可能少于请求的 `limit`。记录页下一页从 `offset + entries.len()` 请求，实体页从 `offset + entities.len()` 请求，不能固定跳过 `limit` 条；`total` 表示全部匹配记录或实体组数。
 
 单条记录过长且无法完整放进空页时，返回片段并将 ID 加入 `truncated_ids`。客户端必须标明“查看片段 / 复制片段”，不能把片段当作完整原文；更正应重新输入完整事实。分页和查看不会截断原始存储。
+
+`read_segment` 按当前角色、记录 ID 和预期版本读取 `user` 或 `assistant` 字段。`offset` 是 UTF-8 字节偏移，必须位于字符边界；响应包含同一身份、版本、字段、偏移、`text` 和 `next_offset`。下一次使用返回的 `next_offset`，为 `null` 时已到结尾。记录被更正或遗忘后旧请求失败；读取不修改记忆或聊天上下文。
 
 `status` 与 `MemoryReply.snapshot` 共用 **8 KiB 序列化 JSON 预算**，必要时裁剪 `last_fault` 与 `playback.text` 并用省略号标记，保留事件实例、序号和行为状态。这为默认 65536 字节控制消息中的页、快照与外层封装留出空间；自行调小传输上限时仍需核对能否容纳应答。
 

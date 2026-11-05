@@ -36,7 +36,7 @@ pub use error::{AppError, ErrorKind};
 pub use event::{ComponentHealth, LiveResponseMode, SystemEvent};
 pub use memory::{
     MemoryEntry, MemoryKind, MemoryPage, MemoryProjection, MemoryRequest, MemoryResponse,
-    MemorySource,
+    MemorySource, MemoryTextField, MemoryTextSegment,
 };
 pub use memory_knowledge::{
     ImportedMemoryEntity, MemoryEntity, MemoryEntityEvidence, MemoryEntityGroup, MemoryEntityKind,
