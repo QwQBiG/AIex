@@ -1,5 +1,7 @@
 use super::*;
-use ai_ex_domain::{ErrorKind, MemoryPage, MemoryRequest, MemoryResponse};
+use ai_ex_domain::{
+    ErrorKind, MemoryBackupState, MemoryBackupStatus, MemoryPage, MemoryRequest, MemoryResponse,
+};
 
 #[derive(Default)]
 struct ManagedMemory {
@@ -22,19 +24,35 @@ impl MemoryPort for ManagedMemory {
         if self.fail.load(Ordering::Acquire) {
             return Err(AppError::unavailable("simulated durable write failed"));
         }
-        Ok(if request.is_mutation() {
-            MemoryResponse::Changed
-        } else {
-            MemoryResponse::Page(MemoryPage {
-                profile_id: request.profile_id().to_owned(),
-                enabled: true,
-                total: 0,
-                offset: 0,
-                entries: Vec::new(),
-                truncated_ids: Vec::new(),
-                knowledge: Default::default(),
-            })
-        })
+        Ok(
+            if let MemoryRequest::Backup {
+                profile_id,
+                backup_id,
+            } = &request
+            {
+                MemoryResponse::BackupStatus(MemoryBackupStatus {
+                    profile_id: profile_id.clone(),
+                    backup_id: *backup_id,
+                    state: MemoryBackupState::Completed {
+                        path: "synthetic.jsonl".into(),
+                        memory_count: 1,
+                        temporary_retained: false,
+                    },
+                })
+            } else if request.is_mutation() {
+                MemoryResponse::Changed
+            } else {
+                MemoryResponse::Page(MemoryPage {
+                    profile_id: request.profile_id().to_owned(),
+                    enabled: true,
+                    total: 0,
+                    offset: 0,
+                    entries: Vec::new(),
+                    truncated_ids: Vec::new(),
+                    knowledge: Default::default(),
+                })
+            },
+        )
     }
 
     async fn recall(&self, _: &str, _: usize) -> Result<Vec<Message>, AppError> {
@@ -85,6 +103,18 @@ async fn only_successful_mutations_clear_history_and_profile_is_checked_before_s
     );
     assert_eq!(calls.load(Ordering::Acquire), 0);
     handle.memory(list()).await.unwrap();
+    state.speech_interrupted.store(false, Ordering::Release);
+    state.avatar_neutral.store(false, Ordering::Release);
+    let backup = MemoryRequest::Backup {
+        profile_id: "default".into(),
+        backup_id: TurnId::new().0,
+    };
+    assert!(matches!(
+        handle.memory(backup).await.unwrap(),
+        MemoryResponse::BackupStatus(_)
+    ));
+    assert!(!state.speech_interrupted.load(Ordering::Acquire));
+    assert!(!state.avatar_neutral.load(Ordering::Acquire));
     fail.store(true, Ordering::Release);
     assert!(handle.memory(note("default")).await.is_err());
     handle.submit("first followup").await.unwrap();

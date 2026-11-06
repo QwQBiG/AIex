@@ -35,8 +35,8 @@ pub use conversation::{ConversationState, Emotion, Message, Role, TurnId};
 pub use error::{AppError, ErrorKind};
 pub use event::{ComponentHealth, LiveResponseMode, SystemEvent};
 pub use memory::{
-    MemoryEntry, MemoryKind, MemoryPage, MemoryProjection, MemoryRequest, MemoryResponse,
-    MemorySource, MemoryTextField, MemoryTextSegment,
+    MemoryBackupState, MemoryBackupStatus, MemoryEntry, MemoryKind, MemoryPage, MemoryProjection,
+    MemoryRequest, MemoryResponse, MemorySource, MemoryTextField, MemoryTextSegment,
 };
 pub use memory_knowledge::{
     ImportedMemoryEntity, MemoryEntity, MemoryEntityEvidence, MemoryEntityGroup, MemoryEntityKind,

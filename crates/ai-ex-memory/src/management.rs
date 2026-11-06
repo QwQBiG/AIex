@@ -5,10 +5,32 @@ use super::*;
 impl MemoryStore {
     pub async fn manage(&mut self, request: MemoryRequest) -> Result<MemoryResponse, AppError> {
         request.validate()?;
+        if let MemoryRequest::Backup {
+            profile_id,
+            backup_id,
+        } = &request
+        {
+            if !self.inner.enabled {
+                return Err(AppError::unavailable(
+                    "memory is disabled in the service configuration",
+                ));
+            }
+            if *self.inner.profile_id.read().await != *profile_id {
+                return Err(AppError::invalid_transition(
+                    "memory profile changed; refresh before backup",
+                ));
+            }
+            return self.managed_backup(profile_id, *backup_id).await;
+        }
         let profile_id = self.inner.profile_id.read().await;
         if request.profile_id() != *profile_id {
             return Err(AppError::invalid_transition(
                 "memory profile changed; reload the current character's memories",
+            ));
+        }
+        if let MemoryRequest::BackupStatus { backup_id, .. } = &request {
+            return Ok(MemoryResponse::BackupStatus(
+                self.backup_status(&profile_id, *backup_id).await,
             ));
         }
         if let Some(response) = self.knowledge_query(&request, &profile_id).await? {

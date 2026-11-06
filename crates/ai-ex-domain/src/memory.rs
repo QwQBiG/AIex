@@ -93,6 +93,28 @@ pub struct MemoryTextSegment {
     pub next_offset: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MemoryBackupState {
+    Unknown,
+    Running,
+    Completed {
+        path: String,
+        memory_count: usize,
+        temporary_retained: bool,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryBackupStatus {
+    pub profile_id: String,
+    pub backup_id: Uuid,
+    pub state: MemoryBackupState,
+}
+
 fn default_profile() -> String {
     "default".to_owned()
 }
@@ -104,6 +126,14 @@ fn initial_revision() -> u64 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MemoryRequest {
+    Backup {
+        profile_id: String,
+        backup_id: Uuid,
+    },
+    BackupStatus {
+        profile_id: String,
+        backup_id: Uuid,
+    },
     ReadSegment {
         profile_id: String,
         id: Uuid,
@@ -171,7 +201,9 @@ pub enum MemoryRequest {
 impl MemoryRequest {
     pub fn profile_id(&self) -> &str {
         match self {
-            Self::ReadSegment { profile_id, .. }
+            Self::Backup { profile_id, .. }
+            | Self::BackupStatus { profile_id, .. }
+            | Self::ReadSegment { profile_id, .. }
             | Self::List { profile_id, .. }
             | Self::Entities { profile_id, .. }
             | Self::Evidence { profile_id, .. }
@@ -187,7 +219,9 @@ impl MemoryRequest {
     pub fn is_mutation(&self) -> bool {
         !matches!(
             self,
-            Self::ReadSegment { .. }
+            Self::Backup { .. }
+                | Self::BackupStatus { .. }
+                | Self::ReadSegment { .. }
                 | Self::List { .. }
                 | Self::Entities { .. }
                 | Self::Evidence { .. }
@@ -237,6 +271,13 @@ impl MemoryRequest {
                 if text.trim().is_empty() || text.chars().count() > 4096 {
                     return Err(AppError::configuration(
                         "memory text must contain between 1 and 4096 characters",
+                    ));
+                }
+            }
+            Self::Backup { backup_id, .. } | Self::BackupStatus { backup_id, .. } => {
+                if backup_id.get_version_num() != 4 {
+                    return Err(AppError::configuration(
+                        "memory backup ID must be a random UUID",
                     ));
                 }
             }
@@ -310,5 +351,6 @@ pub enum MemoryResponse {
     Page(MemoryPage),
     Entities(MemoryEntityPage),
     Segment(MemoryTextSegment),
+    BackupStatus(MemoryBackupStatus),
     Changed,
 }

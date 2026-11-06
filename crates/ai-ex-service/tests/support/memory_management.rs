@@ -299,6 +299,115 @@ async fn memory_profile_checks_prevent_cross_character_edits_and_recall() {
 }
 
 #[tokio::test]
+async fn backup_over_control_preserves_profiles_and_reports_the_same_result() {
+    use ai_ex_domain::MemoryBackupState;
+
+    let mut service = ServiceProcess::with_memory("--managed", true, "http://127.0.0.1:1", true);
+    service.ready().await;
+    manage(&service, remember("default-synthetic-note"))
+        .await
+        .unwrap();
+    let other = PersonaSnapshot {
+        profile_id: "other".to_owned(),
+        name: "Other".to_owned(),
+        ..Default::default()
+    };
+    service
+        .client
+        .send(ControlCommand::SetPersona {
+            profile: other.clone(),
+        })
+        .await
+        .unwrap();
+    manage(
+        &service,
+        MemoryRequest::Remember {
+            profile_id: "other".to_owned(),
+            text: "other-synthetic-note".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    service
+        .client
+        .send(ControlCommand::SetPersona {
+            profile: PersonaSnapshot::default(),
+        })
+        .await
+        .unwrap();
+
+    let source = service.directory.join("memory.jsonl");
+    let original = fs::read(&source).unwrap();
+    let backup_id = uuid::Uuid::new_v4();
+    let expected = service
+        .directory
+        .join(format!("memory.jsonl.backup-{backup_id}.jsonl"));
+    assert!(!expected.exists());
+    struct RemoveBackup(PathBuf);
+    impl Drop for RemoveBackup {
+        fn drop(&mut self) {
+            let _ignored = fs::remove_file(&self.0);
+        }
+    }
+    let _cleanup = RemoveBackup(expected.clone());
+    let result = manage(
+        &service,
+        MemoryRequest::Backup {
+            profile_id: "default".to_owned(),
+            backup_id,
+        },
+    )
+    .await
+    .unwrap();
+    let MemoryResponse::BackupStatus(status) = &result else {
+        panic!("backup status expected");
+    };
+    assert_eq!(status.profile_id, "default");
+    assert_eq!(status.backup_id, backup_id);
+    let MemoryBackupState::Completed {
+        path, memory_count, ..
+    } = &status.state
+    else {
+        panic!("completed backup expected");
+    };
+    assert_eq!(*memory_count, 1);
+    assert_eq!(
+        fs::canonicalize(path).unwrap(),
+        fs::canonicalize(&expected).unwrap()
+    );
+    assert_eq!(
+        fs::canonicalize(expected.parent().unwrap()).unwrap(),
+        fs::canonicalize(&service.directory).unwrap()
+    );
+    let backup = fs::read_to_string(&expected).unwrap();
+    assert!(backup.contains("default-synthetic-note"));
+    assert!(!backup.contains("other-synthetic-note"));
+    let observed = manage(
+        &service,
+        MemoryRequest::BackupStatus {
+            profile_id: "default".to_owned(),
+            backup_id,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(observed, result);
+    assert_eq!(fs::read(&source).unwrap(), original);
+    service
+        .client
+        .send(ControlCommand::SetPersona { profile: other })
+        .await
+        .unwrap();
+    assert_eq!(
+        list(&service, "other").await.entries[0].user_text,
+        "other-synthetic-note"
+    );
+    assert_eq!(fs::read(&source).unwrap(), original);
+    drop(service.child.stdin.take());
+    service.exited().await;
+}
+
+#[tokio::test]
 async fn generating_service_rejects_memory_edits_and_accepts_them_after_interrupt() {
     let mut model = ModelServer::start().await;
     let mut service = ServiceProcess::with_memory("--managed", true, &model.url, true);

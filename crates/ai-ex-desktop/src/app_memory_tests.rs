@@ -20,6 +20,134 @@ fn remember() -> MemoryRequest {
 }
 
 #[test]
+fn completed_backup_keeps_chat_and_pending_backup_blocks_role_change() {
+    use ai_ex_domain::{MemoryBackupState, MemoryBackupStatus};
+    let (mut app, events, _sent) = app();
+    let instance = uuid::Uuid::new_v4();
+    let backup_id = uuid::Uuid::new_v4();
+    app.state.runtime.instance_id = Some(instance);
+    app.memory.synchronize_backup_instance(Some(instance));
+    app.state.turns.push(ai_ex_ui_model::UiTurn {
+        turn_id: TurnId::new(),
+        user_text: "合成对话".into(),
+        assistant_text: "保留".into(),
+        status: ai_ex_ui_model::TurnStatus::Completed,
+    });
+    app.input = "聊天草稿".into();
+    let request_id = pending(
+        &mut app,
+        MemoryRequest::Backup {
+            profile_id: "default".into(),
+            backup_id,
+        },
+    );
+    assert!(!app.can_submit());
+    app.apply_pending_persona(app.active_persona.clone());
+    assert!(app.last_error.as_ref().unwrap().contains("备份正在进行"));
+    events
+        .send(WorkerEvent::Memory {
+            request_id,
+            result: Ok(Box::new(ai_ex_control::MemoryReply {
+                response: MemoryResponse::BackupStatus(MemoryBackupStatus {
+                    profile_id: "default".into(),
+                    backup_id,
+                    state: MemoryBackupState::Completed {
+                        path: "D:\\synthetic\\memory.jsonl".into(),
+                        memory_count: 1,
+                        temporary_retained: false,
+                    },
+                }),
+                snapshot: RuntimeSnapshot {
+                    instance_id: Some(instance),
+                    ..Default::default()
+                },
+            })),
+        })
+        .unwrap();
+    app.drain_events();
+    assert_eq!(app.input, "聊天草稿");
+    assert_eq!(app.state.turns.len(), 1);
+    assert_eq!(app.state.turns[0].user_text, "合成对话");
+    assert!(!app.memory.backup_pending());
+}
+
+#[test]
+fn unresolved_memory_backup_intercepts_window_close_until_user_confirms() {
+    let (mut app, _events, _sent) = app();
+    let instance = uuid::Uuid::new_v4();
+    app.memory.synchronize_backup_instance(Some(instance));
+    let _request = pending(
+        &mut app,
+        MemoryRequest::Backup {
+            profile_id: "default".into(),
+            backup_id: uuid::Uuid::new_v4(),
+        },
+    );
+    let context = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0));
+    let output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        },
+        |ui| {
+            app.handle_backup_close(ui.ctx(), true);
+            app.show_backup_close_confirmation(ui.ctx());
+        },
+    );
+    assert!(output.viewport_output.values().any(|viewport| {
+        viewport
+            .commands
+            .contains(&egui::ViewportCommand::CancelClose)
+    }));
+    assert!(app.confirm_backup_close);
+    let output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        },
+        |ui| {
+            app.show_backup_close_confirmation(ui.ctx());
+        },
+    );
+    let pos = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "仍要退出" => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .expect("explicit close confirmation");
+    let mut closed = false;
+    for pressed in [true, false] {
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| app.show_backup_close_confirmation(ui.ctx()),
+        );
+        closed |= output
+            .viewport_output
+            .values()
+            .any(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close));
+    }
+    assert!(closed);
+    assert!(app.allow_backup_close);
+}
+
+#[test]
 fn confirmed_memory_updates_discard_delayed_old_chat_events_but_allow_new_turns() {
     let (mut app, events, _sent) = app();
     let request_id = pending(&mut app, remember());

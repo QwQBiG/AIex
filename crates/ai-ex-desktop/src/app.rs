@@ -80,6 +80,8 @@ pub struct DesktopApp {
     composer_ime_active: bool,
     navigation: crate::navigation::Navigation,
     pending_navigation: Option<crate::navigation::Destination>,
+    confirm_backup_close: bool,
+    allow_backup_close: bool,
     owned_service: Option<crate::service_process::ManagedService>,
     notice: Option<String>,
     retained_messages: VecDeque<navigation::RetainedMessage>,
@@ -147,6 +149,8 @@ impl DesktopApp {
             composer_ime_active: false,
             navigation: Default::default(),
             pending_navigation: None,
+            confirm_backup_close: false,
+            allow_backup_close: false,
             owned_service: None,
             notice: None,
             retained_messages: VecDeque::new(),
@@ -295,6 +299,8 @@ impl DesktopApp {
                 }
                 WorkerEvent::Memory { request_id, result } => {
                     self.memory.set_profile(&self.active_persona.profile_id);
+                    self.memory
+                        .synchronize_backup_instance(self.state.runtime.instance_id);
                     let (result, snapshot) = match result {
                         Ok(reply)
                             if reply.snapshot.instance_id == self.state.runtime.instance_id =>
@@ -526,6 +532,7 @@ impl DesktopApp {
             && !self.persona_apply_pending
             && !self.confirm_persona
             && !self.memory.mutation_pending()
+            && !self.memory.backup_pending()
             && self.resume.phase == crate::scene_resume::ResumePhase::Idle
     }
 
@@ -926,6 +933,10 @@ impl DesktopApp {
     }
 
     fn apply_pending_persona(&mut self, profile: PersonaSnapshot) {
+        if self.memory.backup_pending() {
+            self.last_error = Some("记忆备份正在进行，请等操作结束后再切换角色。".to_owned());
+            return;
+        }
         if self.memory.mutation_pending() {
             self.last_error = Some("记忆正在保存，请等操作结束后再切换角色。".to_owned());
             return;

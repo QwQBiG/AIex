@@ -35,9 +35,7 @@ impl SpeechCleanup {
                 }
                 continue;
             }
-            if inside_code
-                || (self.remove_markdown && matches!(character, '*' | '_' | '#' | '>' | '~'))
-            {
+            if inside_code {
                 continue;
             }
             if self.remove_emoji && is_legacy_emoji(character) {
@@ -47,6 +45,11 @@ impl SpeechCleanup {
                 filtered.push(character);
             }
         }
+        let filtered = if self.remove_markdown {
+            strip_markdown(&filtered)
+        } else {
+            filtered
+        };
         let mut ranges = Vec::new();
         if self.remove_parenthetical {
             let mut stack = Vec::new();
@@ -89,6 +92,116 @@ impl SpeechCleanup {
         }
         output
     }
+}
+
+/// Remove paired inline formatting and line prefixes without guessing at symbols
+/// embedded in identifiers or expressions. Unmatched marks remain audible text.
+/// This is a limited heuristic; ambiguous mixed formatting can be interpreted
+/// as markup and is not a complete Markdown parser.
+fn strip_markdown(input: &str) -> String {
+    let characters: Vec<_> = input.chars().collect();
+    let mut remove = vec![false; characters.len()];
+    let mut stack: Vec<(char, usize, usize)> = Vec::new();
+    let mut index = 0;
+    let mut line_prefix = true;
+    while index < characters.len() {
+        let current = characters[index];
+        if current == '\n' || current == '\r' {
+            line_prefix = true;
+            index += 1;
+            continue;
+        }
+        if line_prefix && current.is_whitespace() {
+            index += 1;
+            continue;
+        }
+        if line_prefix && current == '>' && quote_prefix(&characters, index) {
+            remove[index] = true;
+            index += 1;
+            continue;
+        }
+        if line_prefix && current == '#' {
+            let start = index;
+            while index < characters.len() && characters[index] == '#' {
+                index += 1;
+            }
+            if index - start <= 6
+                && characters
+                    .get(index)
+                    .is_some_and(|next| next.is_whitespace())
+            {
+                remove[start..index].fill(true);
+            }
+            line_prefix = false;
+            continue;
+        }
+        line_prefix = false;
+        if !matches!(current, '*' | '_' | '~') {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < characters.len() && characters[index] == current {
+            index += 1;
+        }
+        let width = index - start;
+        if (current == '~' && width != 2) || width > 3 {
+            continue;
+        }
+        let escapes = characters[..start]
+            .iter()
+            .rev()
+            .take_while(|character| **character == '\\')
+            .count();
+        if escapes % 2 != 0 {
+            continue;
+        }
+        let before = start
+            .checked_sub(1)
+            .and_then(|i| characters.get(i))
+            .copied();
+        let after = characters.get(index).copied();
+        let within_ascii_word = before.is_some_and(|c| c.is_ascii_alphanumeric())
+            && after.is_some_and(|c| c.is_ascii_alphanumeric());
+        let matching_open = stack
+            .last()
+            .is_some_and(|(mark, count, _)| *mark == current && *count == width);
+        if within_ascii_word && (current == '_' || width == 1 || !matching_open) {
+            continue;
+        }
+        let can_close = before.is_some_and(|c| !c.is_whitespace());
+        let can_open = after.is_some_and(|c| !c.is_whitespace());
+        if can_close && matching_open {
+            let (_, _, opening) = stack.pop().expect("matching mark exists");
+            remove[opening..opening + width].fill(true);
+            remove[start..index].fill(true);
+        } else if can_open {
+            stack.push((current, width, start));
+        }
+    }
+    characters
+        .into_iter()
+        .zip(remove)
+        .filter_map(|(c, remove)| (!remove).then_some(c))
+        .collect()
+}
+
+fn quote_prefix(characters: &[char], index: usize) -> bool {
+    let Some(next) = characters.get(index + 1) else {
+        return false;
+    };
+    if !next.is_whitespace() {
+        return false;
+    }
+    let mut content = characters[index + 1..]
+        .iter()
+        .copied()
+        .skip_while(|c| *c == ' ' || *c == '\t');
+    let first = content.next();
+    let numeric = first.is_some_and(|c| c.is_ascii_digit())
+        || first.is_some_and(|c| matches!(c, '+' | '-' | '.'))
+            && content.next().is_some_and(|c| c.is_ascii_digit());
+    !numeric
 }
 
 fn is_legacy_emoji(character: char) -> bool {
@@ -176,5 +289,52 @@ mod tests {
             .map(|sentence| crate::clean_for_speech(sentence))
             .collect();
         assert_eq!(speech, ["这是 foo.", "bar 的函数。"]);
+    }
+
+    #[test]
+    fn preserves_identifiers_arithmetic_and_unmatched_symbols() {
+        for input in [
+            "版本 x_1，2*3=6，5 > 3。",
+            "foo_bar_baz、A*B*C、C#、~5",
+            "x**2 + y**3，x**y + a**b",
+            ">5，>=5，5 > 3",
+            ">=5",
+            "> 5",
+            "> -5",
+            "> .5",
+            "未闭合 *重点，未闭合 _名称，未闭合 ~~删除。",
+            "转义 \\*literal* 保留，标签 #topic",
+        ] {
+            assert_eq!(SpeechCleanup::default().clean(input), input);
+        }
+    }
+
+    #[test]
+    fn removes_paired_formatting_and_line_prefixes_without_changing_words() {
+        for (input, expected) in [
+            ("**重点 _内容_**、~~旧词~~和*轻声*", "重点 内容、旧词和轻声"),
+            ("我**喜欢**茶，猫_很_可爱", "我喜欢茶，猫很可爱"),
+            ("# 标题\n> 引用\n5 > 3\n#topic", "标题 引用 5 > 3 #topic"),
+            (
+                "**保留 foo_bar**，以及 2**3**4",
+                "保留 foo_bar，以及 2**3**4",
+            ),
+            ("**Hello**world 和 *a*b*c*", "Helloworld 和 a*b*c"),
+            ("**v2**next 和 **3**x", "v2next 和 3x"),
+        ] {
+            assert_eq!(SpeechCleanup::default().clean(input), expected);
+        }
+    }
+
+    #[test]
+    fn split_formatting_never_removes_the_unpaired_words() {
+        let mut buffer = crate::SentenceBuffer::default();
+        let sentences = buffer.push("**第一句。第二句**以及 x_1。");
+        assert_eq!(sentences, ["**第一句。", "第二句**以及 x_1。"]);
+        let speech: Vec<_> = sentences
+            .iter()
+            .map(|sentence| crate::clean_for_speech(sentence))
+            .collect();
+        assert_eq!(speech, ["**第一句。", "第二句**以及 x_1。"]);
     }
 }

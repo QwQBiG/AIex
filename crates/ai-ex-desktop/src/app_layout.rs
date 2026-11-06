@@ -15,6 +15,10 @@ pub(super) enum Page {
 impl DesktopApp {
     pub(super) fn show_contents(&mut self, ui: &mut egui::Ui) {
         self.drain_events();
+        self.handle_backup_close(
+            ui.ctx(),
+            ui.input(|input| input.viewport().close_requested()),
+        );
         if let Some(error) = self
             .owned_service
             .as_mut()
@@ -84,6 +88,7 @@ impl DesktopApp {
         self.show_persona_confirmation(ui.ctx());
         self.show_emergency_confirmation(ui.ctx());
         self.show_navigation_confirmation(ui.ctx());
+        self.show_backup_close_confirmation(ui.ctx());
         self.show_retained_messages(ui.ctx());
     }
 
@@ -264,6 +269,9 @@ impl DesktopApp {
     }
 
     fn activity_label(&self) -> &'static str {
+        if self.memory.backup_pending() {
+            return "正在备份记忆";
+        }
         if self.memory.mutation_pending() {
             return "正在更新记忆";
         }
@@ -444,6 +452,8 @@ impl DesktopApp {
 
     fn show_memory_page(&mut self, ui: &mut egui::Ui) {
         self.memory.set_profile(&self.active_persona.profile_id);
+        self.memory
+            .synchronize_backup_instance(self.state.runtime.instance_id);
         let connected = self.state.connection == ConnectionState::Connected
             && self.persona_synced
             && !self.state.needs_resync;

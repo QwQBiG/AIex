@@ -211,6 +211,8 @@ impl DesktopApp {
     fn composer_status(&self) -> Option<&'static str> {
         if self.can_submit() {
             None
+        } else if self.memory.backup_pending() {
+            Some("正在备份记忆，请等待完成；聊天草稿会保留。")
         } else if self.memory.mutation_pending() {
             Some("正在更新记忆，草稿会保留。")
         } else if self.persona_apply_pending || self.confirm_persona {

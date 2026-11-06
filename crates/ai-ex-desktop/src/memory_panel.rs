@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 
 use ai_ex_domain::{
-    AppError, MemoryEntityPage, MemoryEntry, MemoryKind, MemoryKnowledge, MemoryMedia,
-    MemoryModality, MemoryPage, MemoryRequest, MemoryResponse, MemoryTextField, MemoryTextSegment,
+    AppError, MemoryBackupState, MemoryEntityPage, MemoryEntry, MemoryKind, MemoryKnowledge,
+    MemoryMedia, MemoryModality, MemoryPage, MemoryRequest, MemoryResponse, MemoryTextField,
+    MemoryTextSegment,
 };
 
+#[path = "memory_panel_backup.rs"]
+mod backup;
 #[path = "memory_panel_editor.rs"]
 mod editor;
 #[cfg(test)]
@@ -78,6 +81,9 @@ pub struct MemoryPanel {
     focus_editor: bool,
     offsets: Vec<usize>,
     segment_reader: Option<SegmentReader>,
+    backup_instance: Option<uuid::Uuid>,
+    backups: BTreeMap<String, Vec<backup::TrackedBackup>>,
+    backup_confirmation: bool,
 }
 
 impl MemoryPanel {
@@ -85,6 +91,8 @@ impl MemoryPanel {
         if self.profile_id == profile_id {
             return;
         }
+        self.backup_request_interrupted();
+        self.backup_confirmation = false;
         if self.editor_has_draft() || self.requires_review {
             self.drafts.insert(
                 self.profile_id.clone(),
@@ -122,6 +130,13 @@ impl MemoryPanel {
 
     pub fn connection_changed(&mut self) {
         self.segment_reader = None;
+        self.backup_confirmation = false;
+        self.backup_request_interrupted();
+        for backup in self.backups.values_mut().flatten() {
+            if matches!(backup.state, MemoryBackupState::Running) {
+                backup.state = MemoryBackupState::Unknown;
+            }
+        }
         if self
             .pending
             .as_ref()
@@ -135,6 +150,22 @@ impl MemoryPanel {
         self.pending.as_ref().is_some_and(|item| item.mutation)
     }
 
+    pub fn backup_pending(&self) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|item| matches!(item.request, MemoryRequest::Backup { .. }))
+    }
+
+    pub fn backup_unresolved(&self) -> bool {
+        self.backups.values().flatten().any(|backup| {
+            !backup.acknowledged
+                && matches!(
+                    backup.state,
+                    MemoryBackupState::Unknown | MemoryBackupState::Running
+                )
+        })
+    }
+
     fn editor_has_draft(&self) -> bool {
         !self.draft.is_empty() || self.editing.is_some() || self.media_draft.has_content()
     }
@@ -143,6 +174,7 @@ impl MemoryPanel {
         self.editor_has_draft()
             || !self.drafts.is_empty()
             || self.mutation_pending()
+            || self.backup_unresolved()
             || self.requires_review
     }
 
@@ -153,6 +185,9 @@ impl MemoryPanel {
         }
         if request.profile_id() != self.profile_id || request.validate().is_err() {
             self.feedback = Some("请检查记忆内容与当前角色后重试。".to_owned());
+            return None;
+        }
+        if !self.prepare_backup_request(&request) {
             return None;
         }
         if !matches!(request, MemoryRequest::ReadSegment { .. }) {
@@ -190,6 +225,14 @@ impl MemoryPanel {
         }
         let pending = self.pending.take().expect("matching request");
         match result {
+            Ok(MemoryResponse::BackupStatus(status))
+                if matches!(
+                    pending.request,
+                    MemoryRequest::Backup { .. } | MemoryRequest::BackupStatus { .. }
+                ) =>
+            {
+                self.accept_backup_status(&pending.request, status);
+            }
             Ok(MemoryResponse::Segment(segment))
                 if self.accept_segment(&pending.request, &segment) =>
             {
@@ -227,6 +270,7 @@ impl MemoryPanel {
                 return true;
             }
             Ok(_) => {
+                self.backup_response_failed(&pending.request);
                 if matches!(pending.request, MemoryRequest::ReadSegment { .. }) {
                     self.segment_reader = None;
                 }
@@ -234,6 +278,15 @@ impl MemoryPanel {
                 self.feedback = Some("记忆响应与当前操作不一致，请刷新后核对。".to_owned());
             }
             Err(error) => {
+                if matches!(
+                    pending.request,
+                    MemoryRequest::Backup { .. } | MemoryRequest::BackupStatus { .. }
+                ) {
+                    self.backup_response_failed(&pending.request);
+                    self.feedback =
+                        Some("备份结果暂时无法确认，请手动查询状态；不会自动重新备份。".to_owned());
+                    return false;
+                }
                 if matches!(pending.request, MemoryRequest::ReadSegment { .. }) {
                     self.segment_reader = None;
                 }

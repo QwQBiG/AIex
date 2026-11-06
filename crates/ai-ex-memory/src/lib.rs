@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod backup;
 mod document;
 mod entities;
 mod imported_entities;
@@ -7,6 +8,7 @@ mod knowledge;
 mod maintenance;
 mod management;
 mod migration;
+pub use backup::MemoryBackup;
 pub use knowledge::{MediaStats, observation_media};
 pub use maintenance::MediaMaintenanceReport;
 pub use migration::{MemoryMigrationReport, migrate_jsonl};
@@ -26,6 +28,7 @@ mod profile_tests;
 #[cfg(test)]
 mod segment_tests;
 
+use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -63,6 +66,7 @@ struct MemoryInner {
     enabled: bool,
     embedding_failed: RwLock<bool>,
     recent_memory_ids: RwLock<Vec<(String, Uuid)>>,
+    backup_operations: Mutex<VecDeque<ai_ex_domain::MemoryBackupStatus>>,
 }
 
 impl MemoryStore {
@@ -82,6 +86,7 @@ impl MemoryStore {
                 enabled: true,
                 embedding_failed: RwLock::new(false),
                 recent_memory_ids: RwLock::new(Vec::new()),
+                backup_operations: Mutex::new(VecDeque::new()),
             }),
             embedder: None,
             recall_policy: ai_ex_domain::MemoryRecallPolicy::Hybrid,
@@ -118,6 +123,7 @@ impl MemoryStore {
                 enabled: false,
                 embedding_failed: RwLock::new(false),
                 recent_memory_ids: RwLock::new(Vec::new()),
+                backup_operations: Mutex::new(VecDeque::new()),
             }),
             embedder: None,
             recall_policy: ai_ex_domain::MemoryRecallPolicy::Hybrid,

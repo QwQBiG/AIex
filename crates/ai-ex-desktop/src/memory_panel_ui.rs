@@ -39,6 +39,7 @@ impl MemoryPanel {
             self.show_records(ui, ready && enabled && !self.requires_review, &mut action);
         }
         self.show_forget(ui, ready && enabled && !self.requires_review, &mut action);
+        self.show_backup(ui, ready, enabled, &mut action);
         if !self.loaded && ready && action.is_none() {
             action = Some(self.list_request(0));
         }

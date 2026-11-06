@@ -43,7 +43,12 @@ impl DesktopApp {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(context, |ui| {
                 ui.label("当前还有消息草稿、角色修改或正在处理的操作。");
-                ui.label("离开后，这些未保存的内容会丢失。");
+                ui.label("离开后，部分草稿或操作状态可能无法恢复。");
+                if self.memory.backup_unresolved() {
+                    ui.label(
+                        "有记忆备份尚未确认。关闭本应用的服务可能中断备份；请检查原保存目录。",
+                    );
+                }
                 if self.owned_service.is_some() {
                     ui.label("当前回复也会停止。");
                 }
@@ -54,9 +59,47 @@ impl DesktopApp {
             });
         if leave {
             self.pending_navigation = None;
+            self.allow_backup_close = true;
             self.navigation.request(context, destination);
         } else if stay {
             self.pending_navigation = None;
+        }
+    }
+
+    pub(super) fn handle_backup_close(&mut self, context: &egui::Context, requested: bool) {
+        if requested && !self.allow_backup_close && self.memory.backup_unresolved() {
+            context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_backup_close = true;
+        }
+    }
+
+    pub(super) fn show_backup_close_confirmation(&mut self, context: &egui::Context) {
+        if !self.confirm_backup_close {
+            return;
+        }
+        if !self.memory.backup_unresolved() {
+            self.confirm_backup_close = false;
+            return;
+        }
+        let mut stay = false;
+        let mut close = false;
+        egui::Window::new("备份尚未确认")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(context, |ui| {
+                ui.label("关闭应用会丢失本次备份编号；如果本应用管理服务，备份也可能中断。请检查原保存目录。");
+                ui.horizontal(|ui| {
+                    stay = ui.button("返回等待").clicked();
+                    close = ui.button("仍要退出").clicked();
+                });
+            });
+        if stay {
+            self.confirm_backup_close = false;
+        } else if close {
+            self.confirm_backup_close = false;
+            self.allow_backup_close = true;
+            context.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
