@@ -301,6 +301,8 @@ pub struct ConversationConfig {
     pub system_prompt: String,
     pub history_turn_limit: usize,
     pub memory_recall_limit: usize,
+    pub soft_split_enabled: bool,
+    pub soft_split_min_chars: usize,
 }
 
 impl ConversationConfig {
@@ -308,6 +310,8 @@ impl ConversationConfig {
         if self.system_prompt.chars().count() > 16_384
             || !(1..=128).contains(&self.history_turn_limit)
             || self.memory_recall_limit > 64
+            || !(ai_ex_domain::SOFT_SPLIT_MIN_CHARS..=ai_ex_domain::SOFT_SPLIT_MAX_CHARS)
+                .contains(&self.soft_split_min_chars)
         {
             return Err(AppError::configuration(
                 "conversation policy is outside supported bounds",
@@ -323,6 +327,8 @@ impl Default for ConversationConfig {
             system_prompt: String::new(),
             history_turn_limit: 12,
             memory_recall_limit: 6,
+            soft_split_enabled: false,
+            soft_split_min_chars: ai_ex_domain::SOFT_SPLIT_DEFAULT_CHARS,
         }
     }
 }
@@ -917,6 +923,27 @@ mod tests {
             .expect("KoboldCpp configuration parses");
 
         assert_eq!(config.model.backend, ModelBackend::KoboldCpp);
+    }
+
+    #[test]
+    fn soft_split_keeps_old_configs_disabled_and_validates_its_threshold() {
+        let old = AppConfig::parse("[conversation]\nhistory_turn_limit = 12\n").unwrap();
+        assert!(!old.conversation.soft_split_enabled);
+        assert_eq!(old.conversation.soft_split_min_chars, 10);
+        let enabled = AppConfig::parse(
+            "[conversation]\nsoft_split_enabled = true\nsoft_split_min_chars = 24\n",
+        )
+        .unwrap();
+        assert!(enabled.conversation.soft_split_enabled);
+        assert_eq!(enabled.conversation.soft_split_min_chars, 24);
+        for invalid in [0, 3, 513] {
+            assert!(
+                AppConfig::parse(&format!(
+                    "[conversation]\nsoft_split_min_chars = {invalid}\n"
+                ))
+                .is_err()
+            );
+        }
     }
 }
 

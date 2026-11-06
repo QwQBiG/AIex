@@ -18,6 +18,22 @@ fn portable_setup_keeps_relative_data_paths_and_does_not_store_credentials() {
     assert!(!document.contains("test-secret-never-persist"));
 }
 
+#[test]
+fn ordinary_setup_persists_sentence_settings_without_losing_other_values() {
+    let files = Files::new();
+    let original = "[conversation]\nsoft_split_enabled = false\nsoft_split_min_chars = 10\n[extensions]\nother = 'kept'\n";
+    let mut app = files.app(Some(original.to_owned()));
+    assert!(!app.soft_split_enabled);
+    assert_eq!(app.soft_split_min_chars, 10);
+    app.soft_split_enabled = true;
+    app.soft_split_min_chars = 32;
+    let saved = app.config_text(0).unwrap();
+    let config = AppConfig::parse(&saved).unwrap();
+    assert!(config.conversation.soft_split_enabled);
+    assert_eq!(config.conversation.soft_split_min_chars, 32);
+    assert!(saved.contains("other = \"kept\""));
+}
+
 struct Files(PathBuf);
 
 impl Files {

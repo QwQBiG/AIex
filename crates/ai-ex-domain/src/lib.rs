@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 
+/// Bounds for optional long-sentence splitting, measured in Unicode scalars.
+pub const SOFT_SPLIT_MIN_CHARS: usize = 4;
+pub const SOFT_SPLIT_MAX_CHARS: usize = 512;
+pub const SOFT_SPLIT_DEFAULT_CHARS: usize = 10;
+
 mod automation;
 mod conversation;
 mod desktop_runtime;

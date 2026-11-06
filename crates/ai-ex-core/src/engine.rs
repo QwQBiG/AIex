@@ -49,6 +49,10 @@ impl ConversationEngine {
         &self.history
     }
 
+    pub(crate) fn set_sentence_buffer(&mut self, sentence: SentenceBuffer) {
+        self.sentence = sentence;
+    }
+
     pub(crate) fn clear_identity_context(&mut self) {
         self.history.clear();
         self.response.clear();

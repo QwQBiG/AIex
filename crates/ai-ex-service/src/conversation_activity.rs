@@ -138,6 +138,13 @@ impl ConversationActivity {
         self.runtime.memory(request).await
     }
 
+    pub(crate) async fn speech_split(
+        &self,
+        change: Option<(u64, Option<usize>)>,
+    ) -> Result<(u64, Option<usize>), AppError> {
+        self.runtime.speech_split(change).await
+    }
+
     pub(crate) async fn set_persona(
         &self,
         profile_id: String,

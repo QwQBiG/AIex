@@ -78,6 +78,8 @@ struct SetupApp {
     api_key: String,
     persona_name: String,
     memory_enabled: bool,
+    soft_split_enabled: bool,
+    soft_split_min_chars: usize,
     bilibili_enabled: bool,
     bilibili_room_id: String,
     bilibili_cookie_env: String,
@@ -138,6 +140,8 @@ impl SetupApp {
             api_key: String::new(),
             persona_name: "AIex".to_owned(),
             memory_enabled: true,
+            soft_split_enabled: false,
+            soft_split_min_chars: ai_ex_domain::SOFT_SPLIT_DEFAULT_CHARS,
             bilibili_enabled: false,
             bilibili_room_id: String::new(),
             bilibili_cookie_env: "BILIBILI_COOKIE".to_owned(),
@@ -167,6 +171,8 @@ impl SetupApp {
             app.model = model;
             app.persona_name = config.persona.name;
             app.memory_enabled = config.memory.enabled;
+            app.soft_split_enabled = config.conversation.soft_split_enabled;
+            app.soft_split_min_chars = config.conversation.soft_split_min_chars;
             app.bilibili_enabled = config.bilibili.enabled;
             app.bilibili_room_id = config.bilibili.room_id.to_string();
             app.bilibili_cookie_env = config.bilibili.cookie_env.unwrap_or_default();
@@ -330,6 +336,8 @@ impl SetupApp {
         }
         config.control.enabled = true;
         config.memory.enabled = self.memory_enabled;
+        config.conversation.soft_split_enabled = self.soft_split_enabled;
+        config.conversation.soft_split_min_chars = self.soft_split_min_chars;
         config.desktop.auto_start_service = self.start_service;
         if self.original.is_some() && config.persona.name != self.persona_name.trim() {
             config.persona.revision = config

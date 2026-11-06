@@ -112,9 +112,19 @@ impl SetupApp {
     fn show_advanced(&mut self, ui: &mut egui::Ui) {
         theme::card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            egui::CollapsingHeader::new("更多选项 · 启动与直播")
+            egui::CollapsingHeader::new("更多选项 · 语音、启动与直播")
                 .id_salt("setup_advanced")
                 .show(ui, |ui| {
+                    ui.checkbox(&mut self.soft_split_enabled, "在中文逗号和顿号处分段朗读");
+                    ui.add_enabled(
+                        self.soft_split_enabled,
+                        egui::Slider::new(
+                            &mut self.soft_split_min_chars,
+                            ai_ex_domain::SOFT_SPLIT_MIN_CHARS..=ai_ex_domain::SOFT_SPLIT_MAX_CHARS,
+                        )
+                        .text("每段至少字数"),
+                    );
+                    ui.small("开启后可能在中文逗号或顿号提前分段，停顿会改变；跨段的成对格式标记或引号可能影响朗读。保存后需重启对应服务；外部服务请核对其配置并重启。");
                     ui.checkbox(&mut self.start_service, "打开 AIex 时自动启动服务（推荐）");
                     ui.checkbox(
                         &mut self.bilibili_enabled,

@@ -424,6 +424,9 @@ async fn run() -> Result<(), AppError> {
             memory_recall_limit: config.conversation.memory_recall_limit,
         },
     )?;
+    if config.conversation.soft_split_enabled {
+        runtime.set_soft_split(Some(config.conversation.soft_split_min_chars))?;
+    }
     runtime
         .set_persona(
             config.persona.profile_id.clone(),
@@ -1634,6 +1637,37 @@ impl ControlBackend for ServiceControl {
             ControlCommand::Status => Ok(ControlPayload::Snapshot(control_snapshot::bounded(
                 self.events.current(),
             ))),
+            ControlCommand::SpeechSplit => {
+                let instance_id = self.events.current().instance_id.ok_or_else(|| {
+                    AppError::unavailable("service instance identity is unavailable")
+                })?;
+                let (revision, minimum) = self.runtime.speech_split(None).await?;
+                Ok(ControlPayload::SpeechSplit {
+                    instance_id,
+                    revision,
+                    minimum,
+                })
+            }
+            ControlCommand::SetSpeechSplit {
+                instance_id,
+                expected_revision,
+                minimum,
+            } => {
+                if self.events.current().instance_id != Some(instance_id) || instance_id.is_nil() {
+                    return Err(AppError::invalid_transition(
+                        "service instance changed; query again",
+                    ));
+                }
+                let (revision, minimum) = self
+                    .runtime
+                    .speech_split(Some((expected_revision, minimum)))
+                    .await?;
+                Ok(ControlPayload::SpeechSplit {
+                    instance_id,
+                    revision,
+                    minimum,
+                })
+            }
             ControlCommand::Memory { request } => {
                 let response = self.runtime.memory(request).await?;
                 Ok(ControlPayload::Memory(Box::new(MemoryReply {

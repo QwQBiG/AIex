@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod preamble;
+#[cfg(test)]
+mod soft_split_tests;
 mod speech_cleanup;
 
 pub use preamble::{PreambleOutput, ResponsePreamble};
@@ -10,9 +12,29 @@ pub use speech_cleanup::SpeechCleanup;
 pub struct SentenceBuffer {
     buffer: String,
     scanned_bytes: usize,
+    soft_split_min_chars: Option<usize>,
+    segment_chars: usize,
+    segment_started: bool,
+    inside_backticks: bool,
+    parentheses: Vec<char>,
 }
 
 impl SentenceBuffer {
+    /// Opt in to splitting long segments at Chinese commas and enumeration marks.
+    pub fn with_soft_split(min_chars: usize) -> Result<Self, ai_ex_domain::AppError> {
+        if !(ai_ex_domain::SOFT_SPLIT_MIN_CHARS..=ai_ex_domain::SOFT_SPLIT_MAX_CHARS)
+            .contains(&min_chars)
+        {
+            return Err(ai_ex_domain::AppError::configuration(
+                "soft split minimum is outside supported bounds",
+            ));
+        }
+        Ok(Self {
+            soft_split_min_chars: Some(min_chars),
+            ..Self::default()
+        })
+    }
+
     pub fn push(&mut self, chunk: &str) -> Vec<String> {
         self.buffer.push_str(chunk);
         let mut result = Vec::new();
@@ -22,7 +44,13 @@ impl SentenceBuffer {
         // byte boundaries, and a retained suffix has already been scanned.
         for (offset, character) in self.buffer[self.scanned_bytes..].char_indices() {
             let index = self.scanned_bytes + offset;
-            if is_sentence_boundary(character) {
+            let soft_boundary = self.soft_split_min_chars.is_some_and(|minimum| {
+                self.segment_chars >= minimum
+                    && matches!(character, '，' | '、')
+                    && !self.inside_backticks
+                    && self.parentheses.is_empty()
+            });
+            if is_sentence_boundary(character) || soft_boundary {
                 let end = index + character.len_utf8();
                 let sentence = self.buffer[start..end].trim();
                 if !sentence.is_empty() {
@@ -30,6 +58,27 @@ impl SentenceBuffer {
                 }
                 start = end;
                 consumed = end;
+                self.segment_chars = 0;
+                self.segment_started = false;
+                self.inside_backticks = false;
+                self.parentheses.clear();
+            } else if self.soft_split_min_chars.is_some() {
+                if !character.is_whitespace() || self.segment_started {
+                    self.segment_started = true;
+                    self.segment_chars = self.segment_chars.saturating_add(1);
+                }
+                if character == '`' {
+                    self.inside_backticks = !self.inside_backticks;
+                } else if !self.inside_backticks {
+                    match character {
+                        '(' => self.parentheses.push(')'),
+                        '（' => self.parentheses.push('）'),
+                        ')' | '）' if self.parentheses.last() == Some(&character) => {
+                            self.parentheses.pop();
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         if consumed > 0 {
@@ -41,8 +90,7 @@ impl SentenceBuffer {
 
     pub fn finish(&mut self) -> Option<String> {
         let trailing = self.buffer.trim().to_owned();
-        self.buffer.clear();
-        self.scanned_bytes = 0;
+        self.clear();
         if trailing.is_empty() {
             None
         } else {
@@ -53,6 +101,10 @@ impl SentenceBuffer {
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.scanned_bytes = 0;
+        self.segment_chars = 0;
+        self.segment_started = false;
+        self.inside_backticks = false;
+        self.parentheses.clear();
     }
 }
 

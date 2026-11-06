@@ -23,6 +23,12 @@ pub enum ControlCommand {
         reason: String,
     },
     Status,
+    SpeechSplit,
+    SetSpeechSplit {
+        instance_id: Uuid,
+        expected_revision: u64,
+        minimum: Option<usize>,
+    },
     Persona,
     Memory {
         request: MemoryRequest,
@@ -55,6 +61,11 @@ pub enum ControlCommand {
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum ControlPayload {
     Accepted,
+    SpeechSplit {
+        instance_id: Uuid,
+        revision: u64,
+        minimum: Option<usize>,
+    },
     Snapshot(RuntimeSnapshot),
     Persona(PersonaSnapshot),
     Memory(Box<MemoryReply>),
@@ -84,6 +95,40 @@ pub enum ControlResponse {
         request_id: Option<Uuid>,
         error: AppError,
     },
+}
+
+#[cfg(test)]
+mod speech_split_tests {
+    use super::*;
+
+    #[test]
+    fn speech_split_commands_and_replies_round_trip() {
+        let instance_id = Uuid::new_v4();
+        for command in [
+            ControlCommand::SpeechSplit,
+            ControlCommand::SetSpeechSplit {
+                instance_id,
+                expected_revision: 3,
+                minimum: Some(10),
+            },
+        ] {
+            let bytes = serde_json::to_vec(&command).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<ControlCommand>(&bytes).unwrap(),
+                command
+            );
+        }
+        let payload = ControlPayload::SpeechSplit {
+            instance_id,
+            revision: 4,
+            minimum: None,
+        };
+        let bytes = serde_json::to_vec(&payload).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<ControlPayload>(&bytes).unwrap(),
+            payload
+        );
+    }
 }
 
 #[cfg(test)]

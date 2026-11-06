@@ -57,6 +57,7 @@ where
     speech_emotion: Emotion,
     avatar_healthy: bool,
     proactive_output: bool,
+    soft_split: Option<usize>,
 }
 
 impl<M, S, A, N, E> Runtime<M, S, A, N, E>
@@ -113,6 +114,7 @@ where
             speech_emotion: Emotion::Neutral,
             avatar_healthy: true,
             proactive_output: false,
+            soft_split: None,
         }
     }
 
@@ -128,6 +130,26 @@ where
         }
         self.system_prompt = prompt;
         Ok(())
+    }
+
+    /// Configure optional long-sentence splitting between turns.
+    pub fn set_soft_split(&mut self, minimum: Option<usize>) -> Result<(), AppError> {
+        if self.engine.active_turn().is_some() {
+            return Err(AppError::invalid_transition(
+                "cannot change sentence splitting during an active turn",
+            ));
+        }
+        let sentence = match minimum {
+            Some(minimum) => ai_ex_text::SentenceBuffer::with_soft_split(minimum)?,
+            None => ai_ex_text::SentenceBuffer::default(),
+        };
+        self.engine.set_sentence_buffer(sentence);
+        self.soft_split = minimum;
+        Ok(())
+    }
+
+    pub(crate) fn soft_split(&self) -> Option<usize> {
+        self.soft_split
     }
 
     pub fn state(&self) -> ConversationState {

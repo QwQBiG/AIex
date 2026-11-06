@@ -112,6 +112,73 @@ async fn pending_count(host: &TemplateHost, expected: usize) {
 }
 
 #[tokio::test]
+async fn speech_split_control_checks_instance_and_reports_actual_state() {
+    use ai_ex_control::{ControlBackend, ControlCommand, ControlPayload};
+    use ai_ex_domain::PersonaSnapshot;
+    let (runtime, host, _observed, _receiver, events) = fixture();
+    let control = crate::ServiceControl {
+        runtime: runtime.clone(),
+        events: events.clone(),
+        safety: Arc::new(crate::build_safety(&ai_ex_config::AppConfig::default()).unwrap()),
+        health: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        persona: Arc::new(tokio::sync::RwLock::new(PersonaSnapshot::default())),
+        stage: ai_ex_core::StageJournal::new(8),
+        automation: host.clone(),
+        native: None,
+        native_desktop: None,
+        desktop_runtime: None,
+        interaction: Arc::new(tokio::sync::Mutex::new(())),
+    };
+    let ControlPayload::SpeechSplit {
+        instance_id,
+        revision: 0,
+        minimum: None,
+    } = control.execute(ControlCommand::SpeechSplit).await.unwrap()
+    else {
+        panic!("initial state")
+    };
+    assert!(
+        control
+            .execute(ControlCommand::SetSpeechSplit {
+                instance_id: Uuid::new_v4(),
+                expected_revision: 0,
+                minimum: Some(4),
+            })
+            .await
+            .is_err()
+    );
+    // A lost response is resolved by reading state, not replaying the mutation.
+    let _lost = control
+        .execute(ControlCommand::SetSpeechSplit {
+            instance_id,
+            expected_revision: 0,
+            minimum: Some(4),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        control.execute(ControlCommand::SpeechSplit).await.unwrap(),
+        ControlPayload::SpeechSplit {
+            instance_id,
+            revision: 1,
+            minimum: Some(4)
+        }
+    );
+    assert!(
+        control
+            .execute(ControlCommand::SetSpeechSplit {
+                instance_id,
+                expected_revision: 0,
+                minimum: None,
+            })
+            .await
+            .is_err()
+    );
+    runtime.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn superseded_preview_cannot_interrupt_a_newer_conversation() {
     use ai_ex_control::{ControlBackend, ControlCommand};
     use ai_ex_domain::{NativeReply, NativeRequest, PersonaSnapshot};

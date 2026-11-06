@@ -16,6 +16,8 @@ const HEALTH_REFRESH_TICKS: u8 = 40;
 mod desktop;
 #[path = "worker_native.rs"]
 mod native;
+#[path = "worker_speech_split.rs"]
+mod speech_split;
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod tests;
@@ -26,7 +28,33 @@ pub struct WorkerSettings {
     pub max_message_bytes: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeechSplitRequest {
+    Query,
+    Set {
+        instance_id: uuid::Uuid,
+        expected_revision: u64,
+        minimum: Option<usize>,
+    },
+    Fence {
+        instance_id: uuid::Uuid,
+        expected_revision: u64,
+        minimum: Option<usize>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeechSplitStatus {
+    pub instance_id: uuid::Uuid,
+    pub revision: u64,
+    pub minimum: Option<usize>,
+}
+
 pub enum WorkerCommand {
+    SpeechSplit {
+        request_id: u64,
+        request: SpeechSplitRequest,
+    },
     DesktopRuntime {
         request_id: u64,
         request: ai_ex_domain::DesktopRuntimeRequest,
@@ -54,6 +82,10 @@ pub enum WorkerCommand {
 }
 
 pub enum WorkerEvent {
+    SpeechSplit {
+        request_id: u64,
+        result: Result<SpeechSplitStatus, AppError>,
+    },
     DesktopRuntime {
         request_id: u64,
         result: Result<ai_ex_domain::DesktopRuntimeReply, AppError>,
@@ -177,6 +209,10 @@ struct QueuedCommand {
 
 fn reject_command(events: &Sender<WorkerEvent>, command: WorkerCommand, message: &str) -> bool {
     let event = match command {
+        WorkerCommand::SpeechSplit { request_id, .. } => WorkerEvent::SpeechSplit {
+            request_id,
+            result: Err(AppError::unavailable(message)),
+        },
         WorkerCommand::DesktopRuntime { request_id, .. } => WorkerEvent::DesktopRuntime {
             request_id,
             result: Err(AppError::unavailable(message)),
@@ -630,7 +666,9 @@ async fn send_command(
                 "native setup uses a dedicated reply channel",
             ));
         }
-        WorkerCommand::DesktopRuntime { .. } | WorkerCommand::NativeDesktop { .. } => {
+        WorkerCommand::DesktopRuntime { .. }
+        | WorkerCommand::NativeDesktop { .. }
+        | WorkerCommand::SpeechSplit { .. } => {
             return Err(AppError::protocol(
                 "desktop control requires its dedicated lane",
             ));
@@ -791,12 +829,25 @@ pub(crate) async fn run_commands(
     let (native_status, native_status_rx) = tokio::sync::mpsc::channel(16);
     let (native_urgent, native_urgent_rx) = tokio::sync::mpsc::channel(2);
     let (desktop_commands, desktop_rx) = tokio::sync::mpsc::channel(32);
+    let (speech_commands, speech_rx) = tokio::sync::mpsc::channel(4);
     let epoch = AtomicU64::new(0);
     let native_epoch = AtomicU64::new(0);
     let desktop_epoch = AtomicU64::new(0);
     let router = async {
         while let Some(command) = commands.recv().await {
             let command = match command {
+                command @ WorkerCommand::SpeechSplit { .. } => {
+                    if let Err(error) = speech_commands.try_send(command)
+                        && !reject_command(
+                            events,
+                            error.into_inner(),
+                            "朗读设置队列已满，请稍后重试。",
+                        )
+                    {
+                        return;
+                    }
+                    continue;
+                }
                 command @ (WorkerCommand::DesktopRuntime { .. }
                 | WorkerCommand::NativeDesktop { .. }) => {
                     if matches!(
@@ -923,6 +974,7 @@ pub(crate) async fn run_commands(
             tokio::join!(
                 run_ordinary_commands(client, ordinary_rx, events, persona_epoch),
                 desktop::run(client, desktop_rx, events, &desktop_epoch),
+                speech_split::execute(client, speech_rx, events),
                 execute_automation(client, regular_rx, events, Some(&epoch)),
                 execute_automation(client, pause_rx, events, None),
                 execute_automation(client, stop_rx, events, None),

@@ -28,6 +28,8 @@ max_message_bytes = 65536
 
 请求具有 UUID、令牌和带类型的命令：
 
+`speech_split` 查询本次服务实际使用的朗读分段状态。`set_speech_split` 使用查询返回的实例和版本设置，`minimum` 为 `null` 时关闭，否则为 4 到 512 的整数。状态只保留在当前服务中；重启恢复启动配置。对话进行中可查询但不能修改，记忆操作期间可能返回忙碌。设置超时或断线后结果可能未知，不自动重发：查询仅反映当时状态，不能证明旧请求不会迟到。若要确认同一实例的状态，客户端可在用户同意后将查询到的当前值和版本原样提交；只有收到同实例、值相同且版本递增的成功应答，才能确认旧版本的请求不再生效。冲突或再次超时后仍需重新核对。
+
 ```json
 {"request_id":"00000000-0000-0000-0000-000000000001","token":"<redacted>","command":{"type":"status"}}
 ```
@@ -38,6 +40,8 @@ max_message_bytes = 65536
 {"type":"submit","text":"你好"}
 {"type":"interrupt","reason":"user barge-in"}
 {"type":"status"}
+{"type":"speech_split"}
+{"type":"set_speech_split","instance_id":"00000000-0000-0000-0000-000000000001","expected_revision":0,"minimum":10}
 {"type":"stage"}
 {"type":"persona"}
 {"type":"memory","request":{"type":"list","profile_id":"default","query":"","kind":null,"offset":0,"limit":12}}

@@ -93,6 +93,7 @@ pub struct DesktopApp {
     native_mode: bool,
     subtitle_overlay: crate::subtitle_overlay::SubtitleOverlay,
     desktop_runtime: crate::desktop_runtime_panel::DesktopRuntimePanel,
+    speech_split: crate::speech_split_panel::SpeechSplitPanel,
     native_desktop: crate::native_desktop_panel::NativeDesktopPanel,
 }
 
@@ -162,6 +163,7 @@ impl DesktopApp {
             native_mode: false,
             subtitle_overlay: crate::subtitle_overlay::SubtitleOverlay::load(storage),
             desktop_runtime: Default::default(),
+            speech_split: Default::default(),
             native_desktop: Default::default(),
         }
     }
@@ -215,6 +217,8 @@ impl DesktopApp {
             && self.persona_synced;
         self.desktop_runtime
             .synchronize(self.state.runtime.instance_id, connected);
+        self.speech_split
+            .synchronize(self.state.runtime.instance_id, connected);
         self.native_desktop
             .synchronize(self.state.runtime.instance_id, connected);
     }
@@ -229,6 +233,9 @@ impl DesktopApp {
                 WorkerCommand::NativeDesktop { request_id, .. } => {
                     self.native_desktop.receive(request_id, Err(failure))
                 }
+                WorkerCommand::SpeechSplit { request_id, .. } => {
+                    self.speech_split.receive(request_id, Err(failure))
+                }
                 _ => self.last_error = Some(failure.to_string()),
             }
         }
@@ -242,6 +249,9 @@ impl DesktopApp {
         if let Some(command) = self.native_desktop.poll() {
             self.send_desktop_control(command);
         }
+        if let Some(command) = self.speech_split.poll() {
+            self.send_desktop_control(command);
+        }
         self.subtitle_overlay
             .set_confirmed_visible(self.desktop_runtime.captions_visible());
     }
@@ -252,6 +262,10 @@ impl DesktopApp {
                 WorkerEvent::DesktopRuntime { request_id, result } => {
                     self.synchronize_desktop_controls();
                     self.desktop_runtime.receive(request_id, result);
+                }
+                WorkerEvent::SpeechSplit { request_id, result } => {
+                    self.synchronize_desktop_controls();
+                    self.speech_split.receive(request_id, result);
                 }
                 WorkerEvent::NativeDesktop { request_id, result } => {
                     self.synchronize_desktop_controls();

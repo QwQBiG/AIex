@@ -424,6 +424,7 @@ impl DesktopApp {
         self.show_health(ui);
         self.show_model_panel(ui);
         self.show_policy_panel(ui);
+        self.show_speech_split(ui);
         self.synchronize_desktop_controls();
         for command in self.desktop_runtime.show(ui) {
             self.send_desktop_control(command);
@@ -491,6 +492,7 @@ impl DesktopApp {
         if !connected && ui.button("返回首页重试").clicked() {
             self.request_navigation(ui.ctx(), crate::navigation::Destination::Home);
         }
+        self.show_speech_split(ui);
         for command in self
             .native
             .show(ui, &self.active_persona.profile_id, connected)
@@ -520,5 +522,12 @@ impl DesktopApp {
         }
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(200));
+    }
+
+    fn show_speech_split(&mut self, ui: &mut egui::Ui) {
+        let idle = self.state.runtime.active_turn.is_none();
+        for command in self.speech_split.show(ui, idle) {
+            self.send_desktop_control(command);
+        }
     }
 }

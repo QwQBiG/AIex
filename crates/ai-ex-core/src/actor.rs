@@ -13,6 +13,10 @@ use crate::{
 mod memory_management;
 
 enum RuntimeCommand {
+    SpeechSplit {
+        change: Option<(u64, Option<usize>)>,
+        response: oneshot::Sender<Result<(u64, Option<usize>), AppError>>,
+    },
     Memory {
         request: MemoryRequest,
         response: oneshot::Sender<Result<MemoryResponse, AppError>>,
@@ -61,6 +65,21 @@ impl PendingTurn {
 }
 
 impl RuntimeHandle {
+    /// Query or change the current actor's in-memory sentence splitting.
+    pub async fn speech_split(
+        &self,
+        change: Option<(u64, Option<usize>)>,
+    ) -> Result<(u64, Option<usize>), AppError> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(RuntimeCommand::SpeechSplit { change, response })
+            .await
+            .map_err(|_| AppError::unavailable("runtime actor stopped"))?;
+        receiver
+            .await
+            .map_err(|_| AppError::unavailable("sentence splitting response dropped"))?
+    }
+
     pub async fn memory(&self, request: MemoryRequest) -> Result<MemoryResponse, AppError> {
         let (response, receiver) = oneshot::channel();
         self.sender
@@ -216,6 +235,7 @@ async fn run_actor<M, S, A, N, E>(
 {
     let mut stopping = false;
     let mut pending = VecDeque::new();
+    let mut split_revision = 0_u64;
     loop {
         let command = match pending.pop_front() {
             Some(command) => command,
@@ -225,6 +245,25 @@ async fn run_actor<M, S, A, N, E>(
             },
         };
         match command {
+            RuntimeCommand::SpeechSplit { change, response } => {
+                let result = match change {
+                    None => Ok((split_revision, runtime.soft_split())),
+                    Some(_) if response.is_closed() => continue,
+                    Some((expected, _)) if expected != split_revision => Err(
+                        AppError::invalid_transition("sentence splitting changed; query again"),
+                    ),
+                    Some((_, minimum)) => match split_revision.checked_add(1) {
+                        Some(next) => runtime.set_soft_split(minimum).map(|()| {
+                            split_revision = next;
+                            (next, runtime.soft_split())
+                        }),
+                        None => Err(AppError::unavailable(
+                            "sentence splitting revision exhausted",
+                        )),
+                    },
+                };
+                let _ignored = response.send(result);
+            }
             RuntimeCommand::Submit {
                 input,
                 mut response,
@@ -247,6 +286,7 @@ async fn run_actor<M, S, A, N, E>(
                 }
                 let mut shutdown_response: Option<oneshot::Sender<Result<(), AppError>>> = None;
                 let mut deferred_interrupt = None;
+                let split_during_turn = runtime.soft_split();
                 {
                     let (control, mut control_receiver) = mpsc::channel(4);
                     let turn = async {
@@ -284,6 +324,14 @@ async fn run_actor<M, S, A, N, E>(
                             {
                                 match next
                                 {
+                                    Some(RuntimeCommand::SpeechSplit { change, response }) => {
+                                        let result = if change.is_some() {
+                                            Err(AppError::invalid_transition("cannot change sentence splitting during an active turn"))
+                                        } else {
+                                            Ok((split_revision, split_during_turn))
+                                        };
+                                        let _ignored = response.send(result);
+                                    }
                                     Some(RuntimeCommand::Interrupt { reason, response }) =>
                                     {
                                         deferred_interrupt = Some(reason.clone());

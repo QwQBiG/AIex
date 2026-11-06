@@ -23,6 +23,9 @@ mod cancellation_tests;
 #[path = "proactive_tests.rs"]
 mod proactive_tests;
 
+#[path = "runtime_soft_split_tests.rs"]
+mod soft_split_tests;
+
 #[derive(Default)]
 struct TestState {
     model_cancelled: AtomicBool,

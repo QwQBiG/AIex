@@ -26,6 +26,7 @@ mod session;
 mod setup;
 mod setup_storage;
 mod speech_panel;
+mod speech_split_panel;
 mod startup;
 mod subtitle_overlay;
 mod ui;

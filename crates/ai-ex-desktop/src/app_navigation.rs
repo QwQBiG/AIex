@@ -23,7 +23,10 @@ impl DesktopApp {
             || self.scene_busy()
             || self.character_files.is_loading()
             || self.appearance.is_loading();
-        let has_drafts = has_drafts || self.memory.has_unsaved() || self.native.has_unsaved();
+        let has_drafts = has_drafts
+            || self.memory.has_unsaved()
+            || self.native.has_unsaved()
+            || self.speech_split.has_unsaved();
         if has_drafts {
             self.pending_navigation = Some(destination);
         } else {
