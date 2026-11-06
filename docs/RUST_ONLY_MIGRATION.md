@@ -22,6 +22,14 @@ cargo run -p ai-ex-service --locked -- --config config/ai-ex.example.toml --vali
 
 ### 2. 旧记忆备份转为当前角色的 Rust 记忆
 
+转换前可先检查一个旧 gzip 或 JSON 备份副本：
+
+```powershell
+.\ai-ex-migrate.exe --inspect-memory-backup --input '备份副本/memory_backup.json.gz'
+```
+
+此操作只读取指定文件，不写入文件或连接网络。结果只包含脱敏统计：记忆内容的哈希与数量是否匹配、旧备份外层字段是否存在，以及需要明确时区或向量空间的记录数量。哈希只覆盖 `memories`，不能认证来源；预检也不验证完整导入兼容性。真实旧备份尚未验收。
+
 ```powershell
 cargo run -p ai-ex-migrate --locked -- --memory-backup `
   --input '备份路径/memory_backup.json.gz' `

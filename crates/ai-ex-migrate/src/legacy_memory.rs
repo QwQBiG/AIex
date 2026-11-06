@@ -68,11 +68,16 @@ pub fn import_backup(
             "UTC offset must be between -1439 and 1439 minutes",
         ));
     }
-    let file = std::fs::File::open(path)
-        .map_err(|error| AppError::unavailable(format!("cannot open backup: {error}")))?;
+    let content = read_backup(path)?;
+    convert_backup(&content, profile, utc_offset, embedding_space)
+}
+
+fn read_backup(path: &Path) -> Result<Vec<u8>, AppError> {
+    let file =
+        std::fs::File::open(path).map_err(|_| AppError::unavailable("cannot open backup"))?;
     if file
         .metadata()
-        .map_err(|error| AppError::unavailable(error.to_string()))?
+        .map_err(|_| AppError::unavailable("cannot inspect backup"))?
         .len()
         > MAX_BACKUP_BYTES
     {
@@ -88,13 +93,12 @@ pub fn import_backup(
         .map_err(|_| AppError::configuration("memory backup is empty or truncated"))?;
     reader
         .seek(SeekFrom::Start(0))
-        .map_err(|error| AppError::unavailable(error.to_string()))?;
-    let content = if header == [0x1f, 0x8b] {
-        read_bounded(MultiGzDecoder::new(reader), MAX_BACKUP_BYTES)?
+        .map_err(|_| AppError::unavailable("cannot seek backup"))?;
+    if header == [0x1f, 0x8b] {
+        read_bounded(MultiGzDecoder::new(reader), MAX_BACKUP_BYTES)
     } else {
-        read_bounded(reader, MAX_BACKUP_BYTES)?
-    };
-    convert_backup(&content, profile, utc_offset, embedding_space)
+        read_bounded(reader, MAX_BACKUP_BYTES)
+    }
 }
 
 fn read_bounded(reader: impl Read, limit: u64) -> Result<Vec<u8>, AppError> {
@@ -126,6 +130,13 @@ fn convert_backup(
             "embedding space must be a nonempty identifier of at most 256 characters without control characters",
         ));
     }
+    let backup = validate_backup(content)?;
+    let memories: Vec<LegacyMemory> = serde_json::from_str(backup.memories.get())
+        .map_err(|_| AppError::configuration("invalid legacy memory record"))?;
+    convert_records(memories, profile, utc_offset, embedding_space)
+}
+
+fn validate_backup(content: &[u8]) -> Result<Backup, AppError> {
     let root: Box<RawValue> = serde_json::from_slice(content)
         .map_err(|_| AppError::configuration("invalid legacy memory backup JSON"))?;
     let mut checked = String::new();
@@ -154,14 +165,76 @@ fn convert_backup(
             "memory backup integrity check failed",
         ));
     }
-    let memories: Vec<LegacyMemory> = serde_json::from_str(backup.memories.get())
-        .map_err(|_| AppError::configuration("invalid legacy memory record"))?;
-    if memories.len() != backup.total_memories {
+    let records: BoundedArray = serde_json::from_str(backup.memories.get())
+        .map_err(|_| AppError::configuration("invalid legacy memory record list"))?;
+    if records.0.len() != backup.total_memories {
         return Err(AppError::configuration(
             "memory backup record count does not match",
         ));
     }
-    convert_records(memories, profile, utc_offset, embedding_space)
+    Ok(backup)
+}
+
+/// Read-only summary of the legacy envelope; this does not validate importability.
+#[derive(Debug, Serialize)]
+pub struct LegacyBackupInspection {
+    integrity: &'static str,
+    authenticity: &'static str,
+    import_compatibility: &'static str,
+    guidance: &'static str,
+    legacy_metadata_fields_present: bool,
+    records: usize,
+    local_timestamp_records: usize,
+    unclassified_timestamp_records: usize,
+    nonempty_embedding_records: usize,
+    unclassified_embedding_records: usize,
+}
+
+pub fn inspect_backup(path: &Path) -> Result<LegacyBackupInspection, AppError> {
+    let content = read_backup(path)?;
+    let backup = validate_backup(&content)?;
+    let root: Value = serde_json::from_slice(&content)
+        .map_err(|_| AppError::configuration("invalid legacy memory backup JSON"))?;
+    let legacy_metadata_fields_present = root.as_object().is_some_and(|object| {
+        object.contains_key("backup_timestamp") && object.contains_key("collection_name")
+    });
+    drop(root);
+    let records: BoundedArray = serde_json::from_str(backup.memories.get())
+        .map_err(|_| AppError::configuration("invalid legacy memory record list"))?;
+    let mut report = LegacyBackupInspection {
+        integrity: "memory_hash_and_count_match",
+        authenticity: "not_authenticated",
+        import_compatibility: "not_checked",
+        guidance: "Local timestamps need --utc-offset-minutes; nonempty embeddings need --embedding-space. Unclassified entries require further review. Hash covers memories only.",
+        legacy_metadata_fields_present,
+        records: records.0.len(),
+        local_timestamp_records: 0,
+        unclassified_timestamp_records: 0,
+        nonempty_embedding_records: 0,
+        unclassified_embedding_records: 0,
+    };
+    for record in records.0 {
+        let value: Value = serde_json::from_str(record.get())
+            .map_err(|_| AppError::configuration("invalid legacy memory record"))?;
+        match value
+            .get("metadata")
+            .and_then(|v| v.get("timestamp"))
+            .and_then(Value::as_str)
+        {
+            Some(timestamp) if timestamp_ms(timestamp, None).is_ok() => {}
+            Some(timestamp) if timestamp_ms(timestamp, Some(0)).is_ok() => {
+                report.local_timestamp_records += 1;
+            }
+            _ => report.unclassified_timestamp_records += 1,
+        }
+        match value.get("embedding") {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(values)) if values.is_empty() => {}
+            Some(Value::Array(_)) => report.nonempty_embedding_records += 1,
+            _ => report.unclassified_embedding_records += 1,
+        }
+    }
+    Ok(report)
 }
 
 pub(super) fn convert_records(
