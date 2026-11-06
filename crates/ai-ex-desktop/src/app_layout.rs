@@ -193,6 +193,18 @@ impl DesktopApp {
                 }
             }
         });
+        if self.native_mode && self.state.connection == ConnectionState::Connected {
+            let label = match self.native_input_status {
+                ai_ex_domain::NativeInputStatus::Unknown => "语音输入状态未知",
+                ai_ex_domain::NativeInputStatus::Disabled => "语音输入未启用",
+                ai_ex_domain::NativeInputStatus::Preparing => "正在准备语音输入",
+                ai_ex_domain::NativeInputStatus::Ready => "语音输入已打开",
+                ai_ex_domain::NativeInputStatus::Unavailable => {
+                    "无法启用语音输入，请检查设备、权限和识别模型"
+                }
+            };
+            ui.weak(label);
+        }
         if self.voice_input_fresh
             && self.state.connection == ConnectionState::Connected
             && !self.state.needs_resync

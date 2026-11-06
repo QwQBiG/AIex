@@ -3,6 +3,7 @@
 mod control;
 mod dialogue;
 mod input_devices;
+mod input_status;
 mod lifecycle;
 mod operations;
 mod packages;
@@ -26,6 +27,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify};
 use tokio::task::JoinHandle;
 
 pub(crate) use dialogue::NativeLanguageModel;
+pub(crate) use input_status::validate_instance as validate_input_status_instance;
 
 pub(crate) struct NativeRuntime {
     store: Result<NativeConfigStore, AppError>,
@@ -38,6 +40,7 @@ pub(crate) struct NativeRuntime {
     preview: Mutex<Option<preview::Resources>>,
     bootstrap: Mutex<Option<JoinHandle<()>>>,
     bootstrap_cancel: Arc<AtomicBool>,
+    input_status: input_status::InputStatus,
     #[cfg(feature = "native-capture")]
     input_devices_busy: Arc<AtomicBool>,
     changed: Notify,
@@ -114,6 +117,7 @@ impl NativeRuntime {
             preview: Mutex::new(None),
             bootstrap: Mutex::new(None),
             bootstrap_cancel: Arc::new(AtomicBool::new(false)),
+            input_status: input_status::InputStatus::default(),
             #[cfg(feature = "native-capture")]
             input_devices_busy: Arc::new(AtomicBool::new(false)),
             changed: Notify::new(),
@@ -135,6 +139,30 @@ impl NativeRuntime {
 
     pub(crate) fn config(&self) -> Result<NativeConfig, AppError> {
         self.lock()?.config.clone()
+    }
+
+    pub(crate) fn capture_config(&self) -> Result<Option<NativeConfig>, AppError> {
+        let state = self.lock()?;
+        if !state.configured {
+            return Ok(None);
+        }
+        state.config.clone().map(Some)
+    }
+
+    pub(crate) fn input_status(&self) -> ai_ex_domain::NativeInputStatus {
+        self.input_status.get()
+    }
+
+    pub(crate) fn set_input_status(&self, status: ai_ex_domain::NativeInputStatus) {
+        self.input_status.set(status);
+    }
+
+    #[cfg(feature = "native-capture")]
+    pub(crate) async fn observe_input<F>(&self, capture: F) -> Result<(), AppError>
+    where
+        F: std::future::Future<Output = Result<(), AppError>>,
+    {
+        self.input_status.until_stopped(capture).await
     }
 
     pub(crate) fn manager(&self) -> Result<ModelManager, AppError> {

@@ -1633,6 +1633,12 @@ impl ControlBackend for ServiceControl {
                 let native = self.native.as_ref().ok_or_else(|| {
                     AppError::unavailable("请从首页进入“准备本地伙伴”，再管理本地模型与声音")
                 })?;
+                if let NativeRequest::InputStatus { instance_id } = &request {
+                    native_runtime::validate_input_status_instance(
+                        *instance_id,
+                        self.events.current().instance_id,
+                    )?;
+                }
                 if let NativeRequest::PreviewVoice {
                     expected_generation,
                     ..

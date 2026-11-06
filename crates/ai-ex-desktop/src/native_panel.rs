@@ -459,6 +459,7 @@ impl NativePanel {
                     self.status = "设备列表已更新。".into();
                 }
             }
+            NativeReply::InputStatus { .. } => {}
         }
     }
 
@@ -653,6 +654,7 @@ fn mutating(request: &NativeRequest) -> bool {
             | NativeRequest::Packages
             | NativeRequest::Settings
             | NativeRequest::InputDevices
+            | NativeRequest::InputStatus { .. }
             | NativeRequest::StorageSpace { .. }
             | NativeRequest::Operation { .. }
     )

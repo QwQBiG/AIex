@@ -2,7 +2,10 @@ use std::fs;
 use std::time::{Duration, Instant};
 
 use ai_ex_config::native::{NativeConfig, VoiceSource};
-use ai_ex_domain::{NativeOperationPhase, NativePackageState, NativeReply, NativeRequest};
+use ai_ex_control::{ControlCommand, ControlPayload};
+use ai_ex_domain::{
+    NativeInputStatus, NativeOperationPhase, NativePackageState, NativeReply, NativeRequest,
+};
 
 #[path = "support/native_setup_cpu.rs"]
 mod cpu;
@@ -10,6 +13,78 @@ mod cpu;
 mod support;
 
 use support::NativeService;
+
+#[tokio::test]
+async fn input_status_uses_service_instance_without_opening_devices() {
+    let mut service = NativeService::new(false);
+    service.ready(Duration::from_secs(12)).await;
+    let ControlPayload::Snapshot(snapshot) =
+        service.client.send(ControlCommand::Status).await.unwrap()
+    else {
+        panic!("snapshot reply")
+    };
+    let first_instance = snapshot.instance_id.unwrap();
+    assert_eq!(
+        service
+            .request(NativeRequest::InputStatus {
+                instance_id: first_instance
+            })
+            .await,
+        NativeReply::InputStatus {
+            instance_id: first_instance,
+            status: NativeInputStatus::Unknown
+        },
+    );
+    assert!(
+        service
+            .client
+            .native(NativeRequest::InputStatus {
+                instance_id: uuid::Uuid::new_v4()
+            })
+            .await
+            .is_err()
+    );
+    service.request(NativeRequest::CreateDefaults).await;
+    service.close().await;
+    service.start();
+    service.ready(Duration::from_secs(12)).await;
+    let ControlPayload::Snapshot(snapshot) =
+        service.client.send(ControlCommand::Status).await.unwrap()
+    else {
+        panic!("snapshot reply")
+    };
+    let second_instance = snapshot.instance_id.unwrap();
+    assert_ne!(first_instance, second_instance);
+    assert!(
+        service
+            .client
+            .native(NativeRequest::InputStatus {
+                instance_id: first_instance
+            })
+            .await
+            .is_err()
+    );
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if service
+                .request(NativeRequest::InputStatus {
+                    instance_id: second_instance,
+                })
+                .await
+                == (NativeReply::InputStatus {
+                    instance_id: second_instance,
+                    status: NativeInputStatus::Disabled,
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("disabled input status becomes available");
+    service.close().await;
+}
 
 async fn settings_reply(service: &NativeService, reply: NativeReply) -> NativeConfig {
     let NativeReply::Settings { revision, document } = reply else {

@@ -116,8 +116,14 @@ pub fn spawn_duplex(
     _automation: crate::template_host::TemplateHost,
     _voice_input: crate::voice_input_activity::VoiceInputActivity,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
-    if native.config().is_ok_and(|c| c.devices.microphone_enabled) {
-        tracing::warn!("Microphone requested, but this binary lacks native-capture");
+    use ai_ex_domain::NativeInputStatus;
+    match native.capture_config() {
+        Ok(Some(config)) if config.devices.microphone_enabled => {
+            native.set_input_status(NativeInputStatus::Unavailable);
+            tracing::warn!("Microphone requested, but this binary lacks native-capture");
+        }
+        Ok(Some(_)) => native.set_input_status(NativeInputStatus::Disabled),
+        Ok(None) | Err(_) => native.set_input_status(NativeInputStatus::Unknown),
     }
     Ok(None)
 }
@@ -130,25 +136,30 @@ pub fn spawn_duplex(
     automation: crate::template_host::TemplateHost,
     voice_input: crate::voice_input_activity::VoiceInputActivity,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
-    let Some(native_config) = native
-        .config()
-        .ok()
-        .filter(|c| c.devices.microphone_enabled)
-    else {
-        return Ok(None);
+    use ai_ex_domain::NativeInputStatus;
+    let native_config = match native.capture_config() {
+        Ok(Some(config)) if config.devices.microphone_enabled => config,
+        Ok(Some(_)) => {
+            native.set_input_status(NativeInputStatus::Disabled);
+            return Ok(None);
+        }
+        Ok(None) | Err(_) => {
+            native.set_input_status(NativeInputStatus::Unknown);
+            return Ok(None);
+        }
     };
+    native.set_input_status(NativeInputStatus::Preparing);
     let settings = config.duplex.clone();
     Ok(Some(tokio::spawn(async move {
-        if let Err(error) = run_native_capture(
+        let capture = run_native_capture(
             settings,
             native_config.microphone_input,
-            native,
+            Arc::clone(&native),
             runtime,
             automation,
             voice_input,
-        )
-        .await
-        {
+        );
+        if let Err(error) = native.observe_input(capture).await {
             // An unavailable recognizer or input device leaves the control and
             // conversation service alive so the user can correct its settings.
             tracing::error!(%error, "native microphone input unavailable");
@@ -196,6 +207,7 @@ async fn run_native_capture(
         end_silence_frames: settings.end_silence_frames,
         max_utterance_frames: settings.max_utterance_frames,
     })?;
+    native.set_input_status(ai_ex_domain::NativeInputStatus::Ready);
     crate::run_duplex(
         source,
         DuplexController::new(vad, transcriber),

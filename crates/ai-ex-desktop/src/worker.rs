@@ -16,6 +16,8 @@ const HEALTH_REFRESH_TICKS: u8 = 40;
 mod backup_inspection;
 #[path = "worker_desktop.rs"]
 mod desktop;
+#[path = "worker_input_status.rs"]
+mod input_status;
 #[path = "worker_native.rs"]
 mod native;
 #[path = "worker_speech_split.rs"]
@@ -123,6 +125,12 @@ pub enum WorkerEvent {
         snapshot: RuntimeSnapshot,
     },
     VoiceInputUnavailable(u64),
+    NativeInputStatus {
+        generation: u64,
+        instance_id: uuid::Uuid,
+        status: ai_ex_domain::NativeInputStatus,
+    },
+    NativeInputStatusUnavailable(u64),
     HistoryGap(RuntimeSnapshot),
     Memory {
         request_id: u64,
@@ -454,7 +462,8 @@ async fn run_polling(
     let (voice_target, voice_receiver) = tokio::sync::watch::channel(VoiceTarget::default());
     tokio::select! {
         _ = run_primary_polling(client.clone(), events.clone(), persona_epoch, &voice_target) => {},
-        _ = run_voice_sampling(&client, &events, voice_receiver) => {},
+        _ = run_voice_sampling(&client, &events, voice_receiver.clone()) => {},
+        _ = input_status::run(&client, &events, voice_receiver) => {},
     }
 }
 

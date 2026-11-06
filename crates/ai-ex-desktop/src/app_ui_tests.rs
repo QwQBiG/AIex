@@ -374,6 +374,104 @@ fn backup_drop_waiting_is_cleared_when_leaving_memory_page() {
 }
 
 #[test]
+fn native_input_status_rejects_old_instances_and_connections() {
+    let (mut app, events, _sent) = app();
+    app.native_mode = true;
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    app.state.runtime.instance_id = Some(first);
+    let context = egui::Context::default();
+    let has = |output: &egui::FullOutput, label: &str| {
+        output.shapes.iter().any(|shape| {
+            matches!(
+                &shape.shape, egui::Shape::Text(text) if text.galley.job.text == label
+            )
+        })
+    };
+    events
+        .send(WorkerEvent::NativeInputStatus {
+            generation: 0,
+            instance_id: first,
+            status: NativeInputStatus::Ready,
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(has(
+        &render(&mut app, &context, [1000.0, 720.0], vec![]),
+        "语音输入已打开"
+    ));
+    events
+        .send(WorkerEvent::VoiceSamplingGeneration(1))
+        .unwrap();
+    events
+        .send(WorkerEvent::NativeInputStatus {
+            generation: 0,
+            instance_id: first,
+            status: NativeInputStatus::Ready,
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert_eq!(app.native_input_status, NativeInputStatus::Unknown);
+    events
+        .send(WorkerEvent::NativeInputStatus {
+            generation: 1,
+            instance_id: second,
+            status: NativeInputStatus::Unavailable,
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert_eq!(app.native_input_status, NativeInputStatus::Unknown);
+    events
+        .send(WorkerEvent::NativeInputStatus {
+            generation: 1,
+            instance_id: first,
+            status: NativeInputStatus::Unavailable,
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(has(
+        &render(&mut app, &context, [1000.0, 720.0], vec![]),
+        "无法启用语音输入，请检查设备、权限和识别模型"
+    ));
+    events
+        .send(WorkerEvent::NativeInputStatusUnavailable(1))
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(has(
+        &render(&mut app, &context, [1000.0, 720.0], vec![]),
+        "语音输入状态未知"
+    ));
+    events
+        .send(WorkerEvent::NativeInputStatus {
+            generation: 1,
+            instance_id: first,
+            status: NativeInputStatus::Ready,
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    events
+        .send(WorkerEvent::HistoryGap(
+            ai_ex_observability::RuntimeSnapshot {
+                instance_id: Some(second),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+    events
+        .send(WorkerEvent::NativeInputStatus {
+            generation: 1,
+            instance_id: first,
+            status: NativeInputStatus::Ready,
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert_eq!(app.native_input_status, NativeInputStatus::Unknown);
+    events.send(WorkerEvent::Connection(false)).unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert_eq!(app.native_input_status, NativeInputStatus::Unknown);
+}
+
+#[test]
 fn voice_input_indicator_uses_confirmed_fresh_activity_without_changing_dialogue() {
     let (mut app, events, _sent) = app();
     let instance = uuid::Uuid::new_v4();

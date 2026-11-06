@@ -37,6 +37,9 @@ pub enum NativeRequest {
     },
     Settings,
     InputDevices,
+    InputStatus {
+        instance_id: Uuid,
+    },
     SaveSettings {
         expected_revision: u64,
         document: String,
@@ -81,6 +84,10 @@ pub enum NativeReply {
         document: String,
     },
     InputDevices(Vec<NativeInputDevice>),
+    InputStatus {
+        instance_id: Uuid,
+        status: NativeInputStatus,
+    },
     Operation(NativeOperation),
     Accepted,
 }
@@ -90,6 +97,19 @@ pub enum NativeReply {
 pub struct NativeInputDevice {
     pub name: String,
     pub ambiguous: bool,
+}
+
+/// Observed input lifecycle, independent of the saved microphone preference.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum NativeInputStatus {
+    #[default]
+    Unknown,
+    Disabled,
+    Preparing,
+    Ready,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -312,7 +332,7 @@ impl NativeReply {
                 bounded(&operation.package_id, 256, false)?;
                 diagnostic(&operation.error)
             }
-            Self::Accepted => Ok(()),
+            Self::InputStatus { .. } | Self::Accepted => Ok(()),
         }
     }
 }
@@ -333,6 +353,37 @@ fn revision(value: u64) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_status_protocol_roundtrips_without_device_data() {
+        let instance_id = Uuid::new_v4();
+        let request = NativeRequest::InputStatus { instance_id };
+        assert!(request.validate().is_ok());
+        let encoded = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            serde_json::from_str::<NativeRequest>(&encoded).unwrap(),
+            request
+        );
+        for status in [
+            NativeInputStatus::Unknown,
+            NativeInputStatus::Disabled,
+            NativeInputStatus::Preparing,
+            NativeInputStatus::Ready,
+            NativeInputStatus::Unavailable,
+        ] {
+            let reply = NativeReply::InputStatus {
+                instance_id,
+                status,
+            };
+            assert!(reply.validate().is_ok());
+            let encoded = serde_json::to_string(&reply).unwrap();
+            assert!(!encoded.contains("device"));
+            assert_eq!(
+                serde_json::from_str::<NativeReply>(&encoded).unwrap(),
+                reply
+            );
+        }
+    }
 
     #[test]
     fn input_device_reply_is_bounded_and_rejects_duplicate_names() {

@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 
-use ai_ex_domain::{ComponentHealth, PersonaSnapshot, StageSnapshot, SystemEvent};
+use ai_ex_domain::{
+    ComponentHealth, NativeInputStatus, PersonaSnapshot, StageSnapshot, SystemEvent,
+};
 use ai_ex_ui_model::{ApplyOutcome, ConnectionState, UiState};
 use eframe::egui;
 
@@ -89,6 +91,7 @@ pub struct DesktopApp {
     memory: crate::memory_panel::MemoryPanel,
     voice_input_fresh: bool,
     voice_sampling_generation: u64,
+    native_input_status: NativeInputStatus,
     backup_inspection: crate::backup_inspection_panel::BackupInspectionPanel,
     reflex: reflex::ReflexPanel,
     reflex_runtime_ready: bool,
@@ -162,6 +165,7 @@ impl DesktopApp {
             memory: Default::default(),
             voice_input_fresh: false,
             voice_sampling_generation: 0,
+            native_input_status: NativeInputStatus::Unknown,
             backup_inspection: Default::default(),
             reflex: Default::default(),
             reflex_runtime_ready: false,
@@ -307,6 +311,7 @@ impl DesktopApp {
                 }
                 WorkerEvent::Connection(connected) => {
                     self.voice_input_fresh = false;
+                    self.native_input_status = NativeInputStatus::Unknown;
                     self.reflex_runtime_ready = false;
                     self.reflex.disconnected();
                     self.memory.connection_changed();
@@ -329,6 +334,9 @@ impl DesktopApp {
                 WorkerEvent::Snapshot(snapshot) => {
                     let new_voice_instance = snapshot.instance_id.is_some()
                         && snapshot.instance_id != self.state.runtime.instance_id;
+                    if snapshot.instance_id != self.state.runtime.instance_id {
+                        self.native_input_status = NativeInputStatus::Unknown;
+                    }
                     let voice_known = self.state.merge_voice_input(&snapshot);
                     if (self.state.runtime.instance_id.is_none()
                         || snapshot.instance_id == self.state.runtime.instance_id)
@@ -345,6 +353,7 @@ impl DesktopApp {
                 WorkerEvent::VoiceSamplingGeneration(generation) => {
                     self.voice_sampling_generation = generation;
                     self.voice_input_fresh = false;
+                    self.native_input_status = NativeInputStatus::Unknown;
                 }
                 WorkerEvent::VoiceInputSnapshot {
                     generation,
@@ -360,6 +369,27 @@ impl DesktopApp {
                     self.voice_input_fresh = false
                 }
                 WorkerEvent::VoiceInputSnapshot { .. } | WorkerEvent::VoiceInputUnavailable(_) => {}
+                WorkerEvent::NativeInputStatus {
+                    generation,
+                    instance_id,
+                    status,
+                } if generation == self.voice_sampling_generation
+                    && self.state.connection == ConnectionState::Connected =>
+                {
+                    self.native_input_status =
+                        if self.state.runtime.instance_id == Some(instance_id) {
+                            status
+                        } else {
+                            NativeInputStatus::Unknown
+                        };
+                }
+                WorkerEvent::NativeInputStatusUnavailable(generation)
+                    if generation == self.voice_sampling_generation =>
+                {
+                    self.native_input_status = NativeInputStatus::Unknown;
+                }
+                WorkerEvent::NativeInputStatus { .. }
+                | WorkerEvent::NativeInputStatusUnavailable(_) => {}
                 WorkerEvent::Memory { request_id, result } => {
                     self.memory.set_profile(&self.active_persona.profile_id);
                     self.memory
@@ -405,6 +435,9 @@ impl DesktopApp {
                     }
                     let new_voice_instance = snapshot.instance_id.is_some()
                         && snapshot.instance_id != self.state.runtime.instance_id;
+                    if snapshot.instance_id != self.state.runtime.instance_id {
+                        self.native_input_status = NativeInputStatus::Unknown;
+                    }
                     let voice_known = self.state.merge_voice_input(&snapshot);
                     self.state.recover_snapshot(snapshot);
                     self.voice_input_fresh = voice_known || new_voice_instance;

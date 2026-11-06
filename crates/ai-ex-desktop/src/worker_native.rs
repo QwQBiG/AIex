@@ -27,7 +27,7 @@ pub(super) fn route(
         );
     }
     let index = match request {
-        NativeRequest::InputDevices => 3,
+        NativeRequest::InputDevices | NativeRequest::InputStatus { .. } => 3,
         NativeRequest::Cancel { .. } | NativeRequest::StopPreview => 2,
         NativeRequest::State
         | NativeRequest::Packages

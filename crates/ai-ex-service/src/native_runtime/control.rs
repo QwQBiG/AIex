@@ -23,6 +23,10 @@ impl NativeRuntime {
             }
             NativeRequest::Settings => self.settings_reply()?,
             NativeRequest::InputDevices => self.input_devices().await?,
+            NativeRequest::InputStatus { instance_id } => NativeReply::InputStatus {
+                instance_id,
+                status: self.input_status(),
+            },
             NativeRequest::Packages => NativeReply::Packages(self.packages()?),
             NativeRequest::StorageSpace { expected_revision } => {
                 self.storage_space(expected_revision).await?
