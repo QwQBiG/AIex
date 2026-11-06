@@ -33,6 +33,53 @@ fn reports_invalid_selected_fields_without_echoing_untrusted_keys() {
 }
 
 #[test]
+fn checks_legacy_backend_fields_and_preserves_defaults() {
+    let empty = inspect(br#"{}"#).unwrap();
+    assert_eq!(empty["status"], "selected_fields_ok");
+    let nested = inspect(
+        br#"{"ollama":{},"tts":{},"vts":{},"ollama_url":null,"tts_voice":null,"vts_port":0}"#,
+    )
+    .unwrap();
+    assert_eq!(nested["status"], "selected_fields_ok");
+
+    let flat = inspect(br#"{"ollama_url":"http://localhost:11434","ollama_model":"model","tts_voice":"voice","vts_port":8001,"enable_emotional_intelligence":true,"enable_voice_cloning":true,"enable_expression_control":false,"fallback_to_edge_tts":true,"sovits_url":"http://localhost:9880","sovits_timeout":10,"sovits_language":"zh"}"#).unwrap();
+    assert_eq!(flat["status"], "selected_fields_ok");
+    let nested = inspect(br#"{"ollama":{"base_url":"http://localhost:11434","model":"model"},"tts":{"voice":"voice"},"vts":{"port":8001}}"#).unwrap();
+    assert_eq!(nested["status"], "selected_fields_ok");
+    let unknown =
+        inspect(br#"{"ollama":"ignored","ollama_model":"model","vts":{"port":0}}"#).unwrap();
+    assert_eq!(unknown["format"], "flat");
+    assert_eq!(unknown["status"], "selected_fields_ok");
+}
+
+#[test]
+fn rejects_invalid_backends_without_echoing_values() {
+    let secret = "private-audio-secret-123";
+    let input = format!(
+        r#"{{"ollama_url":"{secret}","ollama_model":"","tts_voice":null,"vts_port":0,"enable_emotional_intelligence":true,"enable_voice_cloning":true,"enable_expression_control":"{secret}","fallback_to_edge_tts":1,"sovits_url":"{secret}","sovits_timeout":0,"sovits_language":""}}"#
+    );
+    let report = inspect(input.as_bytes()).unwrap();
+    assert_eq!(report["status"], "selected_fields_invalid");
+    assert_eq!(report["issues"].as_array().unwrap().len(), 9);
+    assert!(!report.to_string().contains(secret));
+
+    let report =
+        inspect(br#"{"ollama":{"base_url":null,"model":false},"tts":"secret","vts":[]}"#).unwrap();
+    assert_eq!(report["issues"].as_array().unwrap().len(), 4);
+    assert!(!report.to_string().contains("secret"));
+}
+
+#[test]
+fn validates_clone_url_format_only_when_legacy_validator_enabled_it() {
+    let disabled = inspect(br#"{"sovits_url":"nonempty"}"#).unwrap();
+    assert_eq!(disabled["status"], "selected_fields_ok");
+    let enabled = inspect(br#"{"enable_emotional_intelligence":true,"enable_voice_cloning":true,"sovits_url":"nonempty"}"#).unwrap();
+    assert_eq!(enabled["issues"][0]["kind"], "invalid_url");
+    let empty = inspect(br#"{"sovits_url":""}"#).unwrap();
+    assert_eq!(empty["issues"][0]["kind"], "expected_nonempty_string");
+}
+
+#[test]
 fn rejects_invalid_json_oversized_input_and_unsafe_options() {
     for bytes in [&b"not-json private"[..], &b"[]"[..]] {
         assert!(inspect(bytes).is_err());

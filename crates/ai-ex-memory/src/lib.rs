@@ -49,7 +49,7 @@ use ai_ex_domain::{
 use async_trait::async_trait;
 use record::MemoryRecord;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
@@ -307,14 +307,33 @@ impl MemoryStore {
             records.push(record);
             self.replace_records(records).await?;
         } else {
+            let line = provenance::memory_line(&record)?;
             let mut file = tokio::fs::OpenOptions::new()
                 .create(true)
+                .read(true)
                 .append(true)
                 .open(&self.inner.path)
                 .await
                 .map_err(|error| AppError::unavailable(error.to_string()))?;
-            let line = provenance::memory_line(&record)?;
-            file.write_all(format!("{line}\n").as_bytes())
+            let size = file
+                .metadata()
+                .await
+                .map_err(|error| AppError::unavailable(error.to_string()))?
+                .len();
+            let needs_separator = if size == 0 {
+                false
+            } else {
+                file.seek(std::io::SeekFrom::End(-1))
+                    .await
+                    .map_err(|error| AppError::unavailable(error.to_string()))?;
+                let mut tail = [0_u8; 1];
+                file.read_exact(&mut tail)
+                    .await
+                    .map_err(|error| AppError::unavailable(error.to_string()))?;
+                tail[0] != b'\n'
+            };
+            let separator = if needs_separator { "\n" } else { "" };
+            file.write_all(format!("{separator}{line}\n").as_bytes())
                 .await
                 .map_err(|error| AppError::unavailable(error.to_string()))?;
             file.flush()

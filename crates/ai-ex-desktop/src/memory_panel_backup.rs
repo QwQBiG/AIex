@@ -182,6 +182,9 @@ impl MemoryPanel {
         action: &mut Option<MemoryRequest>,
     ) {
         ui.weak("备份包含私人记忆及相关线索，会保存在服务记忆文件所在目录；请妥善保管。备份不会清空聊天。");
+        ui.weak(
+            "角色备份会重新整理记录，可能不包含未识别字段；迁移前还需另存完整原始记忆文件副本。",
+        );
         ui.weak("备份编号仅在本次桌面会话保留；关闭应用或服务重启后，请检查原保存目录，无法保证再次查询状态。");
         let mut acknowledged = None;
         if let Some(backups) = self.backups.get(&self.profile_id) {

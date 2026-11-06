@@ -1,5 +1,48 @@
 use super::*;
 
+#[tokio::test]
+async fn append_preserves_existing_record_with_or_without_final_newline() {
+    let existing = serde_json::json!({
+        "schema_version": 2, "record_type": "memory", "id": Uuid::new_v4(),
+        "profile_id": "default", "turn_id": TurnId::new(), "created_ms": 1,
+        "user_text": "synthetic original", "assistant_text": ""
+    })
+    .to_string();
+    for original in [
+        String::new(),
+        format!("{existing}\n"),
+        format!("{existing}\r\n"),
+        existing,
+    ] {
+        let path = std::env::temp_dir().join(format!("memory-append-{}.jsonl", Uuid::new_v4()));
+        tokio::fs::write(&path, &original).await.unwrap();
+        let mut store = MemoryStore::open(&path).await.unwrap();
+        store
+            .remember_kind(
+                MemoryKind::Conversation,
+                TurnId::new(),
+                "synthetic next".into(),
+                String::new(),
+            )
+            .await
+            .unwrap();
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let separator = if !original.is_empty() && !original.ends_with('\n') {
+            "\n"
+        } else {
+            ""
+        };
+        assert!(content.starts_with(&format!("{original}{separator}")));
+        let expected = if original.is_empty() { 1 } else { 2 };
+        assert_eq!(content.lines().count(), expected);
+        let reopened = MemoryStore::open(&path).await.unwrap();
+        assert_eq!(reopened.len().await, expected);
+        drop(store);
+        drop(reopened);
+        super::tests::remove_test_files(&path).await;
+    }
+}
+
 async fn populated_store() -> (PathBuf, MemoryStore) {
     let directory = std::env::temp_dir().join(format!("ai-ex-memory-test-{}", Uuid::new_v4()));
     let mut store = MemoryStore::open(directory.join("memory.jsonl"))
