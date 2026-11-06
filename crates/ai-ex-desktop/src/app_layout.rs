@@ -30,6 +30,9 @@ impl DesktopApp {
         self.poll_character(ui.ctx());
         self.poll_scene(ui.ctx());
         self.appearance.poll(ui.ctx());
+        if self.page != Page::Settings {
+            self.native_desktop.cancel_preview();
+        }
         egui::Panel::top("app_header")
             .resizable(false)
             .frame(

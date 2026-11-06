@@ -250,7 +250,8 @@ impl DesktopApp {
                 WorkerCommand::DesktopRuntime { request_id, .. } => {
                     self.desktop_runtime.receive(request_id, Err(failure))
                 }
-                WorkerCommand::NativeDesktop { request_id, .. } => {
+                WorkerCommand::NativeDesktop { request_id, .. }
+                | WorkerCommand::NativeDesktopPreview { request_id, .. } => {
                     self.native_desktop.receive(request_id, Err(failure))
                 }
                 WorkerCommand::SpeechSplit { request_id, .. } => {
@@ -631,6 +632,15 @@ impl DesktopApp {
     }
 
     fn send(&mut self, command: WorkerCommand) -> bool {
+        if matches!(
+            &command,
+            WorkerCommand::Interrupt
+                | WorkerCommand::EmergencyStop
+                | WorkerCommand::Submit(_)
+                | WorkerCommand::SetPersona(_)
+        ) {
+            self.native_desktop.cancel_preview();
+        }
         if self.worker.commands.send(command).is_err() {
             self.last_error = Some("桌面网络工作线程已停止。".to_owned());
             return false;

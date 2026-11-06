@@ -30,7 +30,7 @@ impl NativeDesktopPanel {
                 if ui.add_enabled(start.is_some(), egui::Button::new("准备所选窗口")).clicked()
                     && let Some(request) = start { requests.push(request); }
             });
-            if let Some(state) = self.confirmed.as_ref() {
+            if let Some(state) = self.confirmed.clone() {
                 ui.label(format!("原生执行 · 已确认 #{}{}", state.revision,
                     if state.available { "" } else { " · 当前不可用" }));
                 if let Some(session) = &state.session {
@@ -42,8 +42,12 @@ impl NativeDesktopPanel {
                         ui.selectable_value(&mut self.manual_mode, true, "手动单步");
                         ui.selectable_value(&mut self.manual_mode, false, "视觉单步（需要视觉模型）");
                     });
-                    if self.manual_mode { self.action.show(ui); }
-                    else { ui.add(egui::TextEdit::multiline(&mut self.goal).hint_text("为视觉单步设置清晰目标").desired_rows(2)); }
+                    if self.manual_mode {
+                        if self.preview_arm.is_some() || self.preview.is_some() || self.preview_pending.is_some() { self.cancel_preview(); }
+                        self.action.show(ui);
+                    } else if ui.add(egui::TextEdit::multiline(&mut self.goal).hint_text("为视觉单步设置清晰目标").desired_rows(2)).changed() {
+                        self.cancel_preview();
+                    }
                     let saved = if session.armed_action.is_some() { "手动动作" }
                         else if !session.goal.is_empty() { "视觉目标" } else { "尚未保存单步内容" };
                     ui.label(format!("服务已确认：{saved}。编辑中的内容需要再次保存。"));
@@ -66,6 +70,20 @@ impl NativeDesktopPanel {
                                 expected_revision: state.revision, session_id: session.session_id });
                         }
                     });
+                    if !self.manual_mode {
+                        ui.weak("只读预览会将所选窗口画面发送给配置的视觉模型（可能为远程），不会发送键鼠。请先保存目标并在专用窗口恢复。");
+                        if self.preview_arm.is_some() {
+                            ui.label("正在等待切回专用窗口（约 3 秒）…");
+                            if ui.button("取消预览").clicked() { self.cancel_preview(); }
+                        } else if ui.add_enabled(self.preview_available(), egui::Button::new("准备只读视觉预览")).clicked() {
+                            self.arm_preview();
+                        }
+                        if let Some(message) = self.preview_message { ui.weak(message); }
+                        if let Some(preview) = &self.preview {
+                            ui.label(preview::summary(&preview.value.action));
+                            ui.weak("建议仅供查看，不能直接执行；画面会交给所配置的视觉模型处理。");
+                        }
+                    }
                     ui.weak("保存后切回专用窗口。启用快捷键后，用 Ctrl + Alt + F9 恢复，F11 执行已保存单步，F8 暂停。每次单步都获取新画面，窗口移动或前台变化时先核对，再恢复。");
                 }
             }
@@ -76,6 +94,7 @@ impl NativeDesktopPanel {
             .filter_map(|request| self.begin(request))
             .collect::<Vec<_>>();
         if emergency {
+            self.cancel_preview();
             commands.push(WorkerCommand::EmergencyStop);
         }
         commands

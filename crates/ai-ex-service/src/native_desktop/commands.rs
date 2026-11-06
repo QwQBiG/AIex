@@ -242,6 +242,9 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
                 }
                 self.step(&mut state, request.clone()).await?;
             }
+            NativeDesktopRequest::PreviewVision { .. } => {
+                return self.preview_vision(&mut state, &request).await;
+            }
             _ => return Err(AppError::protocol("native request was not admitted")),
         }
         self.reply(Vec::new())

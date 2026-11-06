@@ -149,6 +149,14 @@ pub enum NativeDesktopRequest {
         operation_id: Uuid,
         goal: String,
     },
+    /// Analyze one fresh frame without executing the resulting suggestion.
+    PreviewVision {
+        instance_id: Uuid,
+        expected_revision: u64,
+        session_id: Uuid,
+        operation_id: Uuid,
+        goal: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,4 +202,60 @@ pub struct NativeDesktopSnapshot {
 pub struct NativeDesktopReply {
     pub snapshot: NativeDesktopSnapshot,
     pub windows: Vec<NativeWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_preview: Option<NativeVisionPreview>,
+}
+
+/// Read-only suggestion from a captured frame; it cannot be executed as a proposal.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeVisionPreview {
+    pub operation_id: Uuid,
+    pub action: NativeDesktopAction,
+}
+
+impl std::fmt::Debug for NativeVisionPreview {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeVisionPreview")
+            .field("operation_id", &self.operation_id)
+            .field("action", &"<redacted>")
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn preview_reply_remains_compatible_and_debug_redacts_action() {
+        let old = serde_json::json!({
+            "snapshot": {
+                "instance_id": Uuid::new_v4(), "revision": 1,
+                "execution_mode": "native_windows", "available": true, "session": null
+            },
+            "windows": []
+        });
+        let mut reply: NativeDesktopReply = serde_json::from_value(old).unwrap();
+        assert!(reply.vision_preview.is_none());
+        assert!(
+            serde_json::to_value(&reply)
+                .unwrap()
+                .get("vision_preview")
+                .is_none()
+        );
+        reply.vision_preview = Some(NativeVisionPreview {
+            operation_id: Uuid::new_v4(),
+            action: NativeDesktopAction::TypeText {
+                text: "private-preview".into(),
+            },
+        });
+        assert!(!format!("{reply:?}").contains("private-preview"));
+        let encoded = serde_json::to_vec(&reply).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<NativeDesktopReply>(&encoded).unwrap(),
+            reply
+        );
+    }
 }

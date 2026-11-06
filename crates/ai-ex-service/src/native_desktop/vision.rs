@@ -13,8 +13,10 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
         request: &NativeDesktopRequest,
         generation: u64,
     ) -> Result<NativeDesktopAction, AppError> {
-        let NativeDesktopRequest::VisionStep { goal, .. } = request else {
-            return Err(AppError::protocol("vision intent required"));
+        let goal = match request {
+            NativeDesktopRequest::VisionStep { goal, .. }
+            | NativeDesktopRequest::PreviewVision { goal, .. } => goal,
+            _ => return Err(AppError::protocol("vision intent required")),
         };
         let factory = self.vision.as_ref().ok_or_else(|| {
             AppError::configuration("configure a vision model before native vision steps")

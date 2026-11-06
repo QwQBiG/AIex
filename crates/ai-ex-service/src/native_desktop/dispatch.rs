@@ -30,7 +30,7 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
         Ok(self.shared.activity.load(Ordering::Acquire))
     }
 
-    fn guard(&self, generation: u64) -> Result<(), AppError> {
+    pub(super) fn guard(&self, generation: u64) -> Result<(), AppError> {
         if self.shared.closed.load(Ordering::Acquire)
             || self.shared.cancelled.load(Ordering::Acquire)
             || self.shared.activity.load(Ordering::Acquire) != generation

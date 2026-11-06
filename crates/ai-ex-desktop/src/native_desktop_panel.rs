@@ -4,12 +4,14 @@ use ai_ex_domain::{
     AppError, NativeDesktopReply, NativeDesktopRequest, NativeDesktopSnapshot, NativeWindow,
 };
 use eframe::egui;
+use std::sync::{Arc, atomic::AtomicU64};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 mod action;
+mod preview;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod view;
 
 pub struct NativeDesktopPanel {
@@ -29,6 +31,11 @@ pub struct NativeDesktopPanel {
     max_frames: u32,
     max_actions: u32,
     error: Option<String>,
+    preview: Option<preview::DisplayedPreview>,
+    preview_arm: Option<preview::ArmedPreview>,
+    preview_pending: Option<(u64, u64)>,
+    preview_guard: Arc<AtomicU64>,
+    preview_message: Option<&'static str>,
 }
 
 impl Default for NativeDesktopPanel {
@@ -50,6 +57,11 @@ impl Default for NativeDesktopPanel {
             max_frames: 32,
             max_actions: 64,
             error: None,
+            preview: None,
+            preview_arm: None,
+            preview_pending: None,
+            preview_guard: Arc::new(AtomicU64::new(0)),
+            preview_message: None,
         }
     }
 }
@@ -57,28 +69,47 @@ impl Default for NativeDesktopPanel {
 impl NativeDesktopPanel {
     pub fn synchronize(&mut self, instance: Option<Uuid>, connected: bool) {
         if self.instance != instance {
+            self.cancel_preview();
             self.instance = instance;
             self.confirmed = None;
             self.windows.clear();
             self.selection = None;
             self.pending.clear();
+            self.preview_pending = None;
             self.fresh = false;
         }
         if !connected {
+            if self.connected {
+                self.cancel_preview();
+            }
             self.fresh = false;
             self.pending.clear();
+            self.preview_pending = None;
             self.poll_at = None;
         }
         self.connected = connected && instance.is_some();
     }
 
     fn begin(&mut self, request: NativeDesktopRequest) -> Option<WorkerCommand> {
+        if matches!(request, NativeDesktopRequest::PreviewVision { .. }) {
+            return None;
+        }
         if !self.connected || self.pending.len() >= 8 {
             return None;
         }
         let lane = lane(&request);
         if self.pending.values().any(|old| lane == self::lane(old)) {
             return None;
+        }
+        if matches!(
+            request,
+            NativeDesktopRequest::SetGoal { .. }
+                | NativeDesktopRequest::SetAction { .. }
+                | NativeDesktopRequest::Pause { .. }
+                | NativeDesktopRequest::Stop { .. }
+                | NativeDesktopRequest::StartNative { .. }
+        ) {
+            self.cancel_preview();
         }
         self.sequence = self.sequence.checked_add(1)?;
         self.pending.insert(self.sequence, request.clone());
@@ -90,6 +121,13 @@ impl NativeDesktopPanel {
     }
 
     pub fn poll(&mut self) -> Option<WorkerCommand> {
+        if self
+            .preview_arm
+            .as_ref()
+            .is_some_and(|arm| Instant::now() >= arm.send_at)
+        {
+            return self.dispatch_preview();
+        }
         if !self.activated
             || self
                 .poll_at
@@ -105,6 +143,20 @@ impl NativeDesktopPanel {
         let Some(request) = self.pending.remove(&id) else {
             return;
         };
+        let is_preview = matches!(request, NativeDesktopRequest::PreviewVision { .. });
+        if is_preview {
+            let Some((pending_id, generation)) = self.preview_pending.take() else {
+                return;
+            };
+            if pending_id != id
+                || generation
+                    != self
+                        .preview_guard
+                        .load(std::sync::atomic::Ordering::Acquire)
+            {
+                return;
+            }
+        }
         match result {
             Ok(reply) if self.connected && Some(reply.snapshot.instance_id) == self.instance => {
                 if self
@@ -112,7 +164,31 @@ impl NativeDesktopPanel {
                     .as_ref()
                     .is_some_and(|old| old.revision > reply.snapshot.revision)
                 {
+                    if is_preview {
+                        self.preview_message = Some("预览结果已过期，请重新核对。");
+                    }
                     return;
+                }
+                if is_preview {
+                    if self.preview_matches(&request, &reply) {
+                        let session = reply.snapshot.session.as_ref().expect("preview validated");
+                        self.preview =
+                            reply
+                                .vision_preview
+                                .clone()
+                                .map(|value| preview::DisplayedPreview {
+                                    value,
+                                    revision: reply.snapshot.revision,
+                                    session: session.session_id,
+                                });
+                        self.preview_message =
+                            Some("这是截取时的只读建议，未发送键鼠；画面可能已经变化。");
+                    } else {
+                        self.cancel_preview();
+                        self.preview_message = Some("预览结果不再适用，请重新核对。");
+                    }
+                } else {
+                    self.observe_preview_snapshot(&reply);
                 }
                 if matches!(request, NativeDesktopRequest::Windows) {
                     self.windows = reply.windows;
@@ -146,8 +222,17 @@ impl NativeDesktopPanel {
                 self.fresh = true;
                 self.error = None;
             }
-            Ok(_) => {}
+            Ok(_) => {
+                if is_preview {
+                    self.preview_message = Some("预览结果已过期，请重新核对。");
+                }
+            }
             Err(error) => {
+                if is_preview {
+                    self.preview = None;
+                    self.preview_message =
+                        Some("预览未完成或结果未知；不会自动重试，请核对后重新准备。");
+                }
                 self.fresh = false;
                 self.error = Some(format!("操作结果待核对，请刷新；不会自动重试：{error}"));
             }

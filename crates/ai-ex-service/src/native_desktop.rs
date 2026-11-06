@@ -2,6 +2,7 @@
 mod activity;
 mod commands;
 mod dispatch;
+mod preview;
 mod system;
 mod vision;
 
@@ -147,6 +148,7 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
         Ok(NativeDesktopReply {
             snapshot: self.snapshot()?,
             windows,
+            vision_preview: None,
         })
     }
 

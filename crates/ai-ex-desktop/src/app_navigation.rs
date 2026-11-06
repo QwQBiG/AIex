@@ -14,6 +14,7 @@ pub(super) struct RetainedMessage {
 
 impl DesktopApp {
     pub(super) fn request_navigation(&mut self, context: &egui::Context, destination: Destination) {
+        self.native_desktop.cancel_preview();
         if self.confirm_close {
             return;
         }
@@ -81,6 +82,9 @@ impl DesktopApp {
     }
 
     pub(super) fn handle_close_request(&mut self, context: &egui::Context, requested: bool) {
+        if requested {
+            self.native_desktop.cancel_preview();
+        }
         if requested && !self.allow_close && self.has_unsaved_or_in_progress() {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_navigation = None;

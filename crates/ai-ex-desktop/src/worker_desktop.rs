@@ -38,6 +38,7 @@ pub(super) async fn run(
                     NativeDesktopRequest::Stop { .. } => &stop,
                     _ => &native,
                 },
+                WorkerCommand::NativeDesktopPreview { .. } => &native,
                 _ => continue,
             };
             if let Err(error) = lane.try_send(queued)
@@ -67,6 +68,18 @@ async fn execute(
 ) {
     while let Some(queued) = input.recv().await {
         let command = queued.command;
+        if matches!(
+            &command,
+            WorkerCommand::NativeDesktop {
+                request: NativeDesktopRequest::PreviewVision { .. },
+                ..
+            }
+        ) {
+            if !reject_command(events, command, "预览必须通过受控通道发送。") {
+                return;
+            }
+            continue;
+        }
         if epoch.is_some_and(|epoch| {
             let current = epoch.load(Ordering::Acquire);
             current == u64::MAX || current != queued.epoch
@@ -76,6 +89,24 @@ async fn execute(
                 command,
                 "queued desktop command revoked by pause or stop",
             ) {
+                return;
+            }
+            continue;
+        }
+        if let WorkerCommand::NativeDesktopPreview {
+            request,
+            generation,
+            guard,
+            send_before,
+            ..
+        } = &command
+            && (!matches!(request, NativeDesktopRequest::PreviewVision { .. })
+                || *generation == u64::MAX
+                || guard.load(Ordering::Acquire) != *generation
+                || std::time::Instant::now() >= *send_before)
+        {
+            if !reject_command(events, command, "预览请求已取消或等待过久，请重新准备。")
+            {
                 return;
             }
             continue;
@@ -91,6 +122,11 @@ async fn execute(
             WorkerCommand::NativeDesktop {
                 request_id,
                 request,
+            }
+            | WorkerCommand::NativeDesktopPreview {
+                request_id,
+                request,
+                ..
             } => {
                 let result = match client.send(ControlCommand::NativeDesktop { request }).await {
                     Ok(ControlPayload::NativeDesktop(reply)) => Ok(*reply),

@@ -66,6 +66,7 @@ impl Backend {
                     session: None,
                 },
                 windows: Vec::new(),
+                vision_preview: None,
             },
         )))
     }
@@ -206,4 +207,49 @@ async fn stalled_native_and_discovery_do_not_hold_stop_status_or_caption_confirm
         .unwrap()
         .unwrap();
     server.abort();
+}
+
+#[tokio::test]
+async fn cancelled_or_expired_preview_is_rejected_before_network_send() {
+    let client = ControlClient::new("127.0.0.1:1", "x".repeat(32), 8192).unwrap();
+    let (commands, input) = mpsc::channel(2);
+    let (events, replies) = std::sync::mpsc::channel();
+    let guard = Arc::new(AtomicU64::new(1));
+    for (request_id, generation, send_before) in [
+        (1, 0, std::time::Instant::now() + Duration::from_secs(2)),
+        (2, 1, std::time::Instant::now()),
+    ] {
+        commands
+            .send(Queued {
+                command: WorkerCommand::NativeDesktopPreview {
+                    request_id,
+                    request: NativeDesktopRequest::PreviewVision {
+                        instance_id: Uuid::new_v4(),
+                        expected_revision: 1,
+                        session_id: Uuid::new_v4(),
+                        operation_id: Uuid::new_v4(),
+                        goal: "合成目标".into(),
+                    },
+                    generation,
+                    guard: Arc::clone(&guard),
+                    send_before,
+                },
+                epoch: 0,
+            })
+            .await
+            .unwrap();
+    }
+    drop(commands);
+    execute(&client, input, &events, None).await;
+    for id in [1, 2] {
+        let WorkerEvent::NativeDesktop {
+            request_id,
+            result: Err(error),
+        } = replies.recv().unwrap()
+        else {
+            panic!("preview must be rejected")
+        };
+        assert_eq!(request_id, id);
+        assert!(error.message.contains("已取消或等待过久"));
+    }
 }

@@ -146,6 +146,43 @@ fn leaving_native_page_cancels_a_pending_file_drop() {
 }
 
 #[test]
+fn leaving_closing_or_emergency_cancels_due_preview_before_polling() {
+    use crate::native_desktop_panel::tests::{
+        arm_expired_for_app_test, preview_armed_for_app_test, running_preview_panel,
+    };
+    for reason in ["navigation", "page", "close", "emergency"] {
+        let (mut app, _events, mut sent) = app();
+        let (mut panel, snapshot) = running_preview_panel();
+        arm_expired_for_app_test(&mut panel);
+        app.state.runtime.instance_id = Some(snapshot.instance_id);
+        app.native_desktop = panel;
+        app.page = layout::Page::Settings;
+        let context = egui::Context::default();
+        match reason {
+            "navigation" => app.request_navigation(&context, crate::navigation::Destination::Home),
+            "page" => {
+                app.page = layout::Page::Conversation;
+                render(&mut app, &context, [1000.0, 720.0], vec![]);
+            }
+            "close" => app.handle_close_request(&context, true),
+            "emergency" => {
+                assert!(app.send(WorkerCommand::EmergencyStop));
+                assert!(matches!(sent.try_recv(), Ok(WorkerCommand::EmergencyStop)));
+            }
+            _ => unreachable!(),
+        }
+        assert!(!preview_armed_for_app_test(&app.native_desktop), "{reason}");
+        assert!(
+            !matches!(
+                app.native_desktop.poll(),
+                Some(WorkerCommand::NativeDesktopPreview { .. })
+            ),
+            "{reason}"
+        );
+    }
+}
+
+#[test]
 fn empty_chat_suggestion_only_fills_the_draft_and_status_remains_visible() {
     let (mut app, _events, mut sent) = app();
     let context = egui::Context::default();

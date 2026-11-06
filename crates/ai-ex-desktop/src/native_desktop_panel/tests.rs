@@ -10,6 +10,7 @@ fn reply(id: Uuid, revision: u64) -> NativeDesktopReply {
             session: None,
         },
         windows: Vec::new(),
+        vision_preview: None,
     }
 }
 
@@ -139,4 +140,180 @@ fn manual_action_drafts_round_trip_and_only_render_without_injecting_input() {
         .action()
         .is_none()
     );
+}
+
+pub(crate) fn running_preview_panel() -> (NativeDesktopPanel, NativeDesktopSnapshot) {
+    use ai_ex_domain::{NativeDesktopPhase, NativeDesktopSession};
+    let instance = Uuid::new_v4();
+    let session = NativeDesktopSession {
+        session_id: Uuid::new_v4(),
+        operation_id: Uuid::new_v4(),
+        window: NativeWindow {
+            handle: 1,
+            process_id: 2,
+            process_started_ticks: 3,
+            title: "合成窗口".into(),
+            scope: "fixture.exe".into(),
+            left: 0,
+            top: 0,
+            width: 800,
+            height: 600,
+            dpi: 96,
+            foreground: true,
+        },
+        geometry_revision: 1,
+        phase: NativeDesktopPhase::Running,
+        frames: 0,
+        actions: 0,
+        max_frames: 10,
+        max_actions: 10,
+        frame_id: None,
+        last_operation: None,
+        last_outcome: None,
+        goal: "合成目标".into(),
+        armed_action: None,
+    };
+    let snapshot = NativeDesktopSnapshot {
+        instance_id: instance,
+        revision: 1,
+        execution_mode: "native".into(),
+        available: true,
+        session: Some(session),
+    };
+    let mut panel = NativeDesktopPanel::default();
+    panel.synchronize(Some(instance), true);
+    panel.confirmed = Some(snapshot.clone());
+    panel.fresh = true;
+    panel.manual_mode = false;
+    panel.goal = "合成目标".into();
+    (panel, snapshot)
+}
+
+pub(crate) fn arm_expired_for_app_test(panel: &mut NativeDesktopPanel) {
+    panel.arm_preview();
+    panel.preview_arm.as_mut().unwrap().send_at = Instant::now();
+}
+
+pub(crate) fn preview_armed_for_app_test(panel: &NativeDesktopPanel) -> bool {
+    panel.preview_arm.is_some()
+}
+
+#[test]
+fn preview_requires_explicit_delay_and_discards_cancelled_results() {
+    use ai_ex_domain::{NativeDesktopAction, NativeVisionPreview};
+    let (mut panel, mut snapshot) = running_preview_panel();
+    panel.arm_preview();
+    assert!(panel.preview_arm.is_some());
+    panel.cancel_preview();
+    assert!(panel.preview_arm.is_none());
+    assert!(panel.poll().is_none());
+    panel.arm_preview();
+    panel.preview_arm.as_mut().unwrap().send_at = Instant::now();
+    let WorkerCommand::NativeDesktopPreview {
+        request_id,
+        request,
+        generation,
+        guard,
+        ..
+    } = panel.poll().unwrap()
+    else {
+        panic!("expected delayed preview")
+    };
+    let NativeDesktopRequest::PreviewVision { operation_id, .. } = request else {
+        panic!("preview only")
+    };
+    panel.cancel_preview();
+    assert_ne!(guard.load(std::sync::atomic::Ordering::Acquire), generation);
+    snapshot.revision = 3;
+    let stale = NativeDesktopReply {
+        snapshot: snapshot.clone(),
+        windows: vec![],
+        vision_preview: Some(NativeVisionPreview {
+            operation_id,
+            action: NativeDesktopAction::Noop,
+        }),
+    };
+    panel.receive(request_id, Ok(stale));
+    assert!(panel.preview.is_none());
+    assert_eq!(panel.confirmed.as_ref().unwrap().revision, 1);
+
+    panel.arm_preview();
+    panel.preview_arm.as_mut().unwrap().send_at = Instant::now();
+    let WorkerCommand::NativeDesktopPreview {
+        request_id,
+        request,
+        ..
+    } = panel.poll().unwrap()
+    else {
+        panic!("preview")
+    };
+    let NativeDesktopRequest::PreviewVision { operation_id, .. } = request else {
+        panic!("preview")
+    };
+    let text = "私人测试内容";
+    panel.receive(
+        request_id,
+        Ok(NativeDesktopReply {
+            snapshot: snapshot.clone(),
+            windows: vec![],
+            vision_preview: Some(NativeVisionPreview {
+                operation_id,
+                action: NativeDesktopAction::TypeText { text: text.into() },
+            }),
+        }),
+    );
+    let shown = panel.preview.as_ref().unwrap();
+    assert!(!preview::summary(&shown.value.action).contains(text));
+    assert_eq!(shown.revision, 3);
+    let WorkerCommand::NativeDesktop { request_id, .. } =
+        panel.begin(NativeDesktopRequest::Status).unwrap()
+    else {
+        panic!("status")
+    };
+    snapshot.revision += 1;
+    panel.receive(
+        request_id,
+        Ok(NativeDesktopReply {
+            snapshot,
+            windows: vec![],
+            vision_preview: None,
+        }),
+    );
+    assert!(panel.preview.is_none());
+}
+
+#[test]
+fn preview_is_cancelled_when_state_or_connection_changes() {
+    let (mut panel, mut snapshot) = running_preview_panel();
+    panel.arm_preview();
+    let WorkerCommand::NativeDesktop { request_id, .. } =
+        panel.begin(NativeDesktopRequest::Status).unwrap()
+    else {
+        panic!("status")
+    };
+    snapshot.revision += 1;
+    panel.receive(
+        request_id,
+        Ok(NativeDesktopReply {
+            snapshot,
+            windows: vec![],
+            vision_preview: None,
+        }),
+    );
+    assert!(panel.preview_arm.is_none());
+    panel.arm_preview();
+    assert!(panel.preview_arm.is_some());
+    panel.synchronize(panel.instance, false);
+    assert!(panel.preview_arm.is_none());
+}
+
+#[test]
+fn delayed_poll_never_sends_an_expired_preview() {
+    let (mut panel, _) = running_preview_panel();
+    panel.arm_preview();
+    panel.preview_arm.as_mut().unwrap().send_at = Instant::now() - Duration::from_secs(3);
+    assert!(panel.poll().is_none());
+    assert!(panel.preview_arm.is_none());
+    assert!(panel.pending.is_empty());
+    assert!(panel.preview_message.unwrap().contains("未发送"));
 }

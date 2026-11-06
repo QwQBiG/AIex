@@ -9,6 +9,9 @@ use std::io;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+#[path = "preview_tests.rs"]
+mod preview_tests;
+
 #[derive(Clone)]
 struct CaptureBarrier {
     entered: Arc<tokio::sync::Notify>,
