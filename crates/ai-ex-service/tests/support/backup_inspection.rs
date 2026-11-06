@@ -201,3 +201,148 @@ async fn backup_inspection_control_uses_instance_profile_and_redacted_response()
         assert!(!log.contains("private-legacy-marker"));
     }
 }
+
+#[tokio::test]
+async fn merge_candidate_control_produces_separate_file_without_changing_active_memory() {
+    use ai_ex_control::{LegacyCandidateState, MergeCandidatePreviewResult};
+    use ai_ex_domain::MemoryRequest;
+
+    let mut service = ServiceProcess::with_memory("--managed", true, "http://127.0.0.1:1", true);
+    service.ready().await;
+    let ControlPayload::MemoryInspectionContext {
+        instance_id,
+        profile_id,
+        persona_epoch,
+    } = service
+        .client
+        .send(ControlCommand::MemoryInspectionContext)
+        .await
+        .unwrap()
+    else {
+        panic!("memory context expected");
+    };
+    assert!(matches!(
+        service
+            .client
+            .send(ControlCommand::Memory {
+                request: MemoryRequest::Remember {
+                    profile_id: profile_id.clone(),
+                    text: "synthetic active note".into()
+                },
+            })
+            .await
+            .unwrap(),
+        ControlPayload::Memory(_)
+    ));
+    let active_path = service.directory.join("memory.jsonl");
+    let active_before = fs::read(&active_path).unwrap();
+    let record = || {
+        json!({
+            "schema_version": 2, "record_type": "memory", "id": Uuid::new_v4(),
+            "profile_id": profile_id, "turn_id": Uuid::new_v4(), "created_ms": 1,
+            "user_text": "private-merge-text-marker", "assistant_text": "",
+            "unknown_extension": { "preserved": true }
+        })
+        .to_string()
+        .into_bytes()
+    };
+    let base = record();
+    let incoming = record();
+    let base_path = service.directory.join("private-merge-base.jsonl");
+    let incoming_path = service.directory.join("private-merge-incoming.jsonl");
+    fs::write(&base_path, &base).unwrap();
+    fs::write(&incoming_path, &incoming).unwrap();
+    let preview = service
+        .client
+        .send(ControlCommand::PrepareMergeCandidate {
+            instance_id,
+            profile_id: profile_id.clone(),
+            persona_epoch,
+            base_path: SensitivePath::new(base_path.to_string_lossy()),
+            incoming_path: SensitivePath::new(incoming_path.to_string_lossy()),
+        })
+        .await
+        .unwrap();
+    let encoded = serde_json::to_string(&preview).unwrap();
+    assert!(!encoded.contains("private-merge"));
+    let ControlPayload::MergeCandidatePreview {
+        instance_id: returned_instance,
+        profile_id: returned_profile,
+        persona_epoch: returned_epoch,
+        preview_id: Some(preview_id),
+        expires_in_seconds,
+        result: MergeCandidatePreviewResult::Ready { summary },
+    } = preview
+    else {
+        panic!("merge preview expected")
+    };
+    assert_eq!(
+        (returned_instance, returned_profile, returned_epoch),
+        (instance_id, profile_id.clone(), persona_epoch)
+    );
+    assert!(expires_in_seconds > 0);
+    assert_eq!(
+        (summary.base_memory_records, summary.incoming_memory_records),
+        (1, 1)
+    );
+    let operation_id = Uuid::new_v4();
+    let output = service
+        .directory
+        .join(format!("merge-candidate-{operation_id}.jsonl"));
+    let initial = service
+        .client
+        .send(ControlCommand::StartMergeCandidate {
+            instance_id,
+            profile_id: profile_id.clone(),
+            persona_epoch,
+            preview_id,
+            operation_id,
+            output_directory: SensitivePath::new(service.directory.to_string_lossy()),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(initial, ControlPayload::MergeCandidateStatus(_)));
+    let status = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let ControlPayload::MergeCandidateStatus(status) = service
+                .client
+                .send(ControlCommand::MergeCandidateStatus {
+                    instance_id,
+                    operation_id,
+                })
+                .await
+                .unwrap()
+            else {
+                panic!("merge status expected")
+            };
+            if status.state != LegacyCandidateState::Running {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(status.state, LegacyCandidateState::Written { .. }));
+    assert_eq!(status.instance_id, instance_id);
+    assert_eq!(status.operation_id, operation_id);
+    assert_eq!(status.profile_id.as_deref(), Some(profile_id.as_str()));
+    assert_eq!(status.output.unwrap().as_str(), output.to_str().unwrap());
+    let mut expected = base.clone();
+    expected.push(b'\n');
+    expected.extend_from_slice(&incoming);
+    assert_eq!(fs::read(&output).unwrap(), expected);
+    assert_eq!(fs::read(&base_path).unwrap(), base);
+    assert_eq!(fs::read(&incoming_path).unwrap(), incoming);
+    assert_eq!(fs::read(&active_path).unwrap(), active_before);
+    drop(service.child.stdin.take());
+    service.exited().await;
+    assert_eq!(fs::read(&active_path).unwrap(), active_before);
+    for name in ["stdout.log", "stderr.log"] {
+        let log = fs::read_to_string(service.directory.join(name)).unwrap();
+        assert!(!log.contains("private-merge"));
+    }
+    for path in [&base_path, &incoming_path, &output] {
+        fs::remove_file(path).unwrap();
+    }
+}

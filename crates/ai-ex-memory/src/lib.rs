@@ -12,7 +12,10 @@ mod management;
 mod migration;
 pub use backup::MemoryBackup;
 pub use backup_inspection::{BackupInspection, inspect_profile_backup};
-pub use candidate_merge::{MemoryMergeCandidate, MemoryMergeReport, merge_profile_candidates};
+pub use candidate_merge::{
+    MemoryMergeCandidate, MemoryMergeError, MemoryMergeReport, merge_profile_candidates,
+    merge_profile_candidates_checked,
+};
 pub use knowledge::{MediaStats, observation_media};
 pub use maintenance::MediaMaintenanceReport;
 pub use migration::{MemoryMigrationReport, migrate_jsonl};

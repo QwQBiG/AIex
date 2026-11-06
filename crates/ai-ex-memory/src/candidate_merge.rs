@@ -35,6 +35,21 @@ pub struct MemoryMergeCandidate {
     pub report: MemoryMergeReport,
 }
 
+/// Public, content-free reason for rejecting a candidate merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryMergeError {
+    InvalidData,
+    ProfileOrVersion,
+    LimitExceeded,
+    MemoryIdentityOverlap,
+    EntityIdentityOverlap,
+    SourceAssociationOverlap,
+    UnstableSources,
+    EmbeddingSpaceOverlap,
+    EmbeddingDimensionsConflict,
+    EmptyInputs,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "record_type", rename_all = "snake_case")]
 enum Header {
@@ -71,15 +86,13 @@ fn source_key(source: &MemoryEntitySource) -> SourceKey {
     (source.entity_id, memory)
 }
 
-fn invalid() -> AppError {
-    AppError::configuration("invalid or unsupported memory candidate")
+fn invalid() -> MemoryMergeError {
+    MemoryMergeError::InvalidData
 }
 
-fn parse_input(bytes: &[u8], profile: &str) -> Result<Input, AppError> {
+fn parse_input(bytes: &[u8], profile: &str) -> Result<Input, MemoryMergeError> {
     if bytes.len() > MAX_BYTES {
-        return Err(AppError::configuration(
-            "memory candidate exceeds size limit",
-        ));
+        return Err(MemoryMergeError::LimitExceeded);
     }
     let content = std::str::from_utf8(bytes).map_err(|_| invalid())?;
     let mut rows = 0;
@@ -87,9 +100,7 @@ fn parse_input(bytes: &[u8], profile: &str) -> Result<Input, AppError> {
     for line in content.lines().filter(|line| !line.trim().is_empty()) {
         rows += 1;
         if rows > MAX_ROWS {
-            return Err(AppError::configuration(
-                "memory candidate exceeds row limit",
-            ));
+            return Err(MemoryMergeError::LimitExceeded);
         }
         unique_json::validate(line).map_err(|_| invalid())?;
         let header: Header = serde_json::from_str(line).map_err(|_| invalid())?;
@@ -111,9 +122,7 @@ fn parse_input(bytes: &[u8], profile: &str) -> Result<Input, AppError> {
             }
         };
         if version != Some(SCHEMA_VERSION) || row_profile.as_deref() != Some(profile) {
-            return Err(AppError::configuration(
-                "memory candidate profile or version does not match",
-            ));
+            return Err(MemoryMergeError::ProfileOrVersion);
         }
     }
     // Parser diagnostics can contain untrusted private values.
@@ -122,9 +131,7 @@ fn parse_input(bytes: &[u8], profile: &str) -> Result<Input, AppError> {
         if original_sources.get(&source_key(source)) == Some(&MemoryEntitySourceStatus::Active)
             && source.status != MemoryEntitySourceStatus::Active
         {
-            return Err(AppError::configuration(
-                "memory candidate has unstable active sources",
-            ));
+            return Err(MemoryMergeError::UnstableSources);
         }
     }
     Ok(Input { document, rows })
@@ -146,8 +153,18 @@ pub fn merge_profile_candidates(
     incoming: &[u8],
     profile: &str,
 ) -> Result<MemoryMergeCandidate, AppError> {
+    merge_profile_candidates_checked(base, incoming, profile)
+        .map_err(|_| AppError::configuration("invalid or conflicting memory candidate"))
+}
+
+/// Like `merge_profile_candidates`, with content-free, typed rejection reasons.
+pub fn merge_profile_candidates_checked(
+    base: &[u8],
+    incoming: &[u8],
+    profile: &str,
+) -> Result<MemoryMergeCandidate, MemoryMergeError> {
     if profile.trim().is_empty() || profile.chars().count() > 128 {
-        return Err(AppError::configuration("invalid memory candidate profile"));
+        return Err(MemoryMergeError::ProfileOrVersion);
     }
     let base_input = parse_input(base, profile)?;
     let incoming_input = parse_input(incoming, profile)?;
@@ -155,10 +172,11 @@ pub fn merge_profile_candidates(
         .rows
         .checked_add(incoming_input.rows)
         .ok_or_else(invalid)?;
-    if rows == 0 || rows > MAX_ROWS {
-        return Err(AppError::configuration(
-            "memory candidate row count is unsupported",
-        ));
+    if rows == 0 {
+        return Err(MemoryMergeError::EmptyInputs);
+    }
+    if rows > MAX_ROWS {
+        return Err(MemoryMergeError::LimitExceeded);
     }
     let base_records: BTreeSet<_> = base_input.document.records.iter().map(|r| r.id).collect();
     if incoming_input
@@ -167,7 +185,7 @@ pub fn merge_profile_candidates(
         .iter()
         .any(|r| base_records.contains(&r.id))
     {
-        return Err(AppError::configuration("memory identities overlap"));
+        return Err(MemoryMergeError::MemoryIdentityOverlap);
     }
     let base_entities: BTreeSet<_> = base_input
         .document
@@ -183,7 +201,7 @@ pub fn merge_profile_candidates(
         .iter()
         .any(|c| base_entities.contains(&c.id))
     {
-        return Err(AppError::configuration("entity identities overlap"));
+        return Err(MemoryMergeError::EntityIdentityOverlap);
     }
     let base_sources: BTreeSet<_> = base_input
         .document
@@ -199,7 +217,7 @@ pub fn merge_profile_candidates(
         .iter()
         .any(|s| base_sources.contains(&source_key(s)))
     {
-        return Err(AppError::configuration("source associations overlap"));
+        return Err(MemoryMergeError::SourceAssociationOverlap);
     }
     let base_spaces = embedding_spaces(&base_input)?;
     let incoming_spaces = embedding_spaces(&incoming_input)?;
@@ -207,15 +225,11 @@ pub fn merge_profile_candidates(
         .keys()
         .any(|space| base_spaces.contains_key(space))
     {
-        return Err(AppError::configuration(
-            "memory embedding spaces overlap without verified identity",
-        ));
+        return Err(MemoryMergeError::EmbeddingSpaceOverlap);
     }
     let space_count = base_spaces.len() + incoming_spaces.len();
     if space_count > MAX_SPACES {
-        return Err(AppError::configuration(
-            "memory embedding spaces exceed limit",
-        ));
+        return Err(MemoryMergeError::LimitExceeded);
     }
     let separator = usize::from(!base.is_empty() && !incoming.is_empty() && !base.ends_with(b"\n"));
     let size = base
@@ -224,9 +238,7 @@ pub fn merge_profile_candidates(
         .and_then(|n| n.checked_add(incoming.len()))
         .ok_or_else(invalid)?;
     if size > MAX_BYTES {
-        return Err(AppError::configuration(
-            "merged memory candidate exceeds size limit",
-        ));
+        return Err(MemoryMergeError::LimitExceeded);
     }
     let mut content = Vec::with_capacity(size);
     content.extend_from_slice(base);
@@ -255,7 +267,7 @@ pub fn merge_profile_candidates(
     Ok(MemoryMergeCandidate { content, report })
 }
 
-fn embedding_spaces(input: &Input) -> Result<BTreeMap<&str, usize>, AppError> {
+fn embedding_spaces(input: &Input) -> Result<BTreeMap<&str, usize>, MemoryMergeError> {
     let mut spaces = BTreeMap::new();
     for record in &input.document.records {
         if let Some(embedding) = &record.embedding
@@ -263,9 +275,7 @@ fn embedding_spaces(input: &Input) -> Result<BTreeMap<&str, usize>, AppError> {
                 spaces.insert(embedding.space.as_str(), embedding.values.len())
             && dimensions != embedding.values.len()
         {
-            return Err(AppError::configuration(
-                "memory embedding dimensions conflict",
-            ));
+            return Err(MemoryMergeError::EmbeddingDimensionsConflict);
         }
     }
     Ok(spaces)

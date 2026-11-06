@@ -11,14 +11,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use ai_ex_control::LegacyMemoryBackupInspection;
+use ai_ex_control::{LegacyMemoryBackupInspection, MemoryMergeConflict, MemoryMergeSummary};
 use ai_ex_domain::AppError;
 use ai_ex_memory::BackupInspection;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::{Semaphore, oneshot, watch};
 
-use crate::backup_inspection_worker::{MAX_FRAME, Reply, Request, WORKER_MODE};
+#[cfg(test)]
+use crate::backup_inspection_worker::Request;
+use crate::backup_inspection_worker::{MAX_FRAME, Reply, WORKER_MODE};
 
 const REAP_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -33,6 +35,15 @@ pub(crate) enum CandidateOutcome {
     Written { temporary_retained: bool },
     Rejected,
     Uncertain,
+}
+
+pub(crate) enum MergePreviewOutcome {
+    Ready {
+        summary: MemoryMergeSummary,
+        base_digest: [u8; 32],
+        incoming_digest: [u8; 32],
+    },
+    Conflict(MemoryMergeConflict),
 }
 
 impl PendingInspection {
@@ -66,6 +77,22 @@ impl PendingInspection {
             }
             Reply::CandidateRejected => Ok(CandidateOutcome::Rejected),
             Reply::CandidateUncertain => Ok(CandidateOutcome::Uncertain),
+            _ => Err(invalid()),
+        }
+    }
+
+    pub(crate) async fn wait_merge_preview(self) -> Result<MergePreviewOutcome, AppError> {
+        match self.0.await.map_err(|_| unavailable())?? {
+            Reply::MergeReady {
+                summary,
+                base_digest,
+                incoming_digest,
+            } => Ok(MergePreviewOutcome::Ready {
+                summary,
+                base_digest,
+                incoming_digest,
+            }),
+            Reply::MergeConflict { reason } => Ok(MergePreviewOutcome::Conflict(reason)),
             _ => Err(invalid()),
         }
     }
@@ -108,9 +135,9 @@ impl BackupInspector {
         })
     }
 
-    pub(crate) fn start(
+    pub(crate) fn start<T: serde::Serialize>(
         &self,
-        request: Request,
+        request: T,
         deadline: Duration,
     ) -> Result<PendingInspection, AppError> {
         if self.inner.closed.load(Ordering::Acquire)
@@ -282,6 +309,16 @@ async fn exchange(child: &mut Child, encoded: &[u8]) -> Result<Reply, AppError> 
         Reply::LegacyReady { summary, digest } if valid_legacy_summary(&summary) => {
             Ok(Reply::LegacyReady { summary, digest })
         }
+        Reply::MergeReady {
+            summary,
+            base_digest,
+            incoming_digest,
+        } if valid_merge_summary(&summary) => Ok(Reply::MergeReady {
+            summary,
+            base_digest,
+            incoming_digest,
+        }),
+        Reply::MergeConflict { reason } => Ok(Reply::MergeConflict { reason }),
         Reply::CandidateWritten { temporary_retained } => {
             Ok(Reply::CandidateWritten { temporary_retained })
         }
@@ -289,6 +326,20 @@ async fn exchange(child: &mut Child, encoded: &[u8]) -> Result<Reply, AppError> 
         Reply::CandidateUncertain => Ok(Reply::CandidateUncertain),
         _ => Err(invalid()),
     }
+}
+
+fn valid_merge_summary(summary: &MemoryMergeSummary) -> bool {
+    summary
+        .base_memory_records
+        .saturating_add(summary.incoming_memory_records)
+        .saturating_add(summary.entity_candidates)
+        .saturating_add(summary.source_associations)
+        <= 50_000
+        && summary.inactive_source_associations <= summary.source_associations
+        && summary.distinct_embedding_spaces <= 16
+        && !(summary.base_empty && summary.incoming_empty)
+        && (!summary.base_empty || summary.base_memory_records == 0)
+        && (!summary.incoming_empty || summary.incoming_memory_records == 0)
 }
 
 fn valid_legacy_summary(summary: &LegacyMemoryBackupInspection) -> bool {

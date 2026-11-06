@@ -20,7 +20,8 @@ pub use ai_ex_observability::{RuntimeTiming, TurnTiming};
 pub use client::ControlClient;
 pub use protocol::{
     ControlCommand, ControlPayload, ControlRequest, ControlResponse, LegacyCandidateState,
-    LegacyCandidateStatus, LegacyMemoryBackupInspection, MemoryBackupInspection, MemoryReply,
+    LegacyCandidateStatus, LegacyMemoryBackupInspection, MemoryBackupInspection,
+    MemoryMergeConflict, MemoryMergeSummary, MemoryReply, MergeCandidatePreviewResult,
     SensitivePath,
 };
 pub use server::{ControlBackend, ControlServer};

@@ -58,6 +58,25 @@ pub enum ControlCommand {
         instance_id: Uuid,
         operation_id: Uuid,
     },
+    PrepareMergeCandidate {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        base_path: SensitivePath,
+        incoming_path: SensitivePath,
+    },
+    StartMergeCandidate {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        preview_id: Uuid,
+        operation_id: Uuid,
+        output_directory: SensitivePath,
+    },
+    MergeCandidateStatus {
+        instance_id: Uuid,
+        operation_id: Uuid,
+    },
     SetSpeechSplit {
         instance_id: Uuid,
         expected_revision: u64,
@@ -121,6 +140,15 @@ pub enum ControlPayload {
         summary: LegacyMemoryBackupInspection,
     },
     LegacyCandidateStatus(LegacyCandidateStatus),
+    MergeCandidatePreview {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        preview_id: Option<Uuid>,
+        expires_in_seconds: u64,
+        result: MergeCandidatePreviewResult,
+    },
+    MergeCandidateStatus(LegacyCandidateStatus),
     SpeechSplit {
         instance_id: Uuid,
         revision: u64,
@@ -207,6 +235,41 @@ pub enum LegacyCandidateState {
     Rejected,
     CapacityReached,
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryMergeSummary {
+    pub base_memory_records: usize,
+    pub incoming_memory_records: usize,
+    pub entity_candidates: usize,
+    pub source_associations: usize,
+    pub inactive_source_associations: usize,
+    pub distinct_embedding_spaces: usize,
+    pub base_empty: bool,
+    pub incoming_empty: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryMergeConflict {
+    InvalidData,
+    ProfileOrVersion,
+    LimitExceeded,
+    MemoryIdentityOverlap,
+    EntityIdentityOverlap,
+    SourceAssociationOverlap,
+    UnstableSources,
+    EmbeddingSpaceOverlap,
+    EmbeddingDimensionsConflict,
+    EmptyInputs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MergeCandidatePreviewResult {
+    Ready { summary: MemoryMergeSummary },
+    Conflict { reason: MemoryMergeConflict },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -13,6 +13,7 @@ mod diagnostic_health;
 mod events;
 mod legacy_candidate;
 mod lifecycle;
+mod merge_candidate;
 mod native_desktop;
 mod native_desktop_port;
 mod native_ports;
@@ -1541,6 +1542,7 @@ struct ServiceControl {
     persona_epoch: Arc<AtomicU64>,
     backup_inspector: Result<backup_inspection_coordinator::BackupInspector, AppError>,
     legacy_candidates: Arc<legacy_candidate::LegacyCandidates>,
+    merge_candidates: Arc<merge_candidate::MergeCandidates>,
     native: Option<Arc<NativeRuntime>>,
     native_desktop: Option<native_desktop::NativeDesktopHost>,
     desktop_runtime: Option<desktop_runtime::DesktopRuntime>,
@@ -1628,6 +1630,44 @@ impl ControlBackend for ServiceControl {
                 self.legacy_candidate_status(instance_id, operation_id)
                     .await
             }
+            ControlCommand::PrepareMergeCandidate {
+                instance_id,
+                profile_id,
+                persona_epoch,
+                base_path,
+                incoming_path,
+            } => {
+                self.prepare_merge_candidate(
+                    instance_id,
+                    profile_id,
+                    persona_epoch,
+                    base_path,
+                    incoming_path,
+                )
+                .await
+            }
+            ControlCommand::StartMergeCandidate {
+                instance_id,
+                profile_id,
+                persona_epoch,
+                preview_id,
+                operation_id,
+                output_directory,
+            } => {
+                self.start_merge_candidate(merge_candidate::StartMergeCandidate {
+                    instance_id,
+                    profile_id,
+                    persona_epoch,
+                    preview_id,
+                    operation_id,
+                    output_directory,
+                })
+                .await
+            }
+            ControlCommand::MergeCandidateStatus {
+                instance_id,
+                operation_id,
+            } => self.merge_candidate_status(instance_id, operation_id).await,
             ControlCommand::Native { request } => {
                 request.validate()?;
                 let native = self.native.as_ref().ok_or_else(|| {
@@ -1961,6 +2001,7 @@ async fn spawn_control(
         persona_epoch: Arc::new(AtomicU64::new(0)),
         backup_inspector: inspector.clone(),
         legacy_candidates: Arc::default(),
+        merge_candidates: Arc::default(),
         stage,
         automation,
         native,

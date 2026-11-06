@@ -188,3 +188,120 @@ async fn legacy_candidate_uses_checked_bytes_and_never_overwrites() {
     fs::remove_file(output).unwrap();
     fs::remove_dir(directory).unwrap();
 }
+
+#[tokio::test]
+async fn merge_candidate_real_worker_checks_both_copies_and_never_overwrites() {
+    use backup_inspection_coordinator::{CandidateOutcome, MergePreviewOutcome};
+    use backup_inspection_worker::{MergeRequest, MergeWrite};
+
+    let directory = std::env::temp_dir().join(format!("merge-worker-{}", Uuid::new_v4()));
+    fs::create_dir(&directory).unwrap();
+    let base_path = directory.join("base.jsonl");
+    let incoming_path = directory.join("incoming.jsonl");
+    let output_path = directory.join("candidate.jsonl");
+    let make_record = || {
+        json!({
+            "schema_version":2,"record_type":"memory","id":Uuid::new_v4(),
+            "profile_id":"synthetic","turn_id":Uuid::new_v4(),"created_ms":1,
+            "user_text":"private-text-marker","assistant_text":"",
+            "unknown_extension":{"retained":true}
+        })
+        .to_string()
+        .into_bytes()
+    };
+    let base = make_record();
+    let incoming = make_record();
+    fs::write(&base_path, &base).unwrap();
+    fs::write(&incoming_path, &incoming).unwrap();
+    let inspector =
+        BackupInspector::new(PathBuf::from(env!("CARGO_BIN_EXE_ai-ex-service"))).unwrap();
+    let request = |write| MergeRequest {
+        base_path: base_path.to_str().unwrap().into(),
+        incoming_path: incoming_path.to_str().unwrap().into(),
+        profile: "synthetic".into(),
+        write,
+    };
+    let MergePreviewOutcome::Ready {
+        summary,
+        base_digest,
+        incoming_digest,
+    } = inspector
+        .start(request(None), Duration::from_secs(12))
+        .unwrap()
+        .wait_merge_preview()
+        .await
+        .unwrap()
+    else {
+        panic!("preview failed")
+    };
+    assert_eq!(
+        (summary.base_memory_records, summary.incoming_memory_records),
+        (1, 1)
+    );
+    assert!(!serde_json::to_string(&summary).unwrap().contains("private"));
+    let write = || {
+        Some(MergeWrite {
+            base_digest,
+            incoming_digest,
+            output: output_path.to_str().unwrap().into(),
+        })
+    };
+    for path in [&base_path, &incoming_path] {
+        let original = fs::read(path).unwrap();
+        fs::write(path, make_record()).unwrap();
+        assert!(matches!(
+            inspector
+                .start(request(write()), Duration::from_secs(12))
+                .unwrap()
+                .wait_candidate()
+                .await
+                .unwrap(),
+            CandidateOutcome::Rejected
+        ));
+        assert!(!output_path.exists());
+        fs::write(path, original).unwrap();
+    }
+    assert!(matches!(
+        inspector
+            .start(request(write()), Duration::from_secs(12))
+            .unwrap()
+            .wait_candidate()
+            .await
+            .unwrap(),
+        CandidateOutcome::Written {
+            temporary_retained: false
+        }
+    ));
+    let mut expected = base.clone();
+    expected.push(b'\n');
+    expected.extend_from_slice(&incoming);
+    assert_eq!(fs::read(&output_path).unwrap(), expected);
+    assert!(matches!(
+        inspector
+            .start(request(write()), Duration::from_secs(12))
+            .unwrap()
+            .wait_candidate()
+            .await
+            .unwrap(),
+        CandidateOutcome::Uncertain
+    ));
+    assert_eq!(fs::read(&output_path).unwrap(), expected);
+    assert_eq!(fs::read(&base_path).unwrap(), base);
+    assert_eq!(fs::read(&incoming_path).unwrap(), incoming);
+    fs::write(&incoming_path, &base).unwrap();
+    assert!(matches!(
+        inspector
+            .start(request(None), Duration::from_secs(12))
+            .unwrap()
+            .wait_merge_preview()
+            .await
+            .unwrap(),
+        MergePreviewOutcome::Conflict(ai_ex_control::MemoryMergeConflict::MemoryIdentityOverlap)
+    ));
+    fs::write(&incoming_path, &incoming).unwrap();
+    inspector.shutdown().await.unwrap();
+    for path in [&base_path, &incoming_path, &output_path] {
+        fs::remove_file(path).unwrap();
+    }
+    fs::remove_dir(directory).unwrap();
+}

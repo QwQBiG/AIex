@@ -40,6 +40,9 @@ async fn execute_with<F, Fut>(
                 | ControlCommand::PrepareLegacyCandidate { .. }
                 | ControlCommand::StartLegacyCandidate { .. }
                 | ControlCommand::LegacyCandidateStatus { .. }
+                | ControlCommand::PrepareMergeCandidate { .. }
+                | ControlCommand::StartMergeCandidate { .. }
+                | ControlCommand::MergeCandidateStatus { .. }
         ) {
             send(command)
                 .await

@@ -9,13 +9,24 @@ use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-use ai_ex_control::LegacyMemoryBackupInspection;
+use ai_ex_control::{LegacyMemoryBackupInspection, MemoryMergeConflict, MemoryMergeSummary};
 use ai_ex_memory::{BackupInspection, inspect_profile_backup};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const WORKER_MODE: &str = "--private-inspect-memory-backup";
 pub(super) const MAX_FRAME: usize = 8192;
 const MAX_BACKUP_BYTES: u64 = 32 * 1024 * 1024;
+
+#[path = "merge_candidate_worker.rs"]
+mod merge;
+pub(super) use merge::{MergeRequest, MergeWrite};
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WorkerRequest {
+    Merge(MergeRequest),
+    Single(Request),
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,6 +59,14 @@ pub(super) enum Reply {
         summary: LegacyMemoryBackupInspection,
         digest: [u8; 32],
     },
+    MergeReady {
+        summary: MemoryMergeSummary,
+        base_digest: [u8; 32],
+        incoming_digest: [u8; 32],
+    },
+    MergeConflict {
+        reason: MemoryMergeConflict,
+    },
     CandidateWritten {
         temporary_retained: bool,
     },
@@ -67,8 +86,9 @@ pub(crate) fn run_stdio() -> io::Result<()> {
     }
     let mut frame = vec![0; length];
     input.read_exact(&mut frame)?;
-    let reply = match serde_json::from_slice::<Request>(&frame) {
-        Ok(request) => inspect(request),
+    let reply = match serde_json::from_slice::<WorkerRequest>(&frame) {
+        Ok(WorkerRequest::Single(request)) => inspect(request),
+        Ok(WorkerRequest::Merge(request)) => merge::inspect(request),
         Err(_) => Reply::Invalid,
     };
     let encoded = serde_json::to_vec(&reply).map_err(|_| io::Error::other("invalid reply"))?;

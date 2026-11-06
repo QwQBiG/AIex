@@ -14,6 +14,8 @@ use crate::worker::WorkerCommand;
 
 #[path = "backup_candidate_panel.rs"]
 mod candidate;
+#[path = "backup_merge_panel.rs"]
+mod merge;
 
 #[cfg(test)]
 #[path = "backup_inspection_panel_tests.rs"]
@@ -65,6 +67,23 @@ enum Pending {
         id: u64,
         operation_id: Uuid,
     },
+    MergeContext {
+        id: u64,
+        generation: u64,
+    },
+    MergePreview {
+        id: u64,
+        generation: u64,
+        context: Context,
+    },
+    MergeStart {
+        id: u64,
+        operation_id: Uuid,
+    },
+    MergeQuery {
+        id: u64,
+        operation_id: Uuid,
+    },
 }
 
 #[derive(Default)]
@@ -84,6 +103,7 @@ pub struct BackupInspectionPanel {
     result: Option<InspectionResult>,
     feedback: Option<&'static str>,
     candidate: candidate::CandidatePanel,
+    merge: merge::MergePanel,
 }
 
 impl BackupInspectionPanel {
@@ -99,6 +119,7 @@ impl BackupInspectionPanel {
         let ready = ready && instance.is_some();
         if identity_changed || persona_changed || (self.ready && !ready) {
             self.invalidate_candidate();
+            self.invalidate_merge();
             self.cancel_drop();
             self.drop_message = None;
             self.revoke_queued();
@@ -107,6 +128,7 @@ impl BackupInspectionPanel {
             self.feedback = None;
             if identity_changed {
                 self.path.clear();
+                self.clear_merge_sources();
             }
         }
         self.instance = instance;
@@ -117,6 +139,7 @@ impl BackupInspectionPanel {
 
     fn path_edited(&mut self) {
         self.invalidate_candidate();
+        self.invalidate_merge();
         self.cancel_drop();
         self.drop_message = None;
         self.revoke_queued();
@@ -140,6 +163,7 @@ impl BackupInspectionPanel {
     pub fn arm_drop(&mut self) {
         if self.ready {
             self.invalidate_candidate();
+            self.invalidate_merge();
             self.revoke_queued();
             self.pending = None;
             self.result = None;
@@ -225,6 +249,7 @@ impl BackupInspectionPanel {
             return None;
         }
         self.invalidate_candidate();
+        self.invalidate_merge();
         self.result = None;
         self.feedback = Some("正在确认当前角色…");
         let generation = self.path_generation;
@@ -248,11 +273,24 @@ impl BackupInspectionPanel {
             | Pending::CandidateContext { id, .. }
             | Pending::CandidatePreview { id, .. }
             | Pending::CandidateStart { id, .. }
-            | Pending::CandidateQuery { id, .. } => *id,
+            | Pending::CandidateQuery { id, .. }
+            | Pending::MergeContext { id, .. }
+            | Pending::MergePreview { id, .. }
+            | Pending::MergeStart { id, .. }
+            | Pending::MergeQuery { id, .. } => *id,
         };
         if id != request_id {
             self.pending = Some(pending);
             return None;
+        }
+        if matches!(
+            pending,
+            Pending::MergeContext { .. }
+                | Pending::MergePreview { .. }
+                | Pending::MergeStart { .. }
+                | Pending::MergeQuery { .. }
+        ) {
+            return self.receive_merge(pending, reply);
         }
         if matches!(
             pending,
@@ -409,6 +447,9 @@ impl BackupInspectionPanel {
                 }
                 if let Some(candidate_command) = self.show_candidate(ui) {
                     command = Some(candidate_command);
+                }
+                if let Some(merge_command) = self.show_merge(ui) {
+                    command = Some(merge_command);
                 }
             });
         command

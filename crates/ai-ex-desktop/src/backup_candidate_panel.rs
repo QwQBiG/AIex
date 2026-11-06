@@ -47,6 +47,10 @@ struct Tracked {
 }
 
 impl BackupInspectionPanel {
+    pub(super) fn candidate_tracking(&self) -> bool {
+        self.candidate.tracked.is_some()
+    }
+
     pub(super) fn invalidate_candidate(&mut self) {
         self.candidate.preview = None;
         self.candidate.confirmation = None;
@@ -58,12 +62,13 @@ impl BackupInspectionPanel {
     }
 
     pub fn candidate_unresolved(&self) -> bool {
-        self.candidate.tracked.as_ref().is_some_and(|tracked| {
-            matches!(
-                tracked.state,
-                LegacyCandidateState::Running | LegacyCandidateState::Unknown
-            )
-        })
+        self.merge_unresolved()
+            || self.candidate.tracked.as_ref().is_some_and(|tracked| {
+                matches!(
+                    tracked.state,
+                    LegacyCandidateState::Running | LegacyCandidateState::Unknown
+                )
+            })
     }
 
     fn prepare_candidate(&mut self) -> Option<WorkerCommand> {
@@ -73,11 +78,13 @@ impl BackupInspectionPanel {
             || self.format != BackupFormat::Legacy
             || self.path.trim().is_empty()
             || self.candidate.tracked.is_some()
+            || self.merge_tracking()
             || self.path_generation == u64::MAX
             || self.guard.load(Ordering::Acquire) == u64::MAX
         {
             return None;
         }
+        self.invalidate_merge();
         self.candidate.preview = None;
         self.candidate.confirmation = None;
         self.candidate.feedback = Some("正在重新核对备份和当前角色…");
@@ -325,6 +332,7 @@ impl BackupInspectionPanel {
             || self.profile != confirmation.context.profile
             || self.path_generation != confirmation.path_generation
             || self.candidate.tracked.is_some()
+            || self.merge_tracking()
             || self.guard.load(Ordering::Acquire) == u64::MAX
             || self.candidate.preview.as_ref().is_none_or(|preview| {
                 preview.preview_id != confirmation.preview_id
