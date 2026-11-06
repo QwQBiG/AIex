@@ -33,6 +33,7 @@ impl NativeDesktopPanel {
             && !session.goal.trim().is_empty()
             && session.goal == self.goal
             && !self.pending.values().any(|request| lane(request) == 1)
+            && self.proposal.idle()
             && self.preview_guard.load(Ordering::Acquire) < u64::MAX
     }
 
@@ -56,6 +57,7 @@ impl NativeDesktopPanel {
     }
 
     pub fn cancel_preview(&mut self) {
+        self.cancel_proposal_context();
         if self.preview_arm.is_none() && self.preview.is_none() && self.preview_pending.is_none() {
             return;
         }
@@ -103,7 +105,7 @@ impl NativeDesktopPanel {
         self.pending.insert(self.sequence, request.clone());
         self.preview_pending = Some((self.sequence, generation));
         self.preview_message = Some("预览请求已提交，可能仍在处理；不会自动重试。");
-        Some(WorkerCommand::NativeDesktopPreview {
+        Some(WorkerCommand::NativeDesktopGuarded {
             request_id: self.sequence,
             request,
             generation,

@@ -75,7 +75,7 @@ pub enum WorkerCommand {
         request_id: u64,
         request: ai_ex_domain::NativeDesktopRequest,
     },
-    NativeDesktopPreview {
+    NativeDesktopGuarded {
         request_id: u64,
         request: ai_ex_domain::NativeDesktopRequest,
         generation: u64,
@@ -262,7 +262,7 @@ fn reject_command(events: &Sender<WorkerEvent>, command: WorkerCommand, message:
             result: Err(AppError::unavailable(message)),
         },
         WorkerCommand::NativeDesktop { request_id, .. }
-        | WorkerCommand::NativeDesktopPreview { request_id, .. } => WorkerEvent::NativeDesktop {
+        | WorkerCommand::NativeDesktopGuarded { request_id, .. } => WorkerEvent::NativeDesktop {
             request_id,
             result: Err(AppError::unavailable(message)),
         },
@@ -796,7 +796,7 @@ async fn send_command(
         }
         WorkerCommand::DesktopRuntime { .. }
         | WorkerCommand::NativeDesktop { .. }
-        | WorkerCommand::NativeDesktopPreview { .. }
+        | WorkerCommand::NativeDesktopGuarded { .. }
         | WorkerCommand::BackupInspection { .. }
         | WorkerCommand::SpeechSplit { .. } => {
             return Err(AppError::protocol(
@@ -990,7 +990,7 @@ pub(crate) async fn run_commands(
                 }
                 command @ (WorkerCommand::DesktopRuntime { .. }
                 | WorkerCommand::NativeDesktop { .. }
-                | WorkerCommand::NativeDesktopPreview { .. }) => {
+                | WorkerCommand::NativeDesktopGuarded { .. }) => {
                     if matches!(
                         &command,
                         WorkerCommand::NativeDesktop {

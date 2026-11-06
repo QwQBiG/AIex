@@ -37,6 +37,7 @@ impl DesktopApp {
             || self.appearance.is_loading()
             || self.memory.has_unsaved()
             || self.backup_inspection.candidate_unresolved()
+            || self.native_desktop.proposal_operation_unresolved()
             || self.native.has_unsaved()
             || self.speech_split.has_unsaved()
     }
@@ -62,6 +63,11 @@ impl DesktopApp {
                 if self.backup_inspection.candidate_unresolved() {
                     ui.label(
                         "候选文件操作尚未确认，退出可能丢失操作编号；请先查询并核对目标文件。",
+                    );
+                }
+                if self.native_desktop.proposal_operation_unresolved() {
+                    ui.label(
+                        "视觉操作结果尚未确认，离开可能丢失操作编号；请先查询并核对目标窗口。",
                     );
                 }
                 if self.owned_service.is_some() {
@@ -114,6 +120,9 @@ impl DesktopApp {
                 }
                 if self.backup_inspection.candidate_unresolved() {
                     ui.label("候选文件操作尚未确认，退出可能丢失操作编号；请先查询并核对目标文件。");
+                }
+                if self.native_desktop.proposal_operation_unresolved() {
+                    ui.label("视觉操作结果尚未确认；退出会丢失本次操作编号，请先查询并核对目标窗口。");
                 }
                 ui.horizontal(|ui| {
                     stay = ui.button("返回继续编辑").clicked();

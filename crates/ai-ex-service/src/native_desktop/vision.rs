@@ -15,7 +15,8 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
     ) -> Result<NativeDesktopAction, AppError> {
         let goal = match request {
             NativeDesktopRequest::VisionStep { goal, .. }
-            | NativeDesktopRequest::PreviewVision { goal, .. } => goal,
+            | NativeDesktopRequest::PreviewVision { goal, .. }
+            | NativeDesktopRequest::PrepareVisionProposal { goal, .. } => goal,
             _ => return Err(AppError::protocol("vision intent required")),
         };
         let factory = self.vision.as_ref().ok_or_else(|| {

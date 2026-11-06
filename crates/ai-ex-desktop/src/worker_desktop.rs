@@ -20,6 +20,7 @@ pub(super) async fn run(
     let (state, state_rx) = tokio::sync::mpsc::channel(2);
     let (native, native_rx) = tokio::sync::mpsc::channel(8);
     let (status, status_rx) = tokio::sync::mpsc::channel(2);
+    let (proposal_queries, proposal_queries_rx) = tokio::sync::mpsc::channel(2);
     let (pause, pause_rx) = tokio::sync::mpsc::channel(1);
     let (stop, stop_rx) = tokio::sync::mpsc::channel(1);
     let route = async {
@@ -34,11 +35,13 @@ pub(super) async fn run(
                 },
                 WorkerCommand::NativeDesktop { request, .. } => match request {
                     NativeDesktopRequest::Status | NativeDesktopRequest::Windows => &status,
+                    NativeDesktopRequest::GetVisionProposal { .. }
+                    | NativeDesktopRequest::GetVisionOperation { .. } => &proposal_queries,
                     NativeDesktopRequest::Pause { .. } => &pause,
                     NativeDesktopRequest::Stop { .. } => &stop,
                     _ => &native,
                 },
-                WorkerCommand::NativeDesktopPreview { .. } => &native,
+                WorkerCommand::NativeDesktopGuarded { .. } => &native,
                 _ => continue,
             };
             if let Err(error) = lane.try_send(queued)
@@ -56,6 +59,7 @@ pub(super) async fn run(
         _ = route => {},
         _ = async { tokio::join!(execute(client, settings_rx, events, Some(epoch)), execute(client, queries_rx, events, None),
             execute(client, state_rx, events, None), execute(client, native_rx, events, Some(epoch)), execute(client, status_rx, events, None),
+            execute(client, proposal_queries_rx, events, None),
             execute(client, pause_rx, events, None), execute(client, stop_rx, events, None)); } => {},
     }
 }
@@ -71,11 +75,13 @@ async fn execute(
         if matches!(
             &command,
             WorkerCommand::NativeDesktop {
-                request: NativeDesktopRequest::PreviewVision { .. },
+                request: NativeDesktopRequest::PreviewVision { .. }
+                    | NativeDesktopRequest::PrepareVisionProposal { .. }
+                    | NativeDesktopRequest::ConfirmVisionProposal { .. },
                 ..
             }
         ) {
-            if !reject_command(events, command, "预览必须通过受控通道发送。") {
+            if !reject_command(events, command, "此操作必须通过受控通道发送。") {
                 return;
             }
             continue;
@@ -93,19 +99,23 @@ async fn execute(
             }
             continue;
         }
-        if let WorkerCommand::NativeDesktopPreview {
+        if let WorkerCommand::NativeDesktopGuarded {
             request,
             generation,
             guard,
             send_before,
             ..
         } = &command
-            && (!matches!(request, NativeDesktopRequest::PreviewVision { .. })
-                || *generation == u64::MAX
+            && (!matches!(
+                request,
+                NativeDesktopRequest::PreviewVision { .. }
+                    | NativeDesktopRequest::PrepareVisionProposal { .. }
+                    | NativeDesktopRequest::ConfirmVisionProposal { .. }
+            ) || *generation == u64::MAX
                 || guard.load(Ordering::Acquire) != *generation
                 || std::time::Instant::now() >= *send_before)
         {
-            if !reject_command(events, command, "预览请求已取消或等待过久，请重新准备。")
+            if !reject_command(events, command, "请求已取消或等待过久，请重新核对。")
             {
                 return;
             }
@@ -123,7 +133,7 @@ async fn execute(
                 request_id,
                 request,
             }
-            | WorkerCommand::NativeDesktopPreview {
+            | WorkerCommand::NativeDesktopGuarded {
                 request_id,
                 request,
                 ..

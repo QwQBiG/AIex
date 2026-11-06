@@ -45,6 +45,7 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
     }
 
     pub(super) async fn capture(&self, state: &mut State<S>) -> Result<Uuid, AppError> {
+        self.clear_vision_proposal()?;
         let (generation, scope) = {
             let mut snapshot = self
                 .shared
@@ -164,6 +165,7 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
             ));
         }
         let generation = self.check_running(instance, revision, session_id)?;
+        self.clear_vision_proposal()?;
         let scope = {
             let mut snapshot = self
                 .shared
@@ -237,7 +239,11 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
         bump(&mut snapshot)
     }
 
-    async fn fail_step(&self, state: &mut State<S>, reason: &str) -> Result<(), AppError> {
+    pub(super) async fn fail_step(
+        &self,
+        state: &mut State<S>,
+        reason: &str,
+    ) -> Result<(), AppError> {
         state.frame = None;
         self.shared.pause(reason, false)?;
         let release = state

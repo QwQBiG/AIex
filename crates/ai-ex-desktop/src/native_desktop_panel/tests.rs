@@ -11,6 +11,9 @@ fn reply(id: Uuid, revision: u64) -> NativeDesktopReply {
         },
         windows: Vec::new(),
         vision_preview: None,
+        vision_proposal: None,
+        vision_operation: None,
+        vision_preparation: None,
     }
 }
 
@@ -209,7 +212,7 @@ fn preview_requires_explicit_delay_and_discards_cancelled_results() {
     assert!(panel.poll().is_none());
     panel.arm_preview();
     panel.preview_arm.as_mut().unwrap().send_at = Instant::now();
-    let WorkerCommand::NativeDesktopPreview {
+    let WorkerCommand::NativeDesktopGuarded {
         request_id,
         request,
         generation,
@@ -232,6 +235,9 @@ fn preview_requires_explicit_delay_and_discards_cancelled_results() {
             operation_id,
             action: NativeDesktopAction::Noop,
         }),
+        vision_proposal: None,
+        vision_operation: None,
+        vision_preparation: None,
     };
     panel.receive(request_id, Ok(stale));
     assert!(panel.preview.is_none());
@@ -239,7 +245,7 @@ fn preview_requires_explicit_delay_and_discards_cancelled_results() {
 
     panel.arm_preview();
     panel.preview_arm.as_mut().unwrap().send_at = Instant::now();
-    let WorkerCommand::NativeDesktopPreview {
+    let WorkerCommand::NativeDesktopGuarded {
         request_id,
         request,
         ..
@@ -260,6 +266,9 @@ fn preview_requires_explicit_delay_and_discards_cancelled_results() {
                 operation_id,
                 action: NativeDesktopAction::TypeText { text: text.into() },
             }),
+            vision_proposal: None,
+            vision_operation: None,
+            vision_preparation: None,
         }),
     );
     let shown = panel.preview.as_ref().unwrap();
@@ -277,6 +286,9 @@ fn preview_requires_explicit_delay_and_discards_cancelled_results() {
             snapshot,
             windows: vec![],
             vision_preview: None,
+            vision_proposal: None,
+            vision_operation: None,
+            vision_preparation: None,
         }),
     );
     assert!(panel.preview.is_none());
@@ -298,6 +310,9 @@ fn preview_is_cancelled_when_state_or_connection_changes() {
             snapshot,
             windows: vec![],
             vision_preview: None,
+            vision_proposal: None,
+            vision_operation: None,
+            vision_preparation: None,
         }),
     );
     assert!(panel.preview_arm.is_none());

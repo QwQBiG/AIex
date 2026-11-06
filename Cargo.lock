@@ -383,6 +383,7 @@ dependencies = [
  "flate2",
  "hound",
  "image",
+ "ring",
  "serde",
  "serde_json",
  "tokio",

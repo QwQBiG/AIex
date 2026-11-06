@@ -175,7 +175,7 @@ fn leaving_closing_or_emergency_cancels_due_preview_before_polling() {
         assert!(
             !matches!(
                 app.native_desktop.poll(),
-                Some(WorkerCommand::NativeDesktopPreview { .. })
+                Some(WorkerCommand::NativeDesktopGuarded { .. })
             ),
             "{reason}"
         );

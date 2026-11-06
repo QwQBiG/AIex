@@ -251,7 +251,7 @@ impl DesktopApp {
                     self.desktop_runtime.receive(request_id, Err(failure))
                 }
                 WorkerCommand::NativeDesktop { request_id, .. }
-                | WorkerCommand::NativeDesktopPreview { request_id, .. } => {
+                | WorkerCommand::NativeDesktopGuarded { request_id, .. } => {
                     self.native_desktop.receive(request_id, Err(failure))
                 }
                 WorkerCommand::SpeechSplit { request_id, .. } => {

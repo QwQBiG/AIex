@@ -157,6 +157,38 @@ pub enum NativeDesktopRequest {
         operation_id: Uuid,
         goal: String,
     },
+    /// Prepare a service-owned suggestion; this does not send input.
+    PrepareVisionProposal {
+        instance_id: Uuid,
+        expected_revision: u64,
+        session_id: Uuid,
+        operation_id: Uuid,
+        goal: String,
+    },
+    GetVisionProposal {
+        instance_id: Uuid,
+        session_id: Uuid,
+        proposal_id: Uuid,
+    },
+    DiscardVisionProposal {
+        instance_id: Uuid,
+        expected_revision: u64,
+        session_id: Uuid,
+        proposal_id: Uuid,
+    },
+    ConfirmVisionProposal {
+        instance_id: Uuid,
+        expected_revision: u64,
+        session_id: Uuid,
+        proposal_id: Uuid,
+        operation_id: Uuid,
+    },
+    GetVisionOperation {
+        instance_id: Uuid,
+        session_id: Uuid,
+        proposal_id: Uuid,
+        operation_id: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,6 +236,64 @@ pub struct NativeDesktopReply {
     pub windows: Vec<NativeWindow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision_preview: Option<NativeVisionPreview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_proposal: Option<NativeVisionProposal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_preparation: Option<NativeVisionPreparation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_operation: Option<NativeVisionOperation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeVisionPreparationState {
+    Preparing,
+    Ready,
+    Unavailable,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeVisionPreparation {
+    pub proposal_id: Uuid,
+    pub state: NativeVisionPreparationState,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeVisionProposal {
+    pub proposal_id: Uuid,
+    pub action: NativeDesktopAction,
+    pub remaining_ms: u64,
+}
+
+impl std::fmt::Debug for NativeVisionProposal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeVisionProposal")
+            .field("proposal_id", &self.proposal_id)
+            .field("action", &"<redacted>")
+            .field("remaining_ms", &self.remaining_ms)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeVisionOperationState {
+    Pending,
+    Completed,
+    Rejected,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeVisionOperation {
+    pub operation_id: Uuid,
+    pub proposal_id: Uuid,
+    pub state: NativeVisionOperationState,
 }
 
 /// Read-only suggestion from a captured frame; it cannot be executed as a proposal.

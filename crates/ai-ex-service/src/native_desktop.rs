@@ -1,8 +1,10 @@
 //! Service-owned native sessions; synthetic replay retains its separate host.
 mod activity;
 mod commands;
+mod confirm;
 mod dispatch;
 mod preview;
+mod proposal;
 mod system;
 mod vision;
 
@@ -24,6 +26,20 @@ use uuid::Uuid;
 
 use crate::native_desktop_port::NativeDesktopPort;
 use crate::strategy_loop::StrategyProviderFactory;
+#[cfg(not(test))]
+type NativeAudit = JsonlAuditLog;
+#[cfg(test)]
+type NativeAudit = tests::TestAudit;
+
+#[cfg(not(test))]
+fn native_audit(audit: JsonlAuditLog) -> NativeAudit {
+    audit
+}
+
+#[cfg(test)]
+fn native_audit(audit: JsonlAuditLog) -> NativeAudit {
+    audit.into()
+}
 pub(crate) use activity::{NativeActivity, NativeChatGuard};
 pub(crate) type NativeDesktopHost = NativeHost<system::SystemDesktop>;
 pub(crate) use system::create;
@@ -36,12 +52,13 @@ pub(crate) struct NativeHost<S: DesktopSystem + Send + 'static> {
     speech: SpeechActivity,
     audit_path: PathBuf,
     vision: Option<StrategyProviderFactory>,
+    proposals: Arc<Mutex<proposal::VisionRegistry>>,
 }
 
 struct State<S: DesktopSystem + Send + 'static> {
     desktop: Arc<Mutex<BoundDesktop<S>>>,
     ticket: Option<WindowTicket>,
-    coordinator: Option<AutomationCoordinator<NativeDesktopPort<S>, JsonlAuditLog>>,
+    coordinator: Option<AutomationCoordinator<NativeDesktopPort<S>, NativeAudit>>,
     frame: Option<(Uuid, Instant, ScreenFrame)>,
     start: Option<NativeDesktopRequest>,
     seen: std::collections::BTreeMap<Uuid, NativeDesktopRequest>,
@@ -57,6 +74,7 @@ impl<S: DesktopSystem + Send + 'static> Clone for NativeHost<S> {
             speech: self.speech.clone(),
             audit_path: self.audit_path.clone(),
             vision: self.vision.clone(),
+            proposals: self.proposals.clone(),
         }
     }
 }
@@ -97,6 +115,7 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
             speech,
             audit_path,
             vision,
+            proposals: Arc::new(Mutex::new(proposal::VisionRegistry::default())),
         }
     }
 
@@ -109,6 +128,7 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
 
     pub(crate) fn stop_current(&self, reason: &str, terminal: bool) -> Result<(), AppError> {
         self.shared.pause(reason, terminal)?;
+        self.clear_vision_proposal()?;
         self.cleanup_detached();
         Ok(())
     }
@@ -121,7 +141,30 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
         if matches!(request, NativeDesktopRequest::Status) {
             return self.reply(Vec::new());
         }
+        if let NativeDesktopRequest::GetVisionProposal {
+            instance_id,
+            session_id,
+            proposal_id,
+        } = &request
+        {
+            return self.get_vision_proposal(*instance_id, *session_id, *proposal_id);
+        }
+        if let NativeDesktopRequest::GetVisionOperation {
+            instance_id,
+            session_id,
+            proposal_id,
+            operation_id,
+        } = &request
+        {
+            return self.get_vision_operation(
+                *instance_id,
+                *session_id,
+                *proposal_id,
+                *operation_id,
+            );
+        }
         if self.shared.revoke_request(&request)? {
+            self.clear_vision_proposal()?;
             self.cleanup_detached();
             return self.reply(Vec::new());
         }
@@ -149,6 +192,9 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
             snapshot: self.snapshot()?,
             windows,
             vision_preview: None,
+            vision_proposal: None,
+            vision_preparation: None,
+            vision_operation: None,
         })
     }
 
@@ -169,6 +215,7 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
 
     pub(crate) async fn shutdown(&self) -> Result<(), AppError> {
         self.shared.close()?;
+        self.clear_vision_proposal()?;
         let _permit = self
             .admission
             .acquire()

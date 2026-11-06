@@ -12,6 +12,34 @@ use std::time::Duration;
 #[path = "preview_tests.rs"]
 mod preview_tests;
 
+pub(super) enum TestAudit {
+    Real(JsonlAuditLog),
+    FailMouseCompletion(Arc<std::sync::atomic::AtomicUsize>),
+}
+
+impl From<JsonlAuditLog> for TestAudit {
+    fn from(audit: JsonlAuditLog) -> Self {
+        Self::Real(audit)
+    }
+}
+
+#[async_trait::async_trait]
+impl ai_ex_automation::AuditSink for TestAudit {
+    async fn record(&mut self, record: ai_ex_automation::AuditRecord) -> Result<(), AppError> {
+        match self {
+            Self::Real(audit) => ai_ex_automation::AuditSink::record(audit, record).await,
+            Self::FailMouseCompletion(failures)
+                if record.stage == ai_ex_automation::AuditStage::Completed
+                    && record.capability == Capability::MouseInput =>
+            {
+                failures.fetch_add(1, Ordering::SeqCst);
+                Err(AppError::unavailable("synthetic completion audit failure"))
+            }
+            Self::FailMouseCompletion(_) => Ok(()),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CaptureBarrier {
     entered: Arc<tokio::sync::Notify>,
@@ -22,6 +50,7 @@ struct FakeState {
     listed: Option<Vec<WindowSnapshot>>,
     calls: Vec<Vec<InputEvent>>,
     captures: usize,
+    frame_byte: u8,
     partial: bool,
     refuse_release: bool,
     shut_down: bool,
@@ -45,10 +74,10 @@ impl DesktopSystem for FakeSystem {
         _: Duration,
         _: &AtomicBool,
     ) -> io::Result<RgbaFrame> {
-        let barrier = {
+        let (barrier, frame_byte) = {
             let mut state = self.0.lock().unwrap();
             state.captures += 1;
-            state.capture_barrier.clone()
+            (state.capture_barrier.clone(), state.frame_byte)
         };
         if let Some(barrier) = barrier {
             barrier.entered.notify_one();
@@ -68,7 +97,7 @@ impl DesktopSystem for FakeSystem {
         Ok(RgbaFrame {
             width: 2,
             height: 2,
-            rgba: vec![255; 16],
+            rgba: vec![frame_byte; 16],
         })
     }
     fn send_input(&mut self, events: &[InputEvent]) -> io::Result<usize> {
@@ -175,6 +204,7 @@ impl Fixture {
             listed: None,
             calls: Vec::new(),
             captures: 0,
+            frame_byte: 255,
             partial: false,
             refuse_release: false,
             shut_down: false,

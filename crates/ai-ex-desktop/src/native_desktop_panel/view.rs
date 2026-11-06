@@ -43,7 +43,7 @@ impl NativeDesktopPanel {
                         ui.selectable_value(&mut self.manual_mode, false, "视觉单步（需要视觉模型）");
                     });
                     if self.manual_mode {
-                        if self.preview_arm.is_some() || self.preview.is_some() || self.preview_pending.is_some() { self.cancel_preview(); }
+                        self.cancel_preview();
                         self.action.show(ui);
                     } else if ui.add(egui::TextEdit::multiline(&mut self.goal).hint_text("为视觉单步设置清晰目标").desired_rows(2)).changed() {
                         self.cancel_preview();
@@ -87,6 +87,7 @@ impl NativeDesktopPanel {
                     ui.weak("保存后切回专用窗口。启用快捷键后，用 Ctrl + Alt + F9 恢复，F11 执行已保存单步，F8 暂停。每次单步都获取新画面，窗口移动或前台变化时先核对，再恢复。");
                 }
             }
+            self.show_proposal(ui, &mut requests);
             if let Some(error) = &self.error { ui.colored_label(ui.visuals().warn_fg_color, error); }
         });
         let mut commands = requests

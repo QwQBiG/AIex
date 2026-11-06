@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 mod action;
 mod preview;
+mod proposal;
+mod review_text;
 #[cfg(test)]
 pub(crate) mod tests;
 mod view;
@@ -36,6 +38,7 @@ pub struct NativeDesktopPanel {
     preview_pending: Option<(u64, u64)>,
     preview_guard: Arc<AtomicU64>,
     preview_message: Option<&'static str>,
+    proposal: proposal::ProposalUi,
 }
 
 impl Default for NativeDesktopPanel {
@@ -62,6 +65,7 @@ impl Default for NativeDesktopPanel {
             preview_pending: None,
             preview_guard: Arc::new(AtomicU64::new(0)),
             preview_message: None,
+            proposal: proposal::ProposalUi::default(),
         }
     }
 }
@@ -91,7 +95,12 @@ impl NativeDesktopPanel {
     }
 
     fn begin(&mut self, request: NativeDesktopRequest) -> Option<WorkerCommand> {
-        if matches!(request, NativeDesktopRequest::PreviewVision { .. }) {
+        if matches!(
+            request,
+            NativeDesktopRequest::PreviewVision { .. }
+                | NativeDesktopRequest::PrepareVisionProposal { .. }
+                | NativeDesktopRequest::ConfirmVisionProposal { .. }
+        ) {
             return None;
         }
         if !self.connected || self.pending.len() >= 8 {
@@ -121,6 +130,10 @@ impl NativeDesktopPanel {
     }
 
     pub fn poll(&mut self) -> Option<WorkerCommand> {
+        self.expire_proposal();
+        if self.proposal_due() {
+            return self.dispatch_proposal();
+        }
         if self
             .preview_arm
             .as_ref()
@@ -143,6 +156,10 @@ impl NativeDesktopPanel {
         let Some(request) = self.pending.remove(&id) else {
             return;
         };
+        if proposal::is_proposal_request(&request) {
+            self.receive_proposal(id, request, result);
+            return;
+        }
         let is_preview = matches!(request, NativeDesktopRequest::PreviewVision { .. });
         if is_preview {
             let Some((pending_id, generation)) = self.preview_pending.take() else {
@@ -189,6 +206,7 @@ impl NativeDesktopPanel {
                     }
                 } else {
                     self.observe_preview_snapshot(&reply);
+                    self.observe_proposal_snapshot(&reply);
                 }
                 if matches!(request, NativeDesktopRequest::Windows) {
                     self.windows = reply.windows;
@@ -269,6 +287,8 @@ impl NativeDesktopPanel {
 fn lane(request: &NativeDesktopRequest) -> u8 {
     match request {
         NativeDesktopRequest::Status | NativeDesktopRequest::Windows => 0,
+        NativeDesktopRequest::GetVisionProposal { .. }
+        | NativeDesktopRequest::GetVisionOperation { .. } => 4,
         NativeDesktopRequest::Pause { .. } => 2,
         NativeDesktopRequest::Stop { .. } => 3,
         _ => 1,

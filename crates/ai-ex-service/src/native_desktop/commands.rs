@@ -159,7 +159,7 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
                         self.shared.activity.clone(),
                         generation,
                     ),
-                    audit,
+                    native_audit(audit),
                 ));
             }
             NativeDesktopRequest::Resume {
@@ -244,6 +244,15 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
             }
             NativeDesktopRequest::PreviewVision { .. } => {
                 return self.preview_vision(&mut state, &request).await;
+            }
+            NativeDesktopRequest::PrepareVisionProposal { .. } => {
+                return self.preview_vision(&mut state, &request).await;
+            }
+            NativeDesktopRequest::DiscardVisionProposal { .. } => {
+                return self.discard_vision_proposal(&request);
+            }
+            NativeDesktopRequest::ConfirmVisionProposal { .. } => {
+                return self.confirm_vision_proposal(&mut state, &request).await;
             }
             _ => return Err(AppError::protocol("native request was not admitted")),
         }
@@ -353,7 +362,7 @@ impl<S: DesktopSystem + Send + 'static> NativeHost<S> {
                 self.shared.activity.clone(),
                 self.shared.activity.load(Ordering::Acquire),
             ),
-            audit,
+            native_audit(audit),
         ));
         bump(&mut projection)
     }

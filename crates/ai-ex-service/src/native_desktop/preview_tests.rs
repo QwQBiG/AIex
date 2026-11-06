@@ -81,6 +81,504 @@ fn request(snapshot: &NativeDesktopSnapshot, operation_id: Uuid) -> NativeDeskto
     }
 }
 
+fn prepare(snapshot: &NativeDesktopSnapshot, proposal_id: Uuid) -> NativeDesktopRequest {
+    NativeDesktopRequest::PrepareVisionProposal {
+        instance_id: snapshot.instance_id,
+        expected_revision: snapshot.revision,
+        session_id: snapshot.session.as_ref().unwrap().session_id,
+        operation_id: proposal_id,
+        goal: "synthetic goal".into(),
+    }
+}
+
+fn confirm(
+    snapshot: &NativeDesktopSnapshot,
+    proposal_id: Uuid,
+    operation_id: Uuid,
+) -> NativeDesktopRequest {
+    NativeDesktopRequest::ConfirmVisionProposal {
+        instance_id: snapshot.instance_id,
+        expected_revision: snapshot.revision,
+        session_id: snapshot.session.as_ref().unwrap().session_id,
+        proposal_id,
+        operation_id,
+    }
+}
+
+fn operation(
+    snapshot: &NativeDesktopSnapshot,
+    proposal_id: Uuid,
+    operation_id: Uuid,
+) -> NativeDesktopRequest {
+    NativeDesktopRequest::GetVisionOperation {
+        instance_id: snapshot.instance_id,
+        session_id: snapshot.session.as_ref().unwrap().session_id,
+        proposal_id,
+        operation_id,
+    }
+}
+
+#[tokio::test]
+async fn service_owned_proposal_can_be_queried_and_discarded_without_input() {
+    use ai_ex_domain::NativeVisionPreparationState;
+    let mut fixture = Fixture::new(true);
+    install_vision(
+        &mut fixture,
+        fake_vision(r#"{"type":"click","x":0,"y":0,"button":"left"}"#),
+    );
+    let running = ready(&fixture).await;
+    let proposal_id = Uuid::new_v4();
+    let result = fixture
+        .host
+        .request(prepare(&running, proposal_id))
+        .await
+        .unwrap();
+    assert_eq!(
+        result.vision_preparation.unwrap().state,
+        NativeVisionPreparationState::Ready
+    );
+    let suggestion = result.vision_proposal.unwrap();
+    assert_eq!(suggestion.proposal_id, proposal_id);
+    assert!(suggestion.remaining_ms <= 120_000 && suggestion.remaining_ms > 0);
+    assert!(fixture.host.state.lock().await.frame.is_none());
+    assert!(result.snapshot.session.as_ref().unwrap().frame_id.is_none());
+    let query = NativeDesktopRequest::GetVisionProposal {
+        instance_id: result.snapshot.instance_id,
+        session_id: result.snapshot.session.as_ref().unwrap().session_id,
+        proposal_id,
+    };
+    assert!(
+        fixture
+            .host
+            .request(query.clone())
+            .await
+            .unwrap()
+            .vision_proposal
+            .is_some()
+    );
+    let discarded = fixture
+        .host
+        .request(NativeDesktopRequest::DiscardVisionProposal {
+            instance_id: result.snapshot.instance_id,
+            expected_revision: result.snapshot.revision,
+            session_id: result.snapshot.session.as_ref().unwrap().session_id,
+            proposal_id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        discarded.vision_preparation.unwrap().state,
+        NativeVisionPreparationState::Unavailable
+    );
+    let after = fixture.host.request(query).await.unwrap();
+    assert!(after.vision_proposal.is_none());
+    assert_eq!(
+        after.vision_preparation.unwrap().state,
+        NativeVisionPreparationState::Unavailable
+    );
+    assert!(
+        fixture
+            .host
+            .request(confirm(&discarded.snapshot, proposal_id, Uuid::new_v4()))
+            .await
+            .is_err()
+    );
+    assert_eq!(fixture.system.lock().unwrap().captures, 1);
+    assert!(fixture.system.lock().unwrap().calls.is_empty());
+}
+
+#[tokio::test]
+async fn expired_proposal_is_unavailable_and_cannot_be_confirmed() {
+    use ai_ex_domain::NativeVisionPreparationState;
+    let mut fixture = Fixture::new(true);
+    install_vision(
+        &mut fixture,
+        fake_vision(r#"{"type":"click","x":0,"y":0,"button":"left"}"#),
+    );
+    let running = ready(&fixture).await;
+    let proposal_id = Uuid::new_v4();
+    let prepared = fixture
+        .host
+        .request(prepare(&running, proposal_id))
+        .await
+        .unwrap()
+        .snapshot;
+    fixture.host.expire_vision_proposal_for_test(proposal_id);
+    let query = NativeDesktopRequest::GetVisionProposal {
+        instance_id: prepared.instance_id,
+        session_id: prepared.session.as_ref().unwrap().session_id,
+        proposal_id,
+    };
+    let result = fixture.host.request(query).await.unwrap();
+    assert_eq!(
+        result.vision_preparation.unwrap().state,
+        NativeVisionPreparationState::Unavailable
+    );
+    assert!(result.vision_proposal.is_none());
+    assert!(
+        fixture
+            .host
+            .request(confirm(&prepared, proposal_id, Uuid::new_v4()))
+            .await
+            .is_err()
+    );
+    assert_eq!(fixture.system.lock().unwrap().captures, 1);
+    assert!(fixture.system.lock().unwrap().calls.is_empty());
+}
+
+#[tokio::test]
+async fn confirmation_rechecks_screen_permission_and_target() {
+    use ai_ex_domain::NativeVisionOperationState;
+    for change in 0..4 {
+        let mut fixture = Fixture::new(true);
+        install_vision(
+            &mut fixture,
+            fake_vision(r#"{"type":"click","x":0,"y":0,"button":"left"}"#),
+        );
+        let running = ready(&fixture).await;
+        let proposal_id = Uuid::new_v4();
+        let prepared = fixture
+            .host
+            .request(prepare(&running, proposal_id))
+            .await
+            .unwrap()
+            .snapshot;
+        if change == 3 {
+            fixture.host.safety.trigger_emergency_stop();
+        } else {
+            let mut system = fixture.system.lock().unwrap();
+            let window = system.window.as_mut().unwrap();
+            match change {
+                0 => window.foreground = false,
+                1 => window.client.left += 1,
+                _ => window.identity.process_id += 1,
+            }
+        }
+        let result = fixture
+            .host
+            .request(confirm(&prepared, proposal_id, Uuid::new_v4()))
+            .await
+            .unwrap();
+        assert_eq!(
+            result.vision_operation.unwrap().state,
+            NativeVisionOperationState::Rejected
+        );
+        assert!(fixture.system.lock().unwrap().calls.is_empty());
+        assert!(fixture.host.state.lock().await.frame.is_none());
+    }
+}
+
+#[tokio::test]
+async fn preparation_status_is_available_during_model_analysis() {
+    use ai_ex_domain::NativeVisionPreparationState;
+    let mut fixture = Fixture::new(true);
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut vision = fake_vision(r#"{"type":"noop"}"#);
+    vision.entered = Some(entered.clone());
+    vision.release = Some(release.clone());
+    install_vision(&mut fixture, vision);
+    let running = ready(&fixture).await;
+    let proposal_id = Uuid::new_v4();
+    let host = fixture.host.clone();
+    let command = prepare(&running, proposal_id);
+    let task = tokio::spawn(async move { host.request(command).await });
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .unwrap();
+    let query = NativeDesktopRequest::GetVisionProposal {
+        instance_id: running.instance_id,
+        session_id: running.session.as_ref().unwrap().session_id,
+        proposal_id,
+    };
+    let current = fixture.host.request(query.clone()).await.unwrap();
+    assert_eq!(
+        current.vision_preparation.unwrap().state,
+        NativeVisionPreparationState::Preparing
+    );
+    release.notify_one();
+    task.await.unwrap().unwrap();
+    assert_eq!(
+        fixture
+            .host
+            .request(query)
+            .await
+            .unwrap()
+            .vision_preparation
+            .unwrap()
+            .state,
+        NativeVisionPreparationState::Ready
+    );
+    assert!(fixture.system.lock().unwrap().calls.is_empty());
+}
+
+#[tokio::test]
+async fn confirmed_proposal_rechecks_frame_and_executes_at_most_once() {
+    use ai_ex_domain::NativeVisionOperationState;
+    let mut fixture = Fixture::new(true);
+    install_vision(
+        &mut fixture,
+        fake_vision(r#"{"type":"click","x":0,"y":0,"button":"left"}"#),
+    );
+    let running = ready(&fixture).await;
+    let proposal_id = Uuid::new_v4();
+    let prepared = fixture
+        .host
+        .request(prepare(&running, proposal_id))
+        .await
+        .unwrap()
+        .snapshot;
+    let operation_id = Uuid::new_v4();
+    let request = confirm(&prepared, proposal_id, operation_id);
+    let completed = fixture.host.request(request.clone()).await.unwrap();
+    assert_eq!(
+        completed.vision_operation.unwrap().state,
+        NativeVisionOperationState::Completed
+    );
+    assert_eq!(fixture.system.lock().unwrap().captures, 2);
+    assert_eq!(fixture.system.lock().unwrap().calls.len(), 1);
+    assert_eq!(completed.snapshot.session.as_ref().unwrap().actions, 1);
+    assert!(
+        completed
+            .snapshot
+            .session
+            .as_ref()
+            .unwrap()
+            .frame_id
+            .is_none()
+    );
+    let queried = fixture
+        .host
+        .request(operation(&completed.snapshot, proposal_id, operation_id))
+        .await
+        .unwrap();
+    assert_eq!(
+        queried.vision_operation.unwrap().state,
+        NativeVisionOperationState::Completed
+    );
+    let again = fixture.host.request(request).await.unwrap();
+    assert_eq!(
+        again.vision_operation.unwrap().state,
+        NativeVisionOperationState::Completed
+    );
+    assert_eq!(fixture.system.lock().unwrap().captures, 2);
+    assert_eq!(fixture.system.lock().unwrap().calls.len(), 1);
+}
+
+#[tokio::test]
+async fn changed_frame_rejects_confirmation_without_input() {
+    use ai_ex_domain::NativeVisionOperationState;
+    let mut fixture = Fixture::new(true);
+    install_vision(
+        &mut fixture,
+        fake_vision(r#"{"type":"click","x":0,"y":0,"button":"left"}"#),
+    );
+    let running = ready(&fixture).await;
+    let proposal_id = Uuid::new_v4();
+    let prepared = fixture
+        .host
+        .request(prepare(&running, proposal_id))
+        .await
+        .unwrap()
+        .snapshot;
+    fixture.system.lock().unwrap().frame_byte = 42;
+    let operation_id = Uuid::new_v4();
+    let request = confirm(&prepared, proposal_id, operation_id);
+    let result = fixture.host.request(request.clone()).await.unwrap();
+    assert_eq!(
+        result.vision_operation.unwrap().state,
+        NativeVisionOperationState::Rejected
+    );
+    assert_eq!(result.snapshot.session.as_ref().unwrap().actions, 0);
+    assert!(result.snapshot.session.as_ref().unwrap().frame_id.is_none());
+    assert_eq!(fixture.system.lock().unwrap().captures, 2);
+    assert!(fixture.system.lock().unwrap().calls.is_empty());
+    assert_eq!(
+        fixture
+            .host
+            .request(request)
+            .await
+            .unwrap()
+            .vision_operation
+            .unwrap()
+            .state,
+        NativeVisionOperationState::Rejected
+    );
+    assert_eq!(fixture.system.lock().unwrap().captures, 2);
+}
+
+#[tokio::test]
+async fn partial_input_is_unknown_and_duplicate_confirmation_never_replays() {
+    use ai_ex_domain::NativeVisionOperationState;
+    let mut fixture = Fixture::new(true);
+    install_vision(
+        &mut fixture,
+        fake_vision(r#"{"type":"click","x":0,"y":0,"button":"left"}"#),
+    );
+    let running = ready(&fixture).await;
+    let proposal_id = Uuid::new_v4();
+    let prepared = fixture
+        .host
+        .request(prepare(&running, proposal_id))
+        .await
+        .unwrap()
+        .snapshot;
+    fixture.system.lock().unwrap().partial = true;
+    let operation_id = Uuid::new_v4();
+    let request = confirm(&prepared, proposal_id, operation_id);
+    let result = fixture.host.request(request.clone()).await.unwrap();
+    assert_eq!(
+        result.vision_operation.unwrap().state,
+        NativeVisionOperationState::Unknown
+    );
+    let before = fixture.system.lock().unwrap().calls.clone();
+    assert!(!before.is_empty());
+    assert_eq!(
+        fixture
+            .host
+            .request(request)
+            .await
+            .unwrap()
+            .vision_operation
+            .unwrap()
+            .state,
+        NativeVisionOperationState::Unknown
+    );
+    assert_eq!(fixture.system.lock().unwrap().calls, before);
+    assert_eq!(
+        fixture
+            .host
+            .request(operation(&result.snapshot, proposal_id, operation_id))
+            .await
+            .unwrap()
+            .vision_operation
+            .unwrap()
+            .state,
+        NativeVisionOperationState::Unknown
+    );
+}
+
+#[tokio::test]
+async fn completion_audit_failure_is_unknown_and_never_replays() {
+    use ai_ex_domain::NativeVisionOperationState;
+    let mut fixture = Fixture::new(true);
+    install_vision(
+        &mut fixture,
+        fake_vision(r#"{"type":"click","x":0,"y":0,"button":"left"}"#),
+    );
+    let running = ready(&fixture).await;
+    let proposal_id = Uuid::new_v4();
+    let prepared = fixture
+        .host
+        .request(prepare(&running, proposal_id))
+        .await
+        .unwrap()
+        .snapshot;
+    let failures = Arc::new(AtomicUsize::new(0));
+    {
+        let mut state = fixture.host.state.lock().await;
+        let ticket = state.ticket.unwrap();
+        let port = NativeDesktopPort::new(
+            state.desktop.clone(),
+            ticket,
+            fixture.host.shared.cancelled.clone(),
+            fixture.host.shared.activity.clone(),
+            fixture.host.shared.activity.load(Ordering::Acquire),
+        );
+        state.coordinator = Some(AutomationCoordinator::new(
+            fixture.host.safety.clone(),
+            port,
+            TestAudit::FailMouseCompletion(failures.clone()),
+        ));
+    }
+    let operation_id = Uuid::new_v4();
+    let request = confirm(&prepared, proposal_id, operation_id);
+    let result = fixture.host.request(request.clone()).await.unwrap();
+    assert_eq!(
+        result.vision_operation.unwrap().state,
+        NativeVisionOperationState::Unknown
+    );
+    assert_eq!(failures.load(Ordering::SeqCst), 1);
+    let calls = fixture.system.lock().unwrap().calls.clone();
+    assert_eq!(calls.len(), 1);
+    let repeated = fixture.host.request(request).await.unwrap();
+    assert_eq!(
+        repeated.vision_operation.unwrap().state,
+        NativeVisionOperationState::Unknown
+    );
+    assert_eq!(fixture.system.lock().unwrap().calls, calls);
+    assert_eq!(failures.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture
+            .host
+            .request(operation(&result.snapshot, proposal_id, operation_id))
+            .await
+            .unwrap()
+            .vision_operation
+            .unwrap()
+            .state,
+        NativeVisionOperationState::Unknown
+    );
+}
+
+#[tokio::test]
+async fn pending_confirmation_is_queryable_and_pause_revokes_before_input() {
+    use ai_ex_domain::NativeVisionOperationState;
+    let mut fixture = Fixture::new(true);
+    install_vision(
+        &mut fixture,
+        fake_vision(r#"{"type":"click","x":0,"y":0,"button":"left"}"#),
+    );
+    let running = ready(&fixture).await;
+    let proposal_id = Uuid::new_v4();
+    let prepared = fixture
+        .host
+        .request(prepare(&running, proposal_id))
+        .await
+        .unwrap()
+        .snapshot;
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    fixture.system.lock().unwrap().capture_barrier = Some(CaptureBarrier {
+        entered: entered.clone(),
+        release: release.clone(),
+    });
+    let operation_id = Uuid::new_v4();
+    let host = fixture.host.clone();
+    let command = confirm(&prepared, proposal_id, operation_id);
+    let in_flight = tokio::spawn(async move { host.request(command).await });
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .unwrap();
+    let current = fixture.host.snapshot().unwrap();
+    let pending = fixture
+        .host
+        .request(operation(&current, proposal_id, operation_id))
+        .await
+        .unwrap();
+    assert_eq!(
+        pending.vision_operation.unwrap().state,
+        NativeVisionOperationState::Pending
+    );
+    fixture
+        .host
+        .request(NativeDesktopRequest::Pause {
+            instance_id: prepared.instance_id,
+            expected_revision: prepared.revision,
+            session_id: prepared.session.as_ref().unwrap().session_id,
+        })
+        .await
+        .unwrap();
+    *release.0.lock().unwrap() = true;
+    release.1.notify_all();
+    let settled = in_flight.await.unwrap().unwrap();
+    assert_eq!(
+        settled.vision_operation.unwrap().state,
+        NativeVisionOperationState::Rejected
+    );
+    assert!(fixture.system.lock().unwrap().calls.is_empty());
+}
+
 #[tokio::test]
 async fn preview_is_read_only_audited_and_never_replays_an_operation() {
     let mut fixture = Fixture::new(true);
