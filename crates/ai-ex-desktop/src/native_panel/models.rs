@@ -9,6 +9,61 @@ use crate::ui::theme;
 mod text_entry_tests;
 
 impl NativePanel {
+    pub(super) fn package_recovery(&self, ui: &mut egui::Ui) {
+        if self.package_unconfirmed.is_empty() && self.retained_package_operations.is_empty() {
+            return;
+        }
+        theme::card().show(ui, |ui| {
+            if !self.package_unconfirmed.is_empty() {
+                ui.strong("准备或取消操作结果尚未确认");
+                ui.label("刷新只显示当时的状态，不能证明原请求不会稍后执行。不会自动重发。");
+                for (request_id, request) in &self.package_unconfirmed {
+                    let detail = match request {
+                        NativeRequest::Download { package_id } => format!("下载：{package_id}"),
+                        NativeRequest::Import { package_id, .. } => format!("导入：{package_id}"),
+                        NativeRequest::Remove { package_id } => format!("移除：{package_id}"),
+                        NativeRequest::Cancel { id } => format!("取消操作：{id}"),
+                        _ => continue,
+                    };
+                    ui.push_id(("unknown_package", request_id), |ui| {
+                        ui.add(egui::Label::new(detail).selectable(true));
+                        if let NativeRequest::Import { path, .. } = request {
+                            ui.collapsing("查看导入路径", |ui| {
+                                ui.weak("路径仅在本地显示；查看不会读取或导入文件。");
+                                ui.add(egui::Label::new(path).selectable(true));
+                                if ui.button("复制导入路径").clicked() {
+                                    ui.ctx().copy_text(path.clone());
+                                }
+                            });
+                        }
+                    });
+                }
+                ui.weak("请先记下编号和路径，退出本应用并确认原服务已停止，再重启并核对组件和声音。未保存的草稿仅保留在本次会话。");
+            }
+            if !self.retained_package_operations.is_empty() {
+                ui.label("已知操作编号（无法确认是否属于未确认的请求）：");
+                for (id, package) in &self.retained_package_operations {
+                    let mut detail = if package.is_empty() {
+                        format!("操作：{id}")
+                    } else {
+                        format!("{package}：{id}")
+                    };
+                    if let Some(phase) = self.retained_package_terminal.get(id) {
+                        let observed = match phase {
+                            ai_ex_domain::NativeOperationPhase::Completed => "曾观察到已完成",
+                            ai_ex_domain::NativeOperationPhase::Cancelled => "曾观察到已取消",
+                            ai_ex_domain::NativeOperationPhase::Failed => "曾观察到已失败",
+                            _ => "曾观察到终态",
+                        };
+                        detail.push_str(" · ");
+                        detail.push_str(observed);
+                    }
+                    ui.add(egui::Label::new(detail).selectable(true));
+                }
+            }
+        });
+    }
+
     pub(super) fn contents(
         &mut self,
         ui: &mut egui::Ui,
@@ -225,7 +280,7 @@ impl NativePanel {
                 } else {
                     ui.spinner();
                 }
-                if ui.button("取消准备").clicked() {
+                if ui.add_enabled(!self.cancel_unconfirmed(id), egui::Button::new("取消准备")).clicked() {
                     requests.push(NativeRequest::Cancel { id });
                 }
             } else {

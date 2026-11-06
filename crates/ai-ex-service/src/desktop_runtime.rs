@@ -48,6 +48,7 @@ impl VtsDiscoveryPort for ai_ex_vts::VtsClient {
             .map(|key| DiscoveredVtsHotkey {
                 id: key.id,
                 name: key.name,
+                kind: key.kind,
             })
             .collect())
     }

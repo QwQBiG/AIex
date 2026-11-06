@@ -82,7 +82,7 @@ async fn discovery_uses_current_model_and_keeps_mouth_and_hotkey_output_working(
             &mut server,
             &discovery["requestID"],
             json!([
-            {"hotkeyID":"expression-1","name":"微笑","file":"ignored.exp3.json"},
+            {"hotkeyID":"expression-1","name":"微笑","type":"ToggleExpression","file":"ignored.exp3.json"},
             {"hotkeyID":"expression-2","name":""}]),
         )
         .await;
@@ -92,11 +92,13 @@ async fn discovery_uses_current_model_and_keeps_mouth_and_hotkey_output_working(
         vec![
             VtsHotkey {
                 id: "expression-1".into(),
-                name: "微笑".into()
+                name: "微笑".into(),
+                kind: Some("ToggleExpression".into()),
             },
             VtsHotkey {
                 id: "expression-2".into(),
-                name: String::new()
+                name: String::new(),
+                kind: None,
             }
         ]
     );

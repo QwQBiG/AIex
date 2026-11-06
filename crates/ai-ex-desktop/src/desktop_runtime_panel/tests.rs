@@ -62,6 +62,57 @@ fn external_changes_preserve_dirty_draft_and_require_review_before_applying() {
 }
 
 #[test]
+fn vts_hotkey_discovery_displays_known_and_missing_action_types() {
+    let id = Uuid::new_v4();
+    let mut panel = DesktopRuntimePanel::default();
+    panel.synchronize(Some(id), true);
+    let WorkerCommand::DesktopRuntime { request_id, .. } =
+        panel.begin(DesktopRuntimeRequest::DiscoverVts).unwrap()
+    else {
+        unreachable!()
+    };
+    panel.receive(
+        request_id,
+        Ok(DesktopRuntimeReply::VtsDiscovery(vec![
+            DiscoveredVtsHotkey {
+                id: "first".into(),
+                name: "微笑".into(),
+                kind: Some("ToggleExpression".into()),
+            },
+            DiscoveredVtsHotkey {
+                id: "second".into(),
+                name: "旧服务".into(),
+                kind: None,
+            },
+        ])),
+    );
+    let output = egui::Context::default().run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 1600.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui);
+        },
+    );
+    let labels: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(labels.contains(&"微笑 · first · 切换表情"));
+    assert!(labels.contains(&"旧服务 · second · 类型不可用"));
+    panel.synchronize(Some(id), false);
+    assert!(panel.vts.is_empty());
+}
+
+#[test]
 fn vts_parameter_pages_are_correlated_and_cleared_on_disconnect() {
     let id = Uuid::new_v4();
     let mut panel = DesktopRuntimePanel::default();

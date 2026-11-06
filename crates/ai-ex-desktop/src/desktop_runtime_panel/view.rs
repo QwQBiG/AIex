@@ -179,7 +179,7 @@ impl DesktopRuntimePanel {
                 }
             }
             for key in &self.vts {
-                ui.label(format!("{} · {}", key.name, key.id));
+                ui.label(format!("{} · {} · {}", key.name, key.id, hotkey_kind(key.kind.as_deref())));
             }
             if let Some(page) = &self.vts_parameters {
                 ui.strong(match self.vts_parameter_filter {
@@ -231,6 +231,37 @@ impl DesktopRuntimePanel {
             .into_iter()
             .filter_map(|request| self.begin(request))
             .collect()
+    }
+}
+
+fn hotkey_kind(kind: Option<&str>) -> &str {
+    match kind.filter(|kind| ai_ex_domain::valid_vts_hotkey_kind(kind)) {
+        Some("ToggleExpression") => "切换表情",
+        Some("TriggerAnimation") => "播放动作",
+        Some("ChangeIdleAnimation") => "切换待机动作",
+        Some("RemoveAllExpressions") => "移除所有表情",
+        Some("ChangeVTSModel") => "切换人物",
+        Some("MoveModel") => "移动人物",
+        Some("ChangeBackground") => "切换背景",
+        Some("ReloadMicrophone") => "重新加载麦克风",
+        Some("ReloadTextures") => "重新加载贴图",
+        Some("CalibrateCam") => "校准摄像头",
+        Some("TakeScreenshot") => "截取屏幕",
+        Some("ScreenColorOverlay") => "切换人物色彩叠加",
+        Some("RemoveAllItems") => "移除所有物品",
+        Some("ToggleItemScene") => "切换物品场景",
+        Some("DownloadRandomWorkshopItem") => "下载随机创意工坊物品",
+        Some("ExecuteItemAction") => "执行物品热键",
+        Some("ArtMeshColorPreset") => "加载网格颜色预设",
+        Some("ToggleTracker") => "切换追踪器",
+        Some("ToggleTwitchFeature") => "切换 Twitch 功能",
+        Some("LoadEffectPreset") => "加载画面效果预设",
+        Some("ToggleLive2DEditorAPI") => "切换 Live2D 编辑器同步",
+        Some("WebItemAction") => "触发网页物品动作",
+        Some("ToggleModelSound") => "切换人物或物品声音",
+        Some("Unset") => "未设置动作",
+        Some(other) => other,
+        None => "类型不可用",
     }
 }
 

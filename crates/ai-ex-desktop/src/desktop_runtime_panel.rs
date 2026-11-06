@@ -50,6 +50,7 @@ impl DesktopRuntimePanel {
             self.fresh = false;
             self.pending.clear();
             self.poll_at = None;
+            self.vts.clear();
             self.vts_parameters = None;
             self.vts_mappings = None;
             self.component_observations = None;

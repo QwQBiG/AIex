@@ -2,6 +2,7 @@
 
 mod backup;
 mod backup_inspection;
+mod candidate_merge;
 mod document;
 mod entities;
 mod imported_entities;
@@ -11,6 +12,7 @@ mod management;
 mod migration;
 pub use backup::MemoryBackup;
 pub use backup_inspection::{BackupInspection, inspect_profile_backup};
+pub use candidate_merge::{MemoryMergeCandidate, MemoryMergeReport, merge_profile_candidates};
 pub use knowledge::{MediaStats, observation_media};
 pub use maintenance::MediaMaintenanceReport;
 pub use migration::{MemoryMigrationReport, migrate_jsonl};

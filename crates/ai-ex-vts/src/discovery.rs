@@ -5,6 +5,8 @@ use serde_json::Value;
 pub struct VtsHotkey {
     pub id: String,
     pub name: String,
+    /// The action type reported by VTS, when it is present and readable.
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +134,11 @@ pub(super) fn hotkeys(response: &Value) -> Result<VtsHotkeyList, AppError> {
             Ok(VtsHotkey {
                 id: id.into(),
                 name: name.into(),
+                kind: item
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .filter(|kind| ai_ex_domain::valid_vts_hotkey_kind(kind))
+                    .map(str::to_owned),
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
@@ -177,6 +184,24 @@ mod tests {
         let result = hotkeys(&unloaded).unwrap();
         assert!(!result.model_loaded && result.hotkeys.is_empty());
         assert!(hotkeys(&json!({"messageType":"APIError"})).is_err());
+    }
+
+    #[test]
+    fn hotkey_type_is_optional_and_invalid_metadata_does_not_hide_the_hotkey() {
+        let response = json!({
+            "messageType": "HotkeysInCurrentModelResponse",
+            "data": {"modelLoaded": true, "availableHotkeys": [
+                {"hotkeyID":"a","name":"表情","type":"ToggleExpression"},
+                {"hotkeyID":"b","name":"旧响应"},
+                {"hotkeyID":"c","name":"无效","type":"x".repeat(129)},
+                {"hotkeyID":"d","name":"控制字符","type":"move\nmodel"},
+                {"hotkeyID":"e","name":"异常值","type":42}
+            ]}
+        });
+        let list = hotkeys(&response).unwrap();
+        assert_eq!(list.hotkeys.len(), 5);
+        assert_eq!(list.hotkeys[0].kind.as_deref(), Some("ToggleExpression"));
+        assert!(list.hotkeys[1..].iter().all(|key| key.kind.is_none()));
     }
 
     #[test]

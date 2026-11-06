@@ -968,7 +968,7 @@ fn opening_download_confirmation_scrolls_it_into_view() {
 }
 
 #[test]
-fn uncertain_download_queries_current_state_and_never_replays_the_mutation() {
+fn uncertain_download_keeps_waiting_after_a_package_snapshot() {
     let mut panel = panel();
     let request = NativeRequest::Download {
         package_id: "qwen3-4b".into(),
@@ -998,7 +998,10 @@ fn uncertain_download_queries_current_state_and_never_replays_the_mutation() {
         })
         .unwrap();
     panel.receive(request_id, Ok(NativeReply::Packages(packages)));
-    assert!(!panel.uncertain);
+    assert!(panel.uncertain);
+    assert_eq!(panel.package_unconfirmed.len(), 1);
+    assert!(panel.retained_package_operations.contains_key(&operation));
+    assert!(panel.begin(request.clone()).is_none());
     panel.last_poll = None;
     let (_, commands) = render(&mut panel, &egui::Context::default(), Vec::new());
     assert!(commands.iter().any(|command| matches!(command, WorkerCommand::Native { request: NativeRequest::Operation { id }, .. } if *id == operation)));
@@ -1009,6 +1012,364 @@ fn uncertain_download_queries_current_state_and_never_replays_the_mutation() {
             ..
         }
     )));
+}
+
+#[test]
+fn observed_terminal_operation_survives_disconnect_while_request_is_unknown() {
+    let mut panel = panel();
+    let download = NativeRequest::Download {
+        package_id: "qwen3-4b".into(),
+    };
+    let download_id = id(panel.begin(download.clone()).unwrap());
+    panel.receive(
+        download_id,
+        Err(AppError::connectivity("synthetic lost reply")),
+    );
+    let operation_id = Uuid::new_v4();
+    let mut packages = panel.packages.clone();
+    packages[1].active_operation = Some(operation_id);
+    let query_id = id(panel.begin(NativeRequest::Packages).unwrap());
+    panel.receive(query_id, Ok(NativeReply::Packages(packages)));
+    let query_id = id(panel
+        .begin(NativeRequest::Operation { id: operation_id })
+        .unwrap());
+    panel.receive(
+        query_id,
+        Ok(NativeReply::Operation(NativeOperation {
+            id: operation_id,
+            package_id: "qwen3-4b".into(),
+            phase: ai_ex_domain::NativeOperationPhase::Completed,
+            completed_bytes: 1,
+            total_bytes: 1,
+            error: None,
+        })),
+    );
+    panel.disconnected();
+    assert_eq!(panel.package_unconfirmed.get(&download_id), Some(&download));
+    assert!(panel.uncertain);
+    assert_eq!(
+        panel
+            .retained_package_operations
+            .get(&operation_id)
+            .unwrap(),
+        "qwen3-4b"
+    );
+    assert_eq!(
+        panel.retained_package_terminal.get(&operation_id),
+        Some(&ai_ex_domain::NativeOperationPhase::Completed)
+    );
+    let output = egui::Context::default().run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 1200.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui, "default", false);
+        },
+    );
+    let labels = output.shapes.iter().filter_map(|shape| match &shape.shape {
+        egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+        _ => None,
+    });
+    assert!(labels.into_iter().any(|text| {
+        text.contains(&operation_id.to_string()) && text.contains("曾观察到已完成")
+    }));
+}
+
+#[test]
+fn earlier_and_later_package_queries_cannot_settle_an_unknown_mutation() {
+    for request in [
+        NativeRequest::Download {
+            package_id: "qwen3-4b".into(),
+        },
+        NativeRequest::Import {
+            package_id: "qwen3-4b".into(),
+            path: "C:\\synthetic\\private-marker.zip".into(),
+        },
+        NativeRequest::Remove {
+            package_id: "qwen3-4b".into(),
+        },
+    ] {
+        let mut panel = panel();
+        let old_query = id(panel.begin(NativeRequest::Packages).unwrap());
+        let mutation = id(panel.begin(request.clone()).unwrap());
+        panel.receive(
+            mutation,
+            Err(AppError::connectivity("synthetic lost reply")),
+        );
+        let packages = panel.packages.clone();
+        panel.receive(old_query, Ok(NativeReply::Packages(packages.clone())));
+        assert!(panel.uncertain);
+        assert!(panel.begin(request.clone()).is_none());
+        let new_query = id(panel.begin(NativeRequest::Packages).unwrap());
+        panel.receive(new_query, Ok(NativeReply::Packages(packages)));
+        assert!(panel.uncertain);
+        assert_eq!(panel.package_unconfirmed.get(&mutation), Some(&request));
+        assert!(panel.begin(request).is_none());
+    }
+}
+
+#[test]
+fn disconnect_preserves_pending_package_actions_known_ids_and_drafts() {
+    let mut panel = panel();
+    let operation = Uuid::new_v4();
+    panel.packages[1].active_operation = Some(operation);
+    panel.import_paths.insert(
+        "qwen3-4b".into(),
+        "C:\\synthetic\\private-marker.zip".into(),
+    );
+    panel.device_draft = Some(ai_ex_config::native::NativeDevices {
+        microphone_enabled: true,
+        playback_enabled: false,
+    });
+    let request = NativeRequest::Import {
+        package_id: "qwen3-4b".into(),
+        path: "C:\\synthetic\\private-marker.zip".into(),
+    };
+    let pending = id(panel.begin(request.clone()).unwrap());
+    panel.disconnected();
+    assert_eq!(panel.package_unconfirmed.get(&pending), Some(&request));
+    assert_eq!(
+        panel.retained_package_operations.get(&operation).unwrap(),
+        "qwen3-4b"
+    );
+    assert!(panel.device_draft.unwrap().microphone_enabled);
+    assert_eq!(
+        panel.import_paths["qwen3-4b"],
+        "C:\\synthetic\\private-marker.zip"
+    );
+    panel.receive(pending, Ok(NativeReply::Accepted));
+    let query = id(panel.begin(NativeRequest::Settings).unwrap());
+    panel.receive(
+        query,
+        Ok(NativeReply::Settings {
+            revision: 1,
+            document: NativeConfig::default().to_toml().unwrap(),
+        }),
+    );
+    assert!(panel.uncertain);
+    assert!(panel.begin(request).is_none());
+    assert!(panel.retained_package_operations.contains_key(&operation));
+}
+
+#[test]
+fn unknown_cancel_retains_its_id_and_cannot_be_sent_twice() {
+    let mut panel = panel();
+    let operation = Uuid::new_v4();
+    panel.packages[1].active_operation = Some(operation);
+    let request = NativeRequest::Cancel { id: operation };
+    let pending = id(panel.begin(request.clone()).unwrap());
+    panel.receive(pending, Err(AppError::connectivity("synthetic lost reply")));
+    assert!(panel.uncertain);
+    assert_eq!(
+        panel.retained_package_operations.get(&operation).unwrap(),
+        "qwen3-4b"
+    );
+    assert!(panel.begin(request).is_none());
+    assert!(
+        panel
+            .begin(NativeRequest::Cancel { id: Uuid::new_v4() })
+            .is_some()
+    );
+    panel.disconnected();
+    assert!(panel.uncertain);
+    assert!(panel.retained_package_operations.contains_key(&operation));
+}
+
+#[test]
+fn unknown_save_and_cancel_remain_independent_across_disconnect() {
+    let mut panel = panel();
+    let operation = Uuid::new_v4();
+    panel.packages[1].active_operation = Some(operation);
+    let save = NativeRequest::SaveSettings {
+        expected_revision: 1,
+        document: NativeConfig::default().to_toml().unwrap(),
+    };
+    let cancel = NativeRequest::Cancel { id: operation };
+    let save_id = id(panel.begin(save.clone()).unwrap());
+    let cancel_id = id(panel.begin(cancel.clone()).unwrap());
+    panel.receive(
+        cancel_id,
+        Err(AppError::connectivity("synthetic lost cancel")),
+    );
+    panel.receive(save_id, Err(AppError::connectivity("synthetic lost save")));
+    assert!(matches!(
+        panel.unconfirmed,
+        Some(NativeRequest::SaveSettings { .. })
+    ));
+    assert_eq!(panel.package_unconfirmed.get(&cancel_id), Some(&cancel));
+    panel.disconnected();
+    assert!(matches!(
+        panel.unconfirmed,
+        Some(NativeRequest::SaveSettings { .. })
+    ));
+    assert_eq!(panel.package_unconfirmed.get(&cancel_id), Some(&cancel));
+    let query = id(panel.begin(NativeRequest::Settings).unwrap());
+    let newer = NativeConfig {
+        revision: 2,
+        ..NativeConfig::default()
+    };
+    panel.receive(
+        query,
+        Ok(NativeReply::Settings {
+            revision: 2,
+            document: newer.to_toml().unwrap(),
+        }),
+    );
+    assert!(panel.unconfirmed.is_none());
+    assert!(panel.uncertain);
+    assert_eq!(panel.package_unconfirmed.get(&cancel_id), Some(&cancel));
+    assert!(panel.retained_package_operations.contains_key(&operation));
+    assert!(panel.begin(cancel).is_none());
+}
+
+#[test]
+fn disconnected_recovery_displays_ids_without_private_import_paths() {
+    let mut panel = panel();
+    let operation = Uuid::new_v4();
+    panel.packages[1].active_operation = Some(operation);
+    let request = NativeRequest::Import {
+        package_id: "qwen3-4b".into(),
+        path: "C:\\synthetic\\private-marker.zip".into(),
+    };
+    let pending = id(panel.begin(request).unwrap());
+    panel.receive(pending, Err(AppError::connectivity("synthetic lost reply")));
+    panel.disconnected();
+    let context = egui::Context::default();
+    let output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 1200.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui, "default", false);
+        },
+    );
+    let labels = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        labels
+            .iter()
+            .any(|text| text.contains("退出本应用") && text.contains("原服务已停止"))
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|text| text.contains(&operation.to_string()))
+    );
+    assert!(!labels.iter().any(|text| text.contains("private-marker")));
+}
+
+#[test]
+fn disconnected_import_path_requires_explicit_expand_and_copy() {
+    let mut panel = panel();
+    let path = "C:\\synthetic\\old model.zip";
+    let request = NativeRequest::Import {
+        package_id: "qwen3-4b".into(),
+        path: path.into(),
+    };
+    let pending = id(panel.begin(request).unwrap());
+    panel.receive(pending, Err(AppError::connectivity("synthetic lost reply")));
+    panel.disconnected();
+    let context = egui::Context::default();
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        context.style_mut_of(theme, |style| style.animation_time = 0.0);
+    }
+    let frame = |panel: &mut NativePanel, events| {
+        context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 1200.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| assert!(panel.show(ui, "default", false).is_empty()),
+        )
+    };
+    let position = |output: &egui::FullOutput, label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("requested control is visible")
+    };
+    let initial = frame(&mut panel, Vec::new());
+    assert!(!initial.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text) if text.galley.job.text == path
+    )));
+    let expand = position(&initial, "查看导入路径");
+    for pressed in [true, false] {
+        frame(
+            &mut panel,
+            vec![
+                egui::Event::PointerMoved(expand),
+                egui::Event::PointerButton {
+                    pos: expand,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+    }
+    let expanded = frame(&mut panel, Vec::new());
+    assert!(expanded.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text) if text.galley.job.text == path
+    )));
+    let copy = position(&expanded, "复制导入路径");
+    frame(
+        &mut panel,
+        vec![
+            egui::Event::PointerMoved(copy),
+            egui::Event::PointerButton {
+                pos: copy,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    let copied = frame(
+        &mut panel,
+        vec![
+            egui::Event::PointerMoved(copy),
+            egui::Event::PointerButton {
+                pos: copy,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    assert!(
+        copied
+            .platform_output
+            .commands
+            .iter()
+            .any(|command| matches!(
+                command, egui::OutputCommand::CopyText(text) if text == path
+            ))
+    );
+    assert_eq!(panel.package_unconfirmed.len(), 1);
 }
 
 #[test]

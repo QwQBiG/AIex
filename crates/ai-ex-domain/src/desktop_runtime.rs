@@ -122,6 +122,24 @@ pub enum VtsParameterFilter {
 pub struct DiscoveredVtsHotkey {
     pub id: String,
     pub name: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_hotkey_kind",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub kind: Option<String>,
+}
+
+/// Bound optional metadata without discarding the hotkey itself.
+pub fn valid_vts_hotkey_kind(kind: &str) -> bool {
+    !kind.trim().is_empty() && kind.len() <= 128 && !kind.chars().any(char::is_control)
+}
+
+fn deserialize_hotkey_kind<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.filter(|kind| valid_vts_hotkey_kind(kind)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,4 +234,37 @@ pub enum DesktopRuntimeReply {
         filter: VtsParameterFilter,
         page: VtsParameterPage,
     },
+}
+
+#[cfg(test)]
+mod hotkey_compatibility_tests {
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct FormerHotkey {
+        id: String,
+        name: String,
+    }
+
+    #[test]
+    fn optional_hotkey_kind_keeps_old_responses_and_old_readers_compatible() {
+        let old = serde_json::json!({"id": "id", "name": "名称"});
+        let parsed: DiscoveredVtsHotkey = serde_json::from_value(old.clone()).unwrap();
+        assert!(parsed.kind.is_none());
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), old);
+
+        let new = DiscoveredVtsHotkey {
+            kind: Some("ToggleExpression".into()),
+            ..parsed
+        };
+        let encoded = serde_json::to_value(&new).unwrap();
+        let former: FormerHotkey = serde_json::from_value(encoded).unwrap();
+        assert_eq!((former.id.as_str(), former.name.as_str()), ("id", "名称"));
+
+        for invalid in ["x".repeat(129), "  ".into(), "bad\nkind".into()] {
+            let value = serde_json::json!({"id":"id", "name":"名称", "kind":invalid});
+            let parsed: DiscoveredVtsHotkey = serde_json::from_value(value).unwrap();
+            assert!(parsed.kind.is_none());
+        }
+    }
 }

@@ -42,6 +42,9 @@ pub struct NativePanel {
     pub(super) uncertain: bool,
     unconfirmed: Option<NativeRequest>,
     unconfirmed_since: Option<u64>,
+    package_unconfirmed: BTreeMap<u64, NativeRequest>,
+    retained_package_operations: BTreeMap<Uuid, String>,
+    retained_package_terminal: BTreeMap<Uuid, ai_ex_domain::NativeOperationPhase>,
     pub(super) download_confirmation: Option<String>,
     storage_space: Option<StorageSpaceCheck>,
     pub(super) remove_confirmation: Option<String>,
@@ -84,6 +87,9 @@ impl Default for NativePanel {
             uncertain: false,
             unconfirmed: None,
             unconfirmed_since: None,
+            package_unconfirmed: BTreeMap::new(),
+            retained_package_operations: BTreeMap::new(),
+            retained_package_terminal: BTreeMap::new(),
             download_confirmation: None,
             storage_space: None,
             remove_confirmation: None,
@@ -221,16 +227,25 @@ impl NativePanel {
                     return;
                 }
                 if mutating(&request) {
-                    if !matches!(self.unconfirmed, Some(NativeRequest::SaveSettings { .. })) {
-                        self.uncertain = matches!(
-                            error.kind,
-                            ai_ex_domain::ErrorKind::Connectivity
-                                | ai_ex_domain::ErrorKind::Protocol
-                        );
-                        if self.uncertain {
+                    let ambiguous = matches!(
+                        error.kind,
+                        ai_ex_domain::ErrorKind::Connectivity | ai_ex_domain::ErrorKind::Protocol
+                    );
+                    if ambiguous {
+                        if package_mutation(&request) {
+                            self.retain_cancel_id(&request);
+                            self.package_unconfirmed.insert(request_id, request.clone());
+                        } else if !matches!(
+                            self.unconfirmed,
+                            Some(NativeRequest::SaveSettings { .. })
+                        ) || matches!(request, NativeRequest::SaveSettings { .. })
+                        {
                             self.unconfirmed = Some(request.clone());
                             self.unconfirmed_since = Some(self.next_request);
                         }
+                        self.uncertain = true;
+                    } else if self.unconfirmed.is_none() && self.package_unconfirmed.is_empty() {
+                        self.uncertain = false;
                     }
                     self.refresh = true;
                 }
@@ -268,18 +283,16 @@ impl NativePanel {
                 self.state = Some(state);
             }
             NativeReply::Packages(packages) => {
-                self.packages = packages;
-                if matches!(
-                    &self.unconfirmed,
-                    Some(
-                        NativeRequest::Download { .. }
-                            | NativeRequest::Import { .. }
-                            | NativeRequest::Remove { .. }
-                            | NativeRequest::Cancel { .. }
-                    )
-                ) {
-                    self.confirm_outcome();
+                if !self.package_unconfirmed.is_empty() {
+                    for package in &packages {
+                        if let Some(id) = package.active_operation {
+                            self.retained_package_operations
+                                .entry(id)
+                                .or_insert_with(|| package.id.clone());
+                        }
+                    }
                 }
+                self.packages = packages;
             }
             NativeReply::Settings { revision, document } => {
                 if matches!(request, NativeRequest::Settings) {
@@ -404,19 +417,35 @@ impl NativePanel {
             }
             NativeReply::Operation(operation) => {
                 self.track_voice_import(&request, &operation);
+                if !self.package_unconfirmed.is_empty() {
+                    self.retained_package_operations
+                        .entry(operation.id)
+                        .or_insert_with(|| operation.package_id.clone());
+                    if operation.phase.is_terminal() {
+                        self.retained_package_terminal
+                            .entry(operation.id)
+                            .or_insert(operation.phase);
+                    }
+                }
                 if matches!(request, NativeRequest::PreviewVoice { .. }) {
                     self.preview_operation = Some(operation.id);
                 }
-                if let Some(error) = &operation.error {
+                if let Some(error) = &operation.error
+                    && self.package_unconfirmed.is_empty()
+                {
                     self.status = format!("操作未完成：{error}");
                 }
                 if operation.phase.is_terminal() {
+                    if self.package_unconfirmed.is_empty() {
+                        self.retained_package_operations.remove(&operation.id);
+                        self.retained_package_terminal.remove(&operation.id);
+                    }
                     if self.preview_operation == Some(operation.id) {
                         self.preview_operation = None;
                     }
                     self.refresh = true;
                     self.operations.remove(&operation.id);
-                    if operation.error.is_none() {
+                    if operation.error.is_none() && self.package_unconfirmed.is_empty() {
                         self.status = format!(
                             "{}：{}",
                             self.packages
@@ -466,6 +495,7 @@ impl NativePanel {
     fn begin(&mut self, request: NativeRequest) -> Option<WorkerCommand> {
         if self.pending.len() >= 16
             || self.pending.values().any(|pending| pending == &request)
+            || matches!(&request, NativeRequest::Cancel { id } if self.cancel_unconfirmed(*id))
             || self.uncertain
                 && mutating(&request)
                 && !matches!(
@@ -503,10 +533,40 @@ impl NativePanel {
     }
 
     fn confirm_outcome(&mut self) {
-        self.uncertain = false;
         self.unconfirmed = None;
         self.unconfirmed_since = None;
-        self.status = "状态已重新核对，可继续操作。".into();
+        self.uncertain = !self.package_unconfirmed.is_empty();
+        self.status = if self.uncertain {
+            "准备或取消操作结果仍未确认；刷新不能证明原请求已经结束。".into()
+        } else {
+            "状态已重新核对，可继续操作。".into()
+        };
+    }
+
+    fn cancel_unconfirmed(&self, operation_id: Uuid) -> bool {
+        self.package_unconfirmed
+            .values()
+            .any(|request| matches!(request, NativeRequest::Cancel { id } if *id == operation_id))
+    }
+
+    fn retain_cancel_id(&mut self, request: &NativeRequest) {
+        let NativeRequest::Cancel { id } = request else {
+            return;
+        };
+        let package = self
+            .operations
+            .get(id)
+            .map(|operation| operation.package_id.clone())
+            .or_else(|| {
+                self.packages
+                    .iter()
+                    .find(|package| package.active_operation == Some(*id))
+                    .map(|package| package.id.clone())
+            })
+            .unwrap_or_default();
+        self.retained_package_operations
+            .entry(*id)
+            .or_insert(package);
     }
 
     pub fn disconnected(&mut self) {
@@ -518,6 +578,34 @@ impl NativePanel {
             || !self.operations.is_empty()
             || self.uncertain
             || self.unconfirmed.is_some();
+        let pending_packages: Vec<_> = self
+            .pending
+            .iter()
+            .filter(|(_, request)| package_mutation(request))
+            .map(|(id, request)| (*id, request.clone()))
+            .collect();
+        for (id, request) in pending_packages {
+            self.retain_cancel_id(&request);
+            self.package_unconfirmed.entry(id).or_insert(request);
+        }
+        for package in &self.packages {
+            if let Some(id) = package.active_operation {
+                self.retained_package_operations
+                    .entry(id)
+                    .or_insert_with(|| package.id.clone());
+            }
+        }
+        for operation in self.operations.values() {
+            if self
+                .packages
+                .iter()
+                .any(|package| package.id == operation.package_id)
+            {
+                self.retained_package_operations
+                    .entry(operation.id)
+                    .or_insert_with(|| operation.package_id.clone());
+            }
+        }
         let pending_save = self.pending.values().find_map(|request| match request {
             NativeRequest::SaveSettings { .. } => Some(request.clone()),
             _ => None,
@@ -537,12 +625,14 @@ impl NativePanel {
         self.input_devices = None;
         self.refresh = true;
         self.last_poll = None;
-        self.uncertain = initialized;
+        self.uncertain = initialized || !self.package_unconfirmed.is_empty();
         self.unconfirmed = unknown_save
             .or(pending_save)
             .or_else(|| initialized.then_some(NativeRequest::Settings));
         self.unconfirmed_since = self.unconfirmed.as_ref().map(|_| self.next_request);
-        if initialized {
+        if !self.package_unconfirmed.is_empty() {
+            self.status = "连接已断开；准备或取消操作结果仍未确认，不会自动重发。".into();
+        } else if initialized {
             self.status = "连接已断开。恢复后会重新核对设置和模型，操作不会重发。".into();
         }
     }
@@ -592,6 +682,7 @@ impl NativePanel {
         let mut requests = Vec::new();
         ui.heading("准备本地伙伴");
         ui.weak("准备完成后可以离线对话。人物外形与其他设置随时可用。");
+        self.package_recovery(ui);
         if !connected {
             self.cancel_drop();
             self.close_download_confirmation();
@@ -657,5 +748,15 @@ fn mutating(request: &NativeRequest) -> bool {
             | NativeRequest::InputStatus { .. }
             | NativeRequest::StorageSpace { .. }
             | NativeRequest::Operation { .. }
+    )
+}
+
+fn package_mutation(request: &NativeRequest) -> bool {
+    matches!(
+        request,
+        NativeRequest::Download { .. }
+            | NativeRequest::Import { .. }
+            | NativeRequest::Remove { .. }
+            | NativeRequest::Cancel { .. }
     )
 }
