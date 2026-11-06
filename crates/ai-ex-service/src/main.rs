@@ -21,6 +21,7 @@ mod strategy_loop;
 mod template_game;
 mod template_host;
 mod template_import;
+mod voice_input_activity;
 
 #[cfg(test)]
 mod duplex_activity_tests;
@@ -514,6 +515,7 @@ async fn run() -> Result<(), AppError> {
         }
     };
     let desktop_runtime_task = desktop_runtime.as_ref().map(|runtime| runtime.spawn());
+    let voice_input = voice_input_activity::VoiceInputActivity::new(event_hub.clone());
     let control_task = spawn_control(
         &config,
         ControlResources {
@@ -530,10 +532,14 @@ async fn run() -> Result<(), AppError> {
     )
     .await?;
     let duplex_task = match &native {
-        Some(native) => {
-            native_ports::spawn_duplex(&config, native.clone(), runtime.clone(), automation.clone())
-        }
-        None => spawn_duplex(&config, runtime.clone(), automation.clone()),
+        Some(native) => native_ports::spawn_duplex(
+            &config,
+            native.clone(),
+            runtime.clone(),
+            automation.clone(),
+            voice_input,
+        ),
+        None => spawn_duplex(&config, runtime.clone(), automation.clone(), voice_input),
     };
     let duplex_task = match duplex_task {
         Ok(task) => task,
@@ -1966,6 +1972,7 @@ fn spawn_duplex(
     config: &AppConfig,
     _runtime: ConversationActivity,
     _automation: TemplateHost,
+    _voice_input: voice_input_activity::VoiceInputActivity,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
     if config.duplex.enabled {
         return Err(AppError::configuration(
@@ -1980,6 +1987,7 @@ fn spawn_duplex(
     config: &AppConfig,
     runtime: ConversationActivity,
     automation: TemplateHost,
+    voice_input: voice_input_activity::VoiceInputActivity,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
     if !config.duplex.enabled {
         return Ok(None);
@@ -2002,7 +2010,7 @@ fn spawn_duplex(
     })?;
     let controller = DuplexController::new(vad, transcriber);
     Ok(Some(tokio::spawn(async move {
-        if let Err(error) = run_duplex(source, controller, runtime, automation).await {
+        if let Err(error) = run_duplex(source, controller, runtime, automation, voice_input).await {
             tracing::error!(%error, "full-duplex input stopped");
         }
     })))
@@ -2014,6 +2022,7 @@ async fn run_duplex<S, T>(
     mut controller: DuplexController<T>,
     runtime: ConversationActivity,
     automation: TemplateHost,
+    voice_input: voice_input_activity::VoiceInputActivity,
 ) -> Result<(), AppError>
 where
     S: AudioSourcePort,
@@ -2030,7 +2039,8 @@ where
         match directive {
             DuplexDirective::InterruptCurrentTurn => {
                 let activity = automation.begin_chat()?;
-                voice_activity = Some(activity);
+                let listening = voice_input.begin()?;
+                voice_activity = Some((activity, listening));
                 if let Err(error) = runtime.interrupt("voice barge-in").await
                     && error.kind != ErrorKind::InvalidTransition
                 {

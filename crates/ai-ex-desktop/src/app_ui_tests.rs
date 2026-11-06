@@ -342,6 +342,91 @@ fn navigation_keeps_drafts_and_requires_confirmation_before_leaving_the_window()
 }
 
 #[test]
+fn voice_input_indicator_uses_confirmed_fresh_activity_without_changing_dialogue() {
+    let (mut app, events, _sent) = app();
+    let instance = uuid::Uuid::new_v4();
+    app.state.runtime.instance_id = Some(instance);
+    let context = egui::Context::default();
+    let has_indicator = |output: &egui::FullOutput| {
+        output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text) if text.galley.job.text == "正在接收或识别语音"
+    ))
+    };
+    let snapshot = ai_ex_observability::RuntimeSnapshot {
+        instance_id: Some(instance),
+        voice_input: ai_ex_domain::VoiceInputState {
+            revision: 1,
+            active: true,
+        },
+        ..Default::default()
+    };
+    events
+        .send(WorkerEvent::VoiceInputSnapshot {
+            generation: 0,
+            snapshot: snapshot.clone(),
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(has_indicator(&render(
+        &mut app,
+        &context,
+        [1000.0, 720.0],
+        vec![]
+    )));
+    assert_eq!(
+        app.state.runtime.state,
+        ai_ex_domain::ConversationState::Idle
+    );
+    app.state.needs_resync = true;
+    assert!(!has_indicator(&render(
+        &mut app,
+        &context,
+        [1000.0, 720.0],
+        vec![]
+    )));
+    app.state.needs_resync = false;
+    events.send(WorkerEvent::VoiceInputUnavailable(0)).unwrap();
+    assert!(!has_indicator(&render(
+        &mut app,
+        &context,
+        [1000.0, 720.0],
+        vec![]
+    )));
+    events
+        .send(WorkerEvent::VoiceSamplingGeneration(1))
+        .unwrap();
+    events
+        .send(WorkerEvent::VoiceInputSnapshot {
+            generation: 0,
+            snapshot: snapshot.clone(),
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(!app.voice_input_fresh);
+    events
+        .send(WorkerEvent::VoiceInputSnapshot {
+            generation: 1,
+            snapshot: snapshot.clone(),
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(app.voice_input_fresh);
+    events.send(WorkerEvent::Connection(false)).unwrap();
+    events
+        .send(WorkerEvent::VoiceInputSnapshot {
+            generation: 0,
+            snapshot,
+        })
+        .unwrap();
+    assert!(!has_indicator(&render(
+        &mut app,
+        &context,
+        [1000.0, 720.0],
+        vec![]
+    )));
+}
+
+#[test]
 fn close_request_preserves_draft_until_explicit_exit() {
     let (mut app, _events, _sent) = app();
     app.input = "尚未发送的内容".into();

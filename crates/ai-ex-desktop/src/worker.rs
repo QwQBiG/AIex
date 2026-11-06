@@ -117,6 +117,12 @@ pub enum WorkerEvent {
     AutomationStatus(Result<AutomationSnapshot, AppError>),
     Connection(bool),
     Snapshot(RuntimeSnapshot),
+    VoiceSamplingGeneration(u64),
+    VoiceInputSnapshot {
+        generation: u64,
+        snapshot: RuntimeSnapshot,
+    },
+    VoiceInputUnavailable(u64),
     HistoryGap(RuntimeSnapshot),
     Memory {
         request_id: u64,
@@ -445,6 +451,87 @@ async fn run_polling(
     events: Sender<WorkerEvent>,
     persona_epoch: &AtomicU64,
 ) {
+    let (voice_target, voice_receiver) = tokio::sync::watch::channel(VoiceTarget::default());
+    tokio::select! {
+        _ = run_primary_polling(client.clone(), events.clone(), persona_epoch, &voice_target) => {},
+        _ = run_voice_sampling(&client, &events, voice_receiver) => {},
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct VoiceTarget {
+    generation: u64,
+    connected: bool,
+}
+
+fn set_voice_connection(
+    events: &Sender<WorkerEvent>,
+    target: &tokio::sync::watch::Sender<VoiceTarget>,
+    connected: bool,
+) -> bool {
+    let Some(generation) = target.borrow().generation.checked_add(1) else {
+        return false;
+    };
+    if !emit(events, WorkerEvent::VoiceSamplingGeneration(generation))
+        || !emit(events, WorkerEvent::Connection(connected))
+    {
+        return false;
+    }
+    target.send_replace(VoiceTarget {
+        generation,
+        connected,
+    });
+    true
+}
+
+async fn run_voice_sampling(
+    client: &ControlClient,
+    events: &Sender<WorkerEvent>,
+    target: tokio::sync::watch::Receiver<VoiceTarget>,
+) {
+    run_voice_sampling_with(events, target, || fetch_snapshot(client)).await;
+}
+
+async fn run_voice_sampling_with<F, Fut>(
+    events: &Sender<WorkerEvent>,
+    mut target: tokio::sync::watch::Receiver<VoiceTarget>,
+    mut fetch: F,
+) where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<RuntimeSnapshot, AppError>>,
+{
+    let mut interval = tokio::time::interval(Duration::from_millis(300));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            changed = target.changed() => if changed.is_err() { return; },
+            _ = interval.tick() => {
+                let captured = *target.borrow_and_update();
+                if !captured.connected { continue; }
+                let result = tokio::select! {
+                    changed = target.changed() => {
+                        if changed.is_err() { return; }
+                        continue;
+                    }
+                    result = fetch() => result,
+                };
+                if *target.borrow() != captured { continue; }
+                let event = match result {
+                    Ok(snapshot) => WorkerEvent::VoiceInputSnapshot { generation: captured.generation, snapshot },
+                    Err(_) => WorkerEvent::VoiceInputUnavailable(captured.generation),
+                };
+                if !emit(events, event) { return; }
+            }
+        }
+    }
+}
+
+async fn run_primary_polling(
+    client: ControlClient,
+    events: Sender<WorkerEvent>,
+    persona_epoch: &AtomicU64,
+    voice_target: &tokio::sync::watch::Sender<VoiceTarget>,
+) {
     let mut interval = tokio::time::interval(Duration::from_millis(50));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut connected = false;
@@ -471,7 +558,7 @@ async fn run_polling(
                                     if !failure_reported
                                     {
                                         failure_reported = true;
-                                        if !emit(&events, WorkerEvent::Connection(false))
+                                        if !set_voice_connection(&events, voice_target, false)
                                             || !emit(&events, WorkerEvent::Failure(error.to_string()))
                                         {
                                             return;
@@ -480,7 +567,7 @@ async fn run_polling(
                                     continue;
                                 }
                             };
-                            if !emit(&events, WorkerEvent::Connection(true))
+                            if !set_voice_connection(&events, voice_target, true)
                                 || !emit(&events, WorkerEvent::Health(health))
                             {
                                 return;
@@ -497,7 +584,7 @@ async fn run_polling(
                                     Ok(true) => {}
                                     Ok(false) => return,
                                     Err(error) => {
-                                        if !emit(&events, WorkerEvent::Connection(false))
+                                        if !set_voice_connection(&events, voice_target, false)
                                             || !emit(&events, WorkerEvent::Failure(error.to_string())) {
                                             return;
                                         }
@@ -548,7 +635,7 @@ async fn run_polling(
                             if !failure_reported
                             {
                                 failure_reported = true;
-                                if !emit(&events, WorkerEvent::Connection(false))
+                                if !set_voice_connection(&events, voice_target, false)
                                     || !emit(&events, WorkerEvent::Failure(error.to_string()))
                                 {
                                     return;
@@ -570,7 +657,7 @@ async fn run_polling(
                     {
                         connected = false;
                         failure_reported = true;
-                        if !emit(&events, WorkerEvent::Connection(false))
+                        if !set_voice_connection(&events, voice_target, false)
                             || !emit(&events, WorkerEvent::Failure(error.to_string()))
                         {
                             return;
@@ -587,7 +674,7 @@ async fn run_polling(
                             Err(error) => {
                                 connected = false;
                                 failure_reported = true;
-                                if !emit(&events, WorkerEvent::Connection(false))
+                                if !set_voice_connection(&events, voice_target, false)
                                     || !emit(&events, WorkerEvent::Failure(error.to_string())) {
                                     return;
                                 }

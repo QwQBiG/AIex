@@ -21,6 +21,7 @@ pub use native_desktop::*;
 mod persona;
 mod playback;
 mod stage_telemetry;
+mod voice_input;
 pub use native_control::{
     NATIVE_MAX_DOCUMENT_BYTES, NATIVE_MAX_ERROR_BYTES, NATIVE_MAX_PACKAGES, NativeLicense,
     NativeOperation, NativeOperationPhase, NativePackage, NativePackageKind, NativePackageState,
@@ -51,3 +52,4 @@ pub use memory_knowledge::{
 pub use persona::PersonaSnapshot;
 pub use playback::SpeechPlaybackSnapshot;
 pub use stage_telemetry::{STAGE_TELEMETRY_SCHEMA_VERSION, StageActionSummary, StageSnapshot};
+pub use voice_input::VoiceInputState;

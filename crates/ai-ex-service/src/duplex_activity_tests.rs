@@ -30,6 +30,20 @@ use uuid::Uuid;
 
 struct SyntheticAudio(mpsc::Receiver<AudioFrame>);
 
+struct FailedAudio(bool);
+
+#[async_trait]
+impl AudioSourcePort for FailedAudio {
+    async fn next_frame(&mut self) -> Result<Option<AudioFrame>, AppError> {
+        if self.0 {
+            Err(AppError::unavailable("synthetic source failure"))
+        } else {
+            self.0 = true;
+            Ok(Some(audio(0.5)))
+        }
+    }
+}
+
 #[async_trait]
 impl AudioSourcePort for SyntheticAudio {
     async fn next_frame(&mut self) -> Result<Option<AudioFrame>, AppError> {
@@ -119,6 +133,7 @@ struct Fixture {
     host: TemplateHost,
     models: mpsc::Receiver<Generation>,
     events: EventHub,
+    voice_input: crate::voice_input_activity::VoiceInputActivity,
     // Keep a healthy, idle output consumer without creating an audio device.
     _speech: SpeechQueue,
     _receiver: SpeechReceiver,
@@ -195,12 +210,14 @@ impl Fixture {
             2,
         )
         .unwrap();
+        let voice_input = crate::voice_input_activity::VoiceInputActivity::new(events.clone());
         let fixture = Self {
             directory,
             runtime: ConversationActivity::new(handle, host.clone()),
             host,
             models,
             events,
+            voice_input,
             _speech: speech,
             _receiver: receiver,
         };
@@ -254,6 +271,7 @@ impl Fixture {
             controller,
             self.runtime.clone(),
             self.host.clone(),
+            self.voice_input.clone(),
         ));
         (frames, transcriptions, task)
     }
@@ -296,6 +314,16 @@ impl Fixture {
             .await;
         assert_eq!(self.host.pending_chat_count().unwrap(), 0);
         idle
+    }
+
+    async fn voice_active(&self, expected: bool) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while self.events.current().voice_input.active != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("voice input status settles");
     }
 
     async fn close(self) {
@@ -346,6 +374,7 @@ async fn speech_start_and_asr_to_model_handoff_keep_busy_and_preserve_manual_pau
         let (frames, mut transcriptions, voice) = fixture.voice();
         frames.send(audio(0.5)).await.unwrap();
         let started = fixture.busy().await;
+        fixture.voice_active(true).await;
         assert_eq!(
             started.session.as_ref().unwrap().pause_reason,
             Some(AutomationPauseReason::Chat)
@@ -367,6 +396,7 @@ async fn speech_start_and_asr_to_model_handoff_keep_busy_and_preserve_manual_pau
 
         frames.send(audio(0.0)).await.unwrap();
         let transcription = observed(&mut transcriptions).await;
+        fixture.voice_active(true).await;
         assert_eq!(transcription.utterance.sample_rate, 16_000);
         assert_eq!(transcription.utterance.channels, 1);
         assert_eq!(transcription.utterance.samples.len(), 320);
@@ -386,6 +416,7 @@ async fn speech_start_and_asr_to_model_handoff_keep_busy_and_preserve_manual_pau
             .send(Ok("synthetic voice request".into()))
             .unwrap();
         let generation = observed(&mut fixture.models).await;
+        fixture.voice_active(false).await;
         assert!(generation.request.messages.iter().any(|message| {
             message.role == Role::User && message.content == "synthetic voice request"
         }));
@@ -519,6 +550,7 @@ async fn empty_transcription_asr_error_and_source_eof_release_voice_admission() 
             let (frames, mut transcriptions, voice) = fixture.voice();
             frames.send(audio(0.5)).await.unwrap();
             fixture.busy().await;
+            fixture.voice_active(true).await;
             if ending != "source_eof" {
                 frames.send(audio(0.0)).await.unwrap();
                 let transcription = observed(&mut transcriptions).await;
@@ -543,6 +575,7 @@ async fn empty_transcription_asr_error_and_source_eof_release_voice_admission() 
                 result.unwrap();
             }
             let idle = fixture.idle().await;
+            fixture.voice_active(false).await;
             assert_eq!(fixture.events.current().turns_started, 0, "{ending}");
             assert!(
                 fixture.models.try_recv().is_err(),
@@ -567,4 +600,60 @@ async fn empty_transcription_asr_error_and_source_eof_release_voice_admission() 
     })
     .await
     .expect("empty/error/EOF voice paths finish within ten seconds");
+}
+
+#[tokio::test]
+async fn aborting_voice_drops_activity_without_submitting_text() {
+    let mut fixture = Fixture::start().await;
+    let (frames, mut transcriptions, voice) = fixture.voice();
+    frames.send(audio(0.5)).await.unwrap();
+    fixture.voice_active(true).await;
+    frames.send(audio(0.0)).await.unwrap();
+    let transcription = observed(&mut transcriptions).await;
+    fixture.voice_active(true).await;
+    voice.abort();
+    assert!(voice.await.unwrap_err().is_cancelled());
+    fixture.voice_active(false).await;
+    assert!(
+        transcription
+            .complete
+            .send(Ok("stale voice".into()))
+            .is_err()
+    );
+    assert_eq!(fixture.events.current().turns_started, 0);
+    assert!(fixture.models.try_recv().is_err());
+    drop(frames);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn input_source_failure_clears_voice_activity() {
+    let fixture = Fixture::start().await;
+    let (asr, _observer) = mpsc::channel(1);
+    let controller = DuplexController::new(
+        EnergyVad::new(VadConfig {
+            start_frames: 1,
+            ..VadConfig::default()
+        })
+        .unwrap(),
+        HeldTranscriber(asr),
+    );
+    let error = run_duplex(
+        FailedAudio(false),
+        controller,
+        fixture.runtime.clone(),
+        fixture.host.clone(),
+        fixture.voice_input.clone(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.message, "synthetic source failure");
+    assert_eq!(
+        fixture.events.current().voice_input,
+        ai_ex_domain::VoiceInputState {
+            revision: 2,
+            active: false,
+        }
+    );
+    fixture.close().await;
 }

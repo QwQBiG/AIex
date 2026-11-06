@@ -114,6 +114,7 @@ pub fn spawn_duplex(
     native: Arc<NativeRuntime>,
     _runtime: crate::conversation_activity::ConversationActivity,
     _automation: crate::template_host::TemplateHost,
+    _voice_input: crate::voice_input_activity::VoiceInputActivity,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
     if native.config().is_ok_and(|c| c.devices.microphone_enabled) {
         tracing::warn!("Microphone requested, but this binary lacks native-capture");
@@ -127,13 +128,16 @@ pub fn spawn_duplex(
     native: Arc<NativeRuntime>,
     runtime: crate::conversation_activity::ConversationActivity,
     automation: crate::template_host::TemplateHost,
+    voice_input: crate::voice_input_activity::VoiceInputActivity,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
     if !native.config().is_ok_and(|c| c.devices.microphone_enabled) {
         return Ok(None);
     }
     let settings = config.duplex.clone();
     Ok(Some(tokio::spawn(async move {
-        if let Err(error) = run_native_capture(settings, native, runtime, automation).await {
+        if let Err(error) =
+            run_native_capture(settings, native, runtime, automation, voice_input).await
+        {
             // An unavailable recognizer or input device leaves the control and
             // conversation service alive so the user can correct its settings.
             tracing::error!(%error, "native microphone input unavailable");
@@ -147,6 +151,7 @@ async fn run_native_capture(
     native: Arc<NativeRuntime>,
     runtime: crate::conversation_activity::ConversationActivity,
     automation: crate::template_host::TemplateHost,
+    voice_input: crate::voice_input_activity::VoiceInputActivity,
 ) -> Result<(), AppError> {
     use ai_ex_capture::{CaptureSettings, NativeAudioSource};
     use ai_ex_duplex::{DuplexController, EnergyVad, VadConfig};
@@ -180,6 +185,7 @@ async fn run_native_capture(
         DuplexController::new(vad, transcriber),
         runtime,
         automation,
+        voice_input,
     )
     .await
 }

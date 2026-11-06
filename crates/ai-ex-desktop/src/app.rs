@@ -87,6 +87,8 @@ pub struct DesktopApp {
     retained_messages: VecDeque<navigation::RetainedMessage>,
     show_retained: bool,
     memory: crate::memory_panel::MemoryPanel,
+    voice_input_fresh: bool,
+    voice_sampling_generation: u64,
     backup_inspection: crate::backup_inspection_panel::BackupInspectionPanel,
     reflex: reflex::ReflexPanel,
     reflex_runtime_ready: bool,
@@ -158,6 +160,8 @@ impl DesktopApp {
             retained_messages: VecDeque::new(),
             show_retained: false,
             memory: Default::default(),
+            voice_input_fresh: false,
+            voice_sampling_generation: 0,
             backup_inspection: Default::default(),
             reflex: Default::default(),
             reflex_runtime_ready: false,
@@ -302,6 +306,7 @@ impl DesktopApp {
                     self.reflex.receive(None, result);
                 }
                 WorkerEvent::Connection(connected) => {
+                    self.voice_input_fresh = false;
                     self.reflex_runtime_ready = false;
                     self.reflex.disconnected();
                     self.memory.connection_changed();
@@ -322,15 +327,39 @@ impl DesktopApp {
                     self.synchronize_desktop_controls();
                 }
                 WorkerEvent::Snapshot(snapshot) => {
+                    let new_voice_instance = snapshot.instance_id.is_some()
+                        && snapshot.instance_id != self.state.runtime.instance_id;
+                    let voice_known = self.state.merge_voice_input(&snapshot);
                     if (self.state.runtime.instance_id.is_none()
                         || snapshot.instance_id == self.state.runtime.instance_id)
                         && snapshot.last_sequence >= self.state.runtime.last_sequence
                     {
                         self.state.apply_snapshot(snapshot);
+                        self.voice_input_fresh = voice_known || new_voice_instance;
                         self.reflex_runtime_ready = true;
                         self.sync_reflex_identity();
+                    } else if voice_known {
+                        self.voice_input_fresh = true;
                     }
                 }
+                WorkerEvent::VoiceSamplingGeneration(generation) => {
+                    self.voice_sampling_generation = generation;
+                    self.voice_input_fresh = false;
+                }
+                WorkerEvent::VoiceInputSnapshot {
+                    generation,
+                    snapshot,
+                } if generation == self.voice_sampling_generation
+                    && self.state.connection == ConnectionState::Connected =>
+                {
+                    self.voice_input_fresh = self.state.merge_voice_input(&snapshot);
+                }
+                WorkerEvent::VoiceInputUnavailable(generation)
+                    if generation == self.voice_sampling_generation =>
+                {
+                    self.voice_input_fresh = false
+                }
+                WorkerEvent::VoiceInputSnapshot { .. } | WorkerEvent::VoiceInputUnavailable(_) => {}
                 WorkerEvent::Memory { request_id, result } => {
                     self.memory.set_profile(&self.active_persona.profile_id);
                     self.memory
@@ -374,7 +403,11 @@ impl DesktopApp {
                     {
                         self.native.runtime_restarted();
                     }
+                    let new_voice_instance = snapshot.instance_id.is_some()
+                        && snapshot.instance_id != self.state.runtime.instance_id;
+                    let voice_known = self.state.merge_voice_input(&snapshot);
                     self.state.recover_snapshot(snapshot);
+                    self.voice_input_fresh = voice_known || new_voice_instance;
                     self.synchronize_desktop_controls();
                     self.reflex_runtime_ready = true;
                     self.sync_reflex_identity();

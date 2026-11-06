@@ -36,6 +36,9 @@ pub struct RuntimeSnapshot {
     pub speech_turn: Option<TurnId>,
     #[serde(default)]
     pub speech_cancelled: bool,
+    /// Independent of dialogue state and event sequence; absent on older services.
+    #[serde(default)]
+    pub voice_input: ai_ex_domain::VoiceInputState,
 }
 
 impl Default for RuntimeSnapshot {
@@ -55,6 +58,7 @@ impl Default for RuntimeSnapshot {
             playback: ai_ex_domain::SpeechPlaybackSnapshot::default(),
             speech_turn: None,
             speech_cancelled: false,
+            voice_input: ai_ex_domain::VoiceInputState::default(),
         }
     }
 }
@@ -105,6 +109,15 @@ impl EventHub {
 
     pub fn current(&self) -> RuntimeSnapshot {
         self.snapshot.borrow().clone()
+    }
+
+    /// Publish an independently ordered activity observation without a new event variant.
+    pub fn observe_voice_input(&self, state: ai_ex_domain::VoiceInputState) {
+        self.snapshot.send_modify(|snapshot| {
+            if state.revision > snapshot.voice_input.revision {
+                snapshot.voice_input = state;
+            }
+        });
     }
 
     pub fn events_since(&self, after: u64, limit: usize) -> Vec<SequencedEvent> {
@@ -264,6 +277,31 @@ mod tests {
                 .unwrap()
                 .get("instance_id")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn voice_input_snapshot_is_backward_and_forward_compatible() {
+        #[derive(serde::Deserialize)]
+        struct LegacySnapshot {
+            state: ConversationState,
+        }
+
+        let current = RuntimeSnapshot {
+            voice_input: ai_ex_domain::VoiceInputState {
+                revision: 2,
+                active: true,
+            },
+            ..Default::default()
+        };
+        let mut payload = serde_json::to_value(&current).unwrap();
+        let legacy: LegacySnapshot = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(legacy.state, current.state);
+        payload.as_object_mut().unwrap().remove("voice_input");
+        let decoded: RuntimeSnapshot = serde_json::from_value(payload).unwrap();
+        assert_eq!(
+            decoded.voice_input,
+            ai_ex_domain::VoiceInputState::default()
         );
     }
 

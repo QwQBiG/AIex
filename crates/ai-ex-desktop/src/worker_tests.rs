@@ -92,6 +92,68 @@ fn reduce_received(receiver: &Receiver<WorkerEvent>, state: &mut ai_ex_ui_model:
 }
 
 #[tokio::test]
+async fn voice_input_slow_status_does_not_block_events_and_old_generation_is_discarded() {
+    let (events, received) = mpsc::channel();
+    let worker_events = events.clone();
+    let (target, target_rx) = tokio::sync::watch::channel(VoiceTarget {
+        generation: 1,
+        connected: true,
+    });
+    let (started, waiting) = tokio::sync::oneshot::channel();
+    let (mut release, blocked) = tokio::sync::oneshot::channel::<RuntimeSnapshot>();
+    let task = tokio::spawn(async move {
+        let mut started = Some(started);
+        let mut blocked = Some(blocked);
+        run_voice_sampling_with(&worker_events, target_rx, move || {
+            if let Some(started) = started.take() {
+                let _ = started.send(());
+            }
+            let blocked = blocked.take().expect("one in-flight request");
+            async move { blocked.await.map_err(|_| AppError::unavailable("fixture")) }
+        })
+        .await;
+    });
+    waiting.await.unwrap();
+    let client = ControlClient::new("127.0.0.1:9", "x".repeat(32), 4096).unwrap();
+    let mut cursor = 0;
+    let mut instance = None;
+    assert!(
+        forward_events(
+            &client,
+            &events,
+            &mut cursor,
+            vec![SequencedEvent {
+                sequence: 1,
+                event: ai_ex_domain::SystemEvent::StateChanged {
+                    from: ai_ex_domain::ConversationState::Idle,
+                    to: ai_ex_domain::ConversationState::Thinking,
+                },
+            }],
+            &mut instance
+        )
+        .await
+        .unwrap()
+    );
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        WorkerEvent::Events(_)
+    ));
+    target.send_replace(VoiceTarget {
+        generation: 2,
+        connected: false,
+    });
+    tokio::time::timeout(Duration::from_secs(1), release.closed())
+        .await
+        .unwrap();
+    assert!(
+        !received
+            .try_iter()
+            .any(|event| matches!(event, WorkerEvent::VoiceInputSnapshot { generation: 1, .. }))
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn bounded_regular_queue_returns_rejected_text_and_keeps_both_urgent_intents() {
     let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
     let (regular, mut waiting) = tokio::sync::mpsc::channel(1);

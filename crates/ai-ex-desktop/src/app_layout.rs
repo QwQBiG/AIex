@@ -178,6 +178,14 @@ impl DesktopApp {
                 }
             }
         });
+        if self.voice_input_fresh
+            && self.state.connection == ConnectionState::Connected
+            && !self.state.needs_resync
+            && self.persona_synced
+            && self.state.runtime.voice_input.active
+        {
+            ui.colored_label(super::theme::ACCENT, "正在接收或识别语音");
+        }
         if self.native_mode && self.native.microphone_restart_required() {
             ui.horizontal_wrapped(|ui| {
                 ui.weak("麦克风开关重新进入对话后生效。");

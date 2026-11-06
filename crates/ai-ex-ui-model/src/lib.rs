@@ -3,6 +3,8 @@
 mod presentation;
 #[cfg(test)]
 mod preview_tests;
+#[cfg(test)]
+mod voice_input_tests;
 pub use presentation::{AnimationFrame, ExpressionFrame, PresentationAnimator, PresentationState};
 
 use ai_ex_domain::{AppError, ConversationState, SystemEvent, TurnId};
@@ -65,12 +67,31 @@ impl UiState {
         })
     }
 
-    pub fn apply_snapshot(&mut self, snapshot: RuntimeSnapshot) {
+    pub fn apply_snapshot(&mut self, mut snapshot: RuntimeSnapshot) {
+        if snapshot.instance_id.is_some()
+            && snapshot.instance_id == self.runtime.instance_id
+            && snapshot.voice_input.revision <= self.runtime.voice_input.revision
+        {
+            snapshot.voice_input = self.runtime.voice_input;
+        }
         self.untracked_turn = snapshot
             .active_turn
             .filter(|turn_id| !self.turns.iter().any(|turn| turn.turn_id == *turn_id));
         self.runtime = snapshot;
         self.needs_resync = false;
+    }
+
+    /// Merge voice activity separately from the dialogue event sequence.
+    pub fn merge_voice_input(&mut self, snapshot: &RuntimeSnapshot) -> bool {
+        if snapshot.instance_id.is_none() || snapshot.instance_id != self.runtime.instance_id {
+            return false;
+        }
+        if snapshot.voice_input.revision > self.runtime.voice_input.revision {
+            self.runtime.voice_input = snapshot.voice_input;
+        } else if snapshot.voice_input != self.runtime.voice_input {
+            return false;
+        }
+        true
     }
 
     /// Re-establish runtime state after unavailable history or service restart.
