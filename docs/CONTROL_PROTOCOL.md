@@ -42,6 +42,8 @@ max_message_bytes = 65536
 {"type":"status"}
 {"type":"speech_split"}
 {"type":"set_speech_split","instance_id":"00000000-0000-0000-0000-000000000001","expected_revision":0,"minimum":10}
+{"type":"memory_inspection_context"}
+{"type":"inspect_memory_backup","instance_id":"00000000-0000-0000-0000-000000000001","profile_id":"default","persona_epoch":0,"path":"C:\\example\\backup.jsonl"}
 {"type":"stage"}
 {"type":"persona"}
 {"type":"memory","request":{"type":"list","profile_id":"default","query":"","kind":null,"offset":0,"limit":12}}
@@ -50,6 +52,10 @@ max_message_bytes = 65536
 {"type":"events","after":42,"limit":256}
 {"type":"emergency_stop"}
 ```
+
+`memory_inspection_context` 返回检查时所需的服务实例、当前角色及角色代次。用户明确选择新版 JSONL 后，`inspect_memory_backup` 使用这三个值和文件路径发起检查；校验和任务接纳在同一角色锁内完成。角色随后变化时，已接纳的读取可能继续，但旧结果不会返回。服务最多运行一个检查子进程，超时或连接中断不自动重发。检查只返回脱敏计数，不修改文件或恢复记忆；目前不比较向量空间。路径仅由用户选择，可能指向网络位置；非协作程序可能在读取期间改变文件。JSONL 本身不证明来源或完整性，空文件无法核验角色，旧格式需使用迁移工具。
+
+服务正常关闭时会等待检查进程的有限清理；未能确认子进程退出时，检查能力停止接纳新任务并报告错误。父进程异常终止或系统驱动无法及时结束操作时，不保证立即回收。
 
 `persona` 读取当前角色快照；`set_persona` 经过版本/字段校验后更新 Runtime 人格，并广播 `persona_changed` 事件。同一 `profile_id` 的编辑保留上下文；不同 ID 会停止旧音频、切换记忆范围并清空短期对话。记忆适配器不支持身份隔离时拒绝切换，不会静默共用旧记忆。活动回合期间切换会失败，避免一半回复使用旧人格、一半回复使用新人格。并发人格更新串行提交，读取人格会等待正在进行的更新完成。`submit` 先等待运行时确认可执行或已排队，再返回 accepted，正文异步生成；队列满时返回 failure。客户端通过 `status` 获取最新只读快照，通过
 `events` 从指定序号之后重放有界事件历史。`limit` 必须位于 1 到 1000；事件带单调递增序号，客户端检测到缺口时必须暂停应用后续事件并重新拉取。

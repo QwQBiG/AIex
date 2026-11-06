@@ -87,6 +87,7 @@ pub struct DesktopApp {
     retained_messages: VecDeque<navigation::RetainedMessage>,
     show_retained: bool,
     memory: crate::memory_panel::MemoryPanel,
+    backup_inspection: crate::backup_inspection_panel::BackupInspectionPanel,
     reflex: reflex::ReflexPanel,
     reflex_runtime_ready: bool,
     native: crate::native_panel::NativePanel,
@@ -157,6 +158,7 @@ impl DesktopApp {
             retained_messages: VecDeque::new(),
             show_retained: false,
             memory: Default::default(),
+            backup_inspection: Default::default(),
             reflex: Default::default(),
             reflex_runtime_ready: false,
             native: Default::default(),
@@ -221,6 +223,14 @@ impl DesktopApp {
             .synchronize(self.state.runtime.instance_id, connected);
         self.native_desktop
             .synchronize(self.state.runtime.instance_id, connected);
+        let inspection_ready =
+            connected && !self.persona_apply_pending && !self.confirm_persona && !self.scene_busy();
+        self.backup_inspection.synchronize(
+            self.state.runtime.instance_id,
+            &self.active_persona.profile_id,
+            self.active_persona.revision,
+            inspection_ready,
+        );
     }
 
     fn send_desktop_control(&mut self, command: WorkerCommand) {
@@ -235,6 +245,9 @@ impl DesktopApp {
                 }
                 WorkerCommand::SpeechSplit { request_id, .. } => {
                     self.speech_split.receive(request_id, Err(failure))
+                }
+                WorkerCommand::BackupInspection { request_id, .. } => {
+                    let _ = self.backup_inspection.receive(request_id, Err(failure));
                 }
                 _ => self.last_error = Some(failure.to_string()),
             }
@@ -259,6 +272,12 @@ impl DesktopApp {
     fn drain_events(&mut self) {
         while let Ok(event) = self.worker.events.try_recv() {
             match event {
+                WorkerEvent::BackupInspection { request_id, result } => {
+                    self.synchronize_desktop_controls();
+                    if let Some(command) = self.backup_inspection.receive(request_id, result) {
+                        self.send_desktop_control(command);
+                    }
+                }
                 WorkerEvent::DesktopRuntime { request_id, result } => {
                     self.synchronize_desktop_controls();
                     self.desktop_runtime.receive(request_id, result);
@@ -300,6 +319,7 @@ impl DesktopApp {
                     } else {
                         ConnectionState::Disconnected
                     };
+                    self.synchronize_desktop_controls();
                 }
                 WorkerEvent::Snapshot(snapshot) => {
                     if (self.state.runtime.instance_id.is_none()
@@ -355,6 +375,7 @@ impl DesktopApp {
                         self.native.runtime_restarted();
                     }
                     self.state.recover_snapshot(snapshot);
+                    self.synchronize_desktop_controls();
                     self.reflex_runtime_ready = true;
                     self.sync_reflex_identity();
                     let message = "连接已恢复，部分历史无法补齐；可以继续对话。";
@@ -417,6 +438,7 @@ impl DesktopApp {
                             profile.profile_id, profile.revision
                         ));
                     }
+                    self.synchronize_desktop_controls();
                 }
                 WorkerEvent::PersonaApplied(profile) => {
                     self.persona_synced = true;
@@ -427,6 +449,7 @@ impl DesktopApp {
                     self.persona_dirty = false;
                     self.persona_apply_pending = false;
                     self.sync_character_draft_metadata();
+                    self.synchronize_desktop_controls();
                 }
                 WorkerEvent::PersonaApplyFailed(error) => {
                     if self.applying_scene.take().is_some() {

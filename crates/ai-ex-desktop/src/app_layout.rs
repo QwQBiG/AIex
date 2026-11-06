@@ -452,6 +452,7 @@ impl DesktopApp {
     }
 
     fn show_memory_page(&mut self, ui: &mut egui::Ui) {
+        self.synchronize_desktop_controls();
         self.memory.set_profile(&self.active_persona.profile_id);
         self.memory
             .synchronize_backup_instance(self.state.runtime.instance_id);
@@ -476,6 +477,9 @@ impl DesktopApp {
                     "桌面网络工作线程已停止。",
                 )),
             );
+        }
+        if let Some(command) = self.backup_inspection.show(ui) {
+            self.send_desktop_control(command);
         }
     }
 

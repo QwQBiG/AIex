@@ -12,6 +12,8 @@ static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 #[path = "support/persona_switch.rs"]
 mod persona_switch;
 
+#[path = "support/backup_inspection.rs"]
+mod backup_inspection;
 #[path = "support/memory_management.rs"]
 mod memory_management;
 

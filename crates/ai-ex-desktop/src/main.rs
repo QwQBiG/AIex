@@ -4,6 +4,7 @@
 mod app;
 mod appearance;
 mod appearance_import;
+mod backup_inspection_panel;
 mod builtin_character;
 mod character_files;
 mod character_library;

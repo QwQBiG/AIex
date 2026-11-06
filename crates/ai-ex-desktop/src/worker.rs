@@ -12,6 +12,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 const HEALTH_REFRESH_TICKS: u8 = 40;
 
+#[path = "worker_backup_inspection.rs"]
+mod backup_inspection;
 #[path = "worker_desktop.rs"]
 mod desktop;
 #[path = "worker_native.rs"]
@@ -51,6 +53,12 @@ pub struct SpeechSplitStatus {
 }
 
 pub enum WorkerCommand {
+    BackupInspection {
+        request_id: u64,
+        command: ControlCommand,
+        generation: u64,
+        guard: std::sync::Arc<AtomicU64>,
+    },
     SpeechSplit {
         request_id: u64,
         request: SpeechSplitRequest,
@@ -82,6 +90,10 @@ pub enum WorkerCommand {
 }
 
 pub enum WorkerEvent {
+    BackupInspection {
+        request_id: u64,
+        result: Result<ControlPayload, AppError>,
+    },
     SpeechSplit {
         request_id: u64,
         result: Result<SpeechSplitStatus, AppError>,
@@ -209,6 +221,10 @@ struct QueuedCommand {
 
 fn reject_command(events: &Sender<WorkerEvent>, command: WorkerCommand, message: &str) -> bool {
     let event = match command {
+        WorkerCommand::BackupInspection { request_id, .. } => WorkerEvent::BackupInspection {
+            request_id,
+            result: Err(AppError::unavailable(message)),
+        },
         WorkerCommand::SpeechSplit { request_id, .. } => WorkerEvent::SpeechSplit {
             request_id,
             result: Err(AppError::unavailable(message)),
@@ -668,6 +684,7 @@ async fn send_command(
         }
         WorkerCommand::DesktopRuntime { .. }
         | WorkerCommand::NativeDesktop { .. }
+        | WorkerCommand::BackupInspection { .. }
         | WorkerCommand::SpeechSplit { .. } => {
             return Err(AppError::protocol(
                 "desktop control requires its dedicated lane",
@@ -830,12 +847,21 @@ pub(crate) async fn run_commands(
     let (native_urgent, native_urgent_rx) = tokio::sync::mpsc::channel(2);
     let (desktop_commands, desktop_rx) = tokio::sync::mpsc::channel(32);
     let (speech_commands, speech_rx) = tokio::sync::mpsc::channel(4);
+    let (inspection_commands, inspection_rx) = tokio::sync::mpsc::channel(1);
     let epoch = AtomicU64::new(0);
     let native_epoch = AtomicU64::new(0);
     let desktop_epoch = AtomicU64::new(0);
     let router = async {
         while let Some(command) = commands.recv().await {
             let command = match command {
+                command @ WorkerCommand::BackupInspection { .. } => {
+                    if let Err(error) = inspection_commands.try_send(command)
+                        && !reject_command(events, error.into_inner(), "备份检查正忙，请稍后重试。")
+                    {
+                        return;
+                    }
+                    continue;
+                }
                 command @ WorkerCommand::SpeechSplit { .. } => {
                     if let Err(error) = speech_commands.try_send(command)
                         && !reject_command(
@@ -975,6 +1001,7 @@ pub(crate) async fn run_commands(
                 run_ordinary_commands(client, ordinary_rx, events, persona_epoch),
                 desktop::run(client, desktop_rx, events, &desktop_epoch),
                 speech_split::execute(client, speech_rx, events),
+                backup_inspection::execute(client, inspection_rx, events),
                 execute_automation(client, regular_rx, events, Some(&epoch)),
                 execute_automation(client, pause_rx, events, None),
                 execute_automation(client, stop_rx, events, None),

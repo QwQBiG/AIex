@@ -24,6 +24,13 @@ pub enum ControlCommand {
     },
     Status,
     SpeechSplit,
+    MemoryInspectionContext,
+    InspectMemoryBackup {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        path: SensitivePath,
+    },
     SetSpeechSplit {
         instance_id: Uuid,
         expected_revision: u64,
@@ -61,6 +68,17 @@ pub enum ControlCommand {
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum ControlPayload {
     Accepted,
+    MemoryInspectionContext {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+    },
+    MemoryBackupInspection {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        summary: MemoryBackupInspection,
+    },
     SpeechSplit {
         instance_id: Uuid,
         revision: u64,
@@ -82,6 +100,39 @@ pub enum ControlPayload {
 pub struct MemoryReply {
     pub response: MemoryResponse,
     pub snapshot: RuntimeSnapshot,
+}
+
+/// A path accepted over the local authenticated protocol, never included in Debug.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SensitivePath(String);
+
+impl SensitivePath {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SensitivePath {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SensitivePath([redacted])")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryBackupInspection {
+    pub memory_records: usize,
+    pub entity_candidates: usize,
+    pub source_associations: usize,
+    pub inactive_source_associations: usize,
+    pub embedded_records: usize,
+    pub distinct_embedding_spaces: usize,
+    pub matching_embeddings: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +178,27 @@ mod speech_split_tests {
         assert_eq!(
             serde_json::from_slice::<ControlPayload>(&bytes).unwrap(),
             payload
+        );
+    }
+}
+
+#[cfg(test)]
+mod memory_inspection_tests {
+    use super::*;
+
+    #[test]
+    fn inspection_request_round_trips_without_debugging_the_path() {
+        let command = ControlCommand::InspectMemoryBackup {
+            instance_id: Uuid::new_v4(),
+            profile_id: "synthetic".into(),
+            persona_epoch: 7,
+            path: SensitivePath::new("C:\\private-path-marker.jsonl"),
+        };
+        assert!(!format!("{command:?}").contains("private-path-marker"));
+        let bytes = serde_json::to_vec(&command).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<ControlCommand>(&bytes).unwrap(),
+            command
         );
     }
 }

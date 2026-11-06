@@ -2,6 +2,9 @@
 
 mod args;
 mod automation_replay;
+mod backup_inspection_control;
+mod backup_inspection_coordinator;
+mod backup_inspection_worker;
 mod control_snapshot;
 mod conversation_activity;
 mod desktop_runtime;
@@ -31,6 +34,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use ai_ex_asr::WhisperHttpTranscriber;
@@ -131,6 +135,14 @@ impl LanguageModelPort for ConfiguredModel {
 
 #[tokio::main]
 async fn main() {
+    if std::env::args_os().skip(1).eq([std::ffi::OsString::from(
+        backup_inspection_worker::WORKER_MODE,
+    )]) {
+        if backup_inspection_worker::run_stdio().is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -518,13 +530,21 @@ async fn run() -> Result<(), AppError> {
     )
     .await?;
     let duplex_task = match &native {
-        Some(native) => native_ports::spawn_duplex(
-            &config,
-            native.clone(),
-            runtime.clone(),
-            automation.clone(),
-        )?,
-        None => spawn_duplex(&config, runtime.clone(), automation.clone())?,
+        Some(native) => {
+            native_ports::spawn_duplex(&config, native.clone(), runtime.clone(), automation.clone())
+        }
+        None => spawn_duplex(&config, runtime.clone(), automation.clone()),
+    };
+    let duplex_task = match duplex_task {
+        Ok(task) => task,
+        Err(mut error) => {
+            if let Some(control) = control_task
+                && control.shutdown().await.is_err()
+            {
+                error.message.push_str("; backup worker shutdown failed");
+            }
+            return Err(error);
+        }
     };
     let session_result = if args.serve || args.managed {
         lifecycle::wait_for_shutdown(args.managed).await
@@ -545,9 +565,11 @@ async fn run() -> Result<(), AppError> {
     if let Some(task) = duplex_task {
         task.abort();
     }
-    if let Some(task) = control_task {
-        task.abort();
-    }
+    let control_result = if let Some(control) = control_task {
+        control.shutdown().await
+    } else {
+        Ok(())
+    };
     if let Some(task) = &native_health_refresh {
         task.abort();
     }
@@ -567,6 +589,15 @@ async fn run() -> Result<(), AppError> {
     };
     drop(stage_output);
     let speech_result = join_speech_worker(speech_task).await;
+    let mut session_result = session_result;
+    if let Err(error) = control_result {
+        match &mut session_result {
+            Ok(()) => session_result = Err(error),
+            Err(session_error) => session_error
+                .message
+                .push_str("; backup worker shutdown failed"),
+        }
+    }
     session_result?;
     automation_result?;
     desktop_runtime_result?;
@@ -1493,6 +1524,8 @@ struct ServiceControl {
     stage: StageJournal,
     automation: TemplateHost,
     persona: Arc<RwLock<PersonaSnapshot>>,
+    persona_epoch: Arc<AtomicU64>,
+    backup_inspector: Result<backup_inspection_coordinator::BackupInspector, AppError>,
     native: Option<Arc<NativeRuntime>>,
     native_desktop: Option<native_desktop::NativeDesktopHost>,
     desktop_runtime: Option<desktop_runtime::DesktopRuntime>,
@@ -1523,6 +1556,16 @@ impl ControlBackend for ServiceControl {
             None
         };
         match command {
+            ControlCommand::MemoryInspectionContext => self.memory_inspection_context().await,
+            ControlCommand::InspectMemoryBackup {
+                instance_id,
+                profile_id,
+                persona_epoch,
+                path,
+            } => {
+                self.inspect_memory_backup(instance_id, profile_id, persona_epoch, path)
+                    .await
+            }
             ControlCommand::Native { request } => {
                 request.validate()?;
                 let native = self.native.as_ref().ok_or_else(|| {
@@ -1685,12 +1728,18 @@ impl ControlBackend for ServiceControl {
                 }
                 // Serialize identity updates and snapshots across the actor acknowledgement.
                 let mut current = self.persona.write().await;
+                let next_epoch = self
+                    .persona_epoch
+                    .load(Ordering::Acquire)
+                    .checked_add(1)
+                    .ok_or_else(|| AppError::unavailable("persona generation exhausted"))?;
                 self.runtime
                     .set_persona(profile.profile_id.clone(), profile.compiled_system_prompt())
                     .await?;
                 let profile_id = profile.profile_id.clone();
                 let revision = profile.revision;
                 *current = profile;
+                self.persona_epoch.store(next_epoch, Ordering::Release);
                 if let Some(native) = &self.native {
                     native.select_profile(&profile_id)?;
                 }
@@ -1771,10 +1820,25 @@ struct ControlResources {
     desktop_runtime: Option<desktop_runtime::DesktopRuntime>,
 }
 
+struct RunningControl {
+    task: tokio::task::JoinHandle<()>,
+    inspector: Option<backup_inspection_coordinator::BackupInspector>,
+}
+
+impl RunningControl {
+    async fn shutdown(self) -> Result<(), AppError> {
+        self.task.abort();
+        match self.inspector {
+            Some(inspector) => inspector.shutdown().await,
+            None => Ok(()),
+        }
+    }
+}
+
 async fn spawn_control(
     config: &AppConfig,
     resources: ControlResources,
-) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
+) -> Result<Option<RunningControl>, AppError> {
     if !config.control.enabled {
         return Ok(None);
     }
@@ -1803,6 +1867,9 @@ async fn spawn_control(
         live_mode: config.persona.live_mode.clone(),
     };
     persona.validate()?;
+    let inspector = std::env::current_exe()
+        .map_err(|_| AppError::unavailable("backup inspection worker unavailable"))
+        .and_then(backup_inspection_coordinator::BackupInspector::new);
     let ControlResources {
         runtime,
         events,
@@ -1820,6 +1887,8 @@ async fn spawn_control(
         safety,
         health,
         persona: Arc::new(RwLock::new(persona)),
+        persona_epoch: Arc::new(AtomicU64::new(0)),
+        backup_inspector: inspector.clone(),
         stage,
         automation,
         native,
@@ -1828,11 +1897,15 @@ async fn spawn_control(
         interaction: Arc::new(tokio::sync::Mutex::new(())),
     });
     tracing::info!(%address, "local control server ready");
-    Ok(Some(tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         if let Err(error) = server.serve(backend).await {
             tracing::error!(%error, "control server stopped");
         }
-    })))
+    });
+    Ok(Some(RunningControl {
+        task,
+        inspector: inspector.ok(),
+    }))
 }
 
 async fn control_health(config: &AppConfig) -> ComponentHealth {
