@@ -51,6 +51,9 @@ pub(crate) struct MemoryRecord {
     pub embedding: Option<MemoryEmbedding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_metadata: Option<serde_json::Value>,
+    /// A loaded nonempty entity list would change if the document were rewritten.
+    #[serde(skip)]
+    pub saved_entities_changed: bool,
     #[serde(skip)]
     pub terms: BTreeSet<String>,
     #[serde(skip)]
@@ -74,6 +77,7 @@ impl MemoryRecord {
             knowledge: MemoryKnowledge::default(),
             embedding: None,
             legacy_metadata: None,
+            saved_entities_changed: false,
             terms: BTreeSet::new(),
             lowercase_text: String::new(),
             normalized: Vec::new(),

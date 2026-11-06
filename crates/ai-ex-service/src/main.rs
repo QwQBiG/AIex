@@ -19,6 +19,7 @@ mod native_desktop_port;
 mod native_ports;
 mod native_runtime;
 mod playback;
+mod raw_backup_control;
 mod speech_cleanup_settings;
 mod strategy_loop;
 mod template_game;
@@ -434,6 +435,7 @@ async fn run() -> Result<(), AppError> {
     ));
     let events = TeeEventSink::new(ConsoleEvents, event_hub.clone());
     let live_memory = memory.clone();
+    let raw_backup_memory = memory.clone();
     let mut runtime = Runtime::with_policy(
         model,
         speech_port,
@@ -529,6 +531,7 @@ async fn run() -> Result<(), AppError> {
         &config,
         ControlResources {
             runtime: runtime.clone(),
+            raw_backup_memory,
             events: event_hub.clone(),
             safety: Arc::clone(&safety),
             health: Arc::clone(&health_snapshot),
@@ -1543,6 +1546,8 @@ struct ServiceControl {
     backup_inspector: Result<backup_inspection_coordinator::BackupInspector, AppError>,
     legacy_candidates: Arc<legacy_candidate::LegacyCandidates>,
     merge_candidates: Arc<merge_candidate::MergeCandidates>,
+    raw_backup_memory: MemoryStore,
+    raw_backups: Arc<raw_backup_control::RawBackups>,
     native: Option<Arc<NativeRuntime>>,
     native_desktop: Option<native_desktop::NativeDesktopHost>,
     desktop_runtime: Option<desktop_runtime::DesktopRuntime>,
@@ -1668,6 +1673,19 @@ impl ControlBackend for ServiceControl {
                 instance_id,
                 operation_id,
             } => self.merge_candidate_status(instance_id, operation_id).await,
+            ControlCommand::PrepareRawMemoryBackup {
+                instance_id,
+                operation_id,
+            } => self.prepare_raw_backup(instance_id, operation_id),
+            ControlCommand::StartRawMemoryBackup {
+                instance_id,
+                operation_id,
+                plan_id,
+            } => self.start_raw_backup(instance_id, operation_id, plan_id),
+            ControlCommand::RawMemoryBackupStatus {
+                instance_id,
+                operation_id,
+            } => self.raw_backup_status(instance_id, operation_id),
             ControlCommand::Native { request } => {
                 request.validate()?;
                 let native = self.native.as_ref().ok_or_else(|| {
@@ -1921,6 +1939,7 @@ impl ServiceControl {
 
 struct ControlResources {
     runtime: ConversationActivity,
+    raw_backup_memory: MemoryStore,
     events: EventHub,
     safety: Arc<SafetyGate>,
     health: Arc<RwLock<Vec<ComponentHealth>>>,
@@ -1934,15 +1953,19 @@ struct ControlResources {
 struct RunningControl {
     task: tokio::task::JoinHandle<()>,
     inspector: Option<backup_inspection_coordinator::BackupInspector>,
+    raw_backups: Arc<raw_backup_control::RawBackups>,
 }
 
 impl RunningControl {
     async fn shutdown(self) -> Result<(), AppError> {
+        let closed = self.raw_backups.close();
         self.task.abort();
-        match self.inspector {
+        let inspections = match self.inspector {
             Some(inspector) => inspector.shutdown().await,
             None => Ok(()),
-        }
+        };
+        let backups = self.raw_backups.shutdown().await;
+        closed.and(inspections).and(backups)
     }
 }
 
@@ -1983,6 +2006,7 @@ async fn spawn_control(
         .and_then(backup_inspection_coordinator::BackupInspector::new);
     let ControlResources {
         runtime,
+        raw_backup_memory,
         events,
         safety,
         health,
@@ -1992,8 +2016,11 @@ async fn spawn_control(
         native_desktop,
         desktop_runtime,
     } = resources;
+    let raw_backups = Arc::new(raw_backup_control::RawBackups::default());
     let backend = Arc::new(ServiceControl {
         runtime,
+        raw_backup_memory,
+        raw_backups: Arc::clone(&raw_backups),
         events,
         safety,
         health,
@@ -2018,6 +2045,7 @@ async fn spawn_control(
     Ok(Some(RunningControl {
         task,
         inspector: inspector.ok(),
+        raw_backups,
     }))
 }
 

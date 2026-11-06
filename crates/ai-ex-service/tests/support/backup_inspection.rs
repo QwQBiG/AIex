@@ -346,3 +346,136 @@ async fn merge_candidate_control_produces_separate_file_without_changing_active_
         fs::remove_file(path).unwrap();
     }
 }
+
+#[tokio::test]
+async fn raw_backup_control_keeps_all_profiles_and_survives_persona_switch() {
+    use ai_ex_control::RawMemoryBackupState;
+    use ai_ex_domain::{MemoryRequest, PersonaSnapshot};
+
+    let mut service = ServiceProcess::with_memory("--managed", true, "http://127.0.0.1:1", true);
+    service.ready().await;
+    for (profile_id, text) in [("default", "synthetic first"), ("host", "synthetic second")] {
+        if profile_id != "default" {
+            service
+                .client
+                .send(ControlCommand::SetPersona {
+                    profile: PersonaSnapshot {
+                        profile_id: profile_id.into(),
+                        name: "Host".into(),
+                        ..Default::default()
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            service
+                .client
+                .send(ControlCommand::Memory {
+                    request: MemoryRequest::Remember {
+                        profile_id: profile_id.into(),
+                        text: text.into()
+                    },
+                })
+                .await
+                .unwrap(),
+            ControlPayload::Memory(_)
+        ));
+    }
+    let source = service.directory.join("memory.jsonl");
+    let original = fs::read(&source).unwrap();
+    let ControlPayload::MemoryInspectionContext { instance_id, .. } = service
+        .client
+        .send(ControlCommand::MemoryInspectionContext)
+        .await
+        .unwrap()
+    else {
+        panic!("context expected")
+    };
+    let operation_id = Uuid::new_v4();
+    let plan = service
+        .client
+        .send(ControlCommand::PrepareRawMemoryBackup {
+            instance_id,
+            operation_id,
+        })
+        .await
+        .unwrap();
+    let ControlPayload::RawMemoryBackupPlan {
+        instance_id: planned_instance,
+        operation_id: planned_operation,
+        plan_id,
+        expires_in_seconds,
+        output,
+    } = plan
+    else {
+        panic!("raw backup plan expected")
+    };
+    assert_eq!(
+        (planned_instance, planned_operation),
+        (instance_id, operation_id)
+    );
+    assert!(expires_in_seconds > 0);
+    let expected = service
+        .directory
+        .join(format!("memory.jsonl.raw-copy-{operation_id}.jsonl"));
+    assert_eq!(output.as_str(), expected.to_str().unwrap());
+    assert!(!expected.exists());
+    let start = || ControlCommand::StartRawMemoryBackup {
+        instance_id,
+        operation_id,
+        plan_id,
+    };
+    assert!(matches!(
+        service.client.send(start()).await.unwrap(),
+        ControlPayload::RawMemoryBackupStatus(_)
+    ));
+    service
+        .client
+        .send(ControlCommand::SetPersona {
+            profile: PersonaSnapshot::default(),
+        })
+        .await
+        .unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let ControlPayload::RawMemoryBackupStatus(status) = service
+                .client
+                .send(ControlCommand::RawMemoryBackupStatus {
+                    instance_id,
+                    operation_id,
+                })
+                .await
+                .unwrap()
+            else {
+                panic!("raw backup status expected")
+            };
+            if status.state != RawMemoryBackupState::Running {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(status.state, RawMemoryBackupState::Written { .. }));
+    assert_eq!(status.output.unwrap().as_str(), expected.to_str().unwrap());
+    assert_eq!(fs::read(&source).unwrap(), original);
+    assert_eq!(fs::read(&expected).unwrap(), original);
+    assert!(matches!(service.client.send(start()).await.unwrap(),
+        ControlPayload::RawMemoryBackupStatus(status) if matches!(status.state, RawMemoryBackupState::Written { .. })));
+    assert!(
+        service
+            .client
+            .send(ControlCommand::RawMemoryBackupStatus {
+                instance_id: Uuid::new_v4(),
+                operation_id,
+            })
+            .await
+            .is_err()
+    );
+    drop(service.child.stdin.take());
+    service.exited().await;
+    assert_eq!(fs::read(&source).unwrap(), original);
+    fs::remove_file(expected).unwrap();
+}

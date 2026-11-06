@@ -39,7 +39,7 @@ pub use automation::{
     AutomationTemplateMode,
 };
 pub use conversation::{ConversationState, Emotion, Message, Role, TurnId};
-pub use error::{AppError, ErrorKind};
+pub use error::{AppError, ErrorKind, MEMORY_SAVED_ENTITIES_CHANGED};
 pub use event::{ComponentHealth, LiveResponseMode, SystemEvent};
 pub use memory::{
     MemoryBackupState, MemoryBackupStatus, MemoryEntry, MemoryKind, MemoryPage, MemoryProjection,

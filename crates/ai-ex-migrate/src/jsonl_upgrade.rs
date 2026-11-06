@@ -62,10 +62,13 @@ pub async fn run(arguments: Vec<String>) -> Result<(), AppError> {
     }
     let text = std::str::from_utf8(&bytes)
         .map_err(|_| AppError::configuration("memory JSONL must use UTF-8"))?;
-    let (content, report) = ai_ex_memory::migrate_jsonl(text)?;
-    if let Some(output) = output {
+    let report = if let Some(output) = output {
+        let (content, report) = ai_ex_memory::migrate_jsonl(text)?;
         super::write_new_atomic(&output, content.as_bytes()).await?;
-    }
+        report
+    } else {
+        ai_ex_memory::inspect_memory_jsonl(text)?
+    };
     println!(
         "{}",
         serde_json::to_string_pretty(&report).map_err(|e| AppError::protocol(e.to_string()))?

@@ -21,6 +21,177 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+async fn raw_copy_preserves_exact_active_file_bytes_and_all_profiles() {
+    let fixture = Fixture::new();
+    fs::write(fixture.source(), b"").unwrap();
+    let store = MemoryStore::open(fixture.source()).await.unwrap();
+    let original = b"{\"profile_id\":\"a\",\"unknown\":{\"x\":1}}\r\n{\"profile_id\":\"b\",\"unknown\":true}\n\xff";
+    fs::write(fixture.source(), original).unwrap();
+    let id = Uuid::new_v4();
+    let (temporary, expected) = raw_backup_paths(&fixture.source(), id).unwrap();
+    let (destination, retained) = store.backup_raw_copy(id).await.unwrap();
+    assert_eq!(destination, expected);
+    assert!(!retained);
+    assert!(!temporary.exists());
+    assert_eq!(fs::read(&destination).unwrap(), original);
+    assert_eq!(fs::read(fixture.source()).unwrap(), original);
+}
+
+#[tokio::test]
+async fn raw_copy_preserves_existing_files_and_redacts_errors() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    // Open a valid initial store before installing a non-JSON source fixture.
+    fs::write(&source, b"").unwrap();
+    let store = MemoryStore::open(&source).await.unwrap();
+    fs::write(&source, b"source").unwrap();
+    let id = Uuid::new_v4();
+    let (temporary, destination) = raw_backup_paths(&source, id).unwrap();
+    fs::write(&destination, b"existing destination").unwrap();
+    let error = store.backup_raw_copy(id).await.unwrap_err().to_string();
+    assert!(!error.contains(source.to_string_lossy().as_ref()));
+    assert!(!error.contains("source"));
+    assert_eq!(fs::read(&source).unwrap(), b"source");
+    assert_eq!(fs::read(&destination).unwrap(), b"existing destination");
+    assert!(!temporary.exists());
+    fs::write(&temporary, b"existing temporary").unwrap();
+    assert!(store.backup_raw_copy(id).await.is_err());
+    assert_eq!(fs::read(&temporary).unwrap(), b"existing temporary");
+    assert_eq!(fs::read(&destination).unwrap(), b"existing destination");
+    assert_eq!(fs::read(&source).unwrap(), b"source");
+}
+
+#[tokio::test]
+async fn raw_copy_rejects_disabled_missing_source_and_nil_identifier() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let store = MemoryStore::open(&source).await.unwrap();
+    assert!(store.backup_raw_copy(Uuid::nil()).await.is_err());
+    assert!(store.backup_raw_copy(Uuid::new_v4()).await.is_err());
+    assert!(!source.exists());
+    assert!(
+        MemoryStore::disabled()
+            .backup_raw_copy(Uuid::new_v4())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn profile_backup_refuses_to_rewrite_changed_saved_entities() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let original = json!({
+        "schema_version":2,"record_type":"memory","id":Uuid::new_v4(),
+        "profile_id":"default","turn_id":Uuid::new_v4(),"created_ms":1,
+        "user_text":"plain text","assistant_text":"",
+        "knowledge":{"entities":[{"kind":"fact","key":"saved-key",
+            "name":"saved-name","value":"saved-value","confidence":900}]}
+    })
+    .to_string();
+    fs::write(&source, &original).unwrap();
+    let store = MemoryStore::open(&source).await.unwrap();
+    let id = Uuid::new_v4();
+    let (temporary, destination) = backup_paths(&source, id).unwrap();
+    assert!(store.backup_snapshot("default", id).await.is_err());
+    assert_eq!(fs::read_to_string(&source).unwrap(), original);
+    assert!(!temporary.exists() && !destination.exists());
+    let (raw, _) = store.backup_raw_copy(Uuid::new_v4()).await.unwrap();
+    assert_eq!(fs::read_to_string(raw).unwrap(), original);
+}
+
+#[tokio::test]
+async fn planned_raw_copy_rejects_changed_target_before_creating_files() {
+    let fixture = Fixture::new();
+    fs::write(fixture.source(), b"").unwrap();
+    let store = MemoryStore::open(fixture.source()).await.unwrap();
+    let id = Uuid::new_v4();
+    let target = store.raw_backup_target(id).unwrap();
+    let wrong = fixture.0.join("different.jsonl");
+    assert!(store.backup_raw_copy_planned(id, &wrong).await.is_err());
+    assert!(!target.exists() && !wrong.exists());
+    let (written, _) = store.backup_raw_copy_planned(id, &target).await.unwrap();
+    assert_eq!(written, target);
+    assert_eq!(fs::read(fixture.source()).unwrap(), b"");
+    assert_eq!(fs::read(written).unwrap(), b"");
+}
+
+#[tokio::test]
+async fn raw_copy_observes_cooperating_writer_lease() {
+    let fixture = Fixture::new();
+    fs::write(fixture.source(), b"").unwrap();
+    let reader = MemoryStore::open(fixture.source()).await.unwrap();
+    let mut writer = MemoryStore::open(fixture.source()).await.unwrap();
+    writer
+        .remember_kind(
+            MemoryKind::Persona,
+            TurnId::new(),
+            "sample".into(),
+            "".into(),
+        )
+        .await
+        .unwrap();
+    let original = fs::read(fixture.source()).unwrap();
+    let id = Uuid::new_v4();
+    assert!(reader.backup_raw_copy(id).await.is_err());
+    let (temporary, destination) = raw_backup_paths(&fixture.source(), id).unwrap();
+    assert!(!temporary.exists() && !destination.exists());
+    let (writer_copy, _) = writer.backup_raw_copy(Uuid::new_v4()).await.unwrap();
+    assert_eq!(fs::read(writer_copy).unwrap(), original);
+    drop(writer);
+    let (reader_copy, _) = reader.backup_raw_copy(id).await.unwrap();
+    assert_eq!(fs::read(reader_copy).unwrap(), original);
+    assert_eq!(fs::read(fixture.source()).unwrap(), original);
+}
+
+#[tokio::test]
+async fn raw_copy_retains_locks_until_worker_finishes_after_runtime_shutdown() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let fixture = Fixture::new();
+    fs::write(fixture.source(), b"").unwrap();
+    let store = MemoryStore::open(fixture.source()).await.unwrap();
+    let reader = MemoryStore::open(fixture.source()).await.unwrap();
+    let worker = store.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (shutdown_tx, shutdown_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let id = Uuid::new_v4();
+    let thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.spawn_blocking(move || {
+            let result = worker.backup_raw_copy_locked(id, |source, temp, destination| {
+                started_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .map_err(|_| io::Error::other("test copy release timed out"))?;
+                copy_raw_file(source, temp, destination)
+            });
+            finished_tx.send(result).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        runtime.shutdown_timeout(Duration::from_millis(50));
+        shutdown_tx.send(()).unwrap();
+    });
+    shutdown_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(store.inner.write_lock.try_lock().is_err());
+    assert!(reader.backup_raw_copy(Uuid::new_v4()).await.is_err());
+    release_tx.send(()).unwrap();
+    let (destination, _) = finished_rx
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    thread.join().unwrap();
+    assert_eq!(fs::read(destination).unwrap(), b"");
+    assert!(store.inner.write_lock.try_lock().is_ok());
+    assert!(reader.backup_raw_copy(Uuid::new_v4()).await.is_ok());
+}
+
+#[tokio::test]
 async fn backup_preserves_current_profile_provenance_and_embedding() {
     let fixture = Fixture::new();
     let memory_id = Uuid::new_v4();

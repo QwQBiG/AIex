@@ -59,7 +59,7 @@ impl MemoryStore {
         }
         let profile_id = self.inner.profile_id.read().await;
         let _write_guard = self.inner.write_lock.lock().await;
-        self.ensure_writer().await?;
+        self.ensure_writer(writer::WriteIntent::Rewrite).await?;
         let mut records = self.inner.records.read().await.clone();
         let mut count = 0;
         for record in records

@@ -290,6 +290,15 @@ impl MemoryPanel {
                 if matches!(pending.request, MemoryRequest::ReadSegment { .. }) {
                     self.segment_reader = None;
                 }
+                if pending.mutation
+                    && error.kind == ai_ex_domain::ErrorKind::InvalidTransition
+                    && error.message == ai_ex_domain::MEMORY_SAVED_ENTITIES_CHANGED
+                {
+                    self.feedback = Some(
+                        "已保存的实体与当前提取结果不一致，本次未修改记忆。草稿已保留；请先保存完整原始记忆文件副本，暂缓修改并核对原始数据。".to_owned(),
+                    );
+                    return false;
+                }
                 let uncertain = pending.mutation
                     && matches!(
                         error.kind,

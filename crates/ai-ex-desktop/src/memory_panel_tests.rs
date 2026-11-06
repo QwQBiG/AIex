@@ -74,6 +74,31 @@ fn only_confirmed_mutations_clear_the_draft_and_context() {
 }
 
 #[test]
+fn saved_entity_conflict_shows_specific_guidance_and_preserves_draft() {
+    let mut panel = MemoryPanel::default();
+    panel.set_profile("first");
+    panel.draft = "synthetic draft".to_owned();
+    let id = begin(&mut panel, note("first"));
+    assert!(!panel.receive(
+        id,
+        Err(AppError::invalid_transition(
+            ai_ex_domain::MEMORY_SAVED_ENTITIES_CHANGED,
+        ))
+    ));
+    assert_eq!(panel.draft, "synthetic draft");
+    let feedback = panel.feedback.as_ref().unwrap();
+    assert!(feedback.contains("完整原始记忆文件副本"));
+    assert!(feedback.contains("暂缓修改"));
+    assert!(!feedback.contains("结束当前回复"));
+    assert!(!panel.requires_review);
+
+    let id = begin(&mut panel, note("first"));
+    panel.receive(id, Err(AppError::invalid_transition("different conflict")));
+    assert!(panel.feedback.as_ref().unwrap().contains("结束当前回复"));
+    assert_eq!(panel.draft, "synthetic draft");
+}
+
+#[test]
 fn wrong_scope_or_payload_cannot_replace_visible_records() {
     let mut panel = MemoryPanel::default();
     panel.set_profile("first");

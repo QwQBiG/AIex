@@ -26,6 +26,45 @@ fn backup(id: uuid::Uuid) -> MemoryRequest {
     }
 }
 
+#[test]
+fn saved_entity_conflict_explains_failed_backup_without_changing_other_errors() {
+    let mut panel = panel();
+    panel.draft = "synthetic draft".into();
+    for message in [
+        ai_ex_domain::MEMORY_SAVED_ENTITIES_CHANGED,
+        "another synthetic failure",
+    ] {
+        let id = uuid::Uuid::new_v4();
+        let request = begin(&mut panel, backup(id));
+        panel.receive(
+            request,
+            Ok(status(
+                id,
+                MemoryBackupState::Failed {
+                    message: message.into(),
+                },
+            )),
+        );
+    }
+    let context = egui::Context::default();
+    let output = context.run_ui(Default::default(), |ui| {
+        let mut action = None;
+        panel.show_backup_contents(ui, true, true, &mut action);
+        assert!(action.is_none());
+    });
+    let labels: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(labels.contains(&"角色备份未生成，请先保存完整原始副本并核对。"));
+    assert!(labels.contains(&"备份未完成：another synthetic failure"));
+    assert_eq!(panel.draft, "synthetic draft");
+}
+
 fn status(id: uuid::Uuid, state: MemoryBackupState) -> MemoryResponse {
     MemoryResponse::BackupStatus(MemoryBackupStatus {
         profile_id: "first".into(),

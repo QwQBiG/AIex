@@ -51,7 +51,7 @@ impl MemoryStore {
             None
         };
         if apply {
-            self.ensure_writer().await?;
+            self.ensure_writer(writer::WriteIntent::Rewrite).await?;
         }
         let mut records = self.inner.records.read().await.clone();
         let mut report = MediaMaintenanceReport {

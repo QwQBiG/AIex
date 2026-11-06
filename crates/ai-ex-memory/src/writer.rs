@@ -1,11 +1,31 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) enum WriteIntent {
+    Rewrite,
+    AppendUnlessLegacy,
+}
+
+pub(super) fn check_rewrite(records: &[MemoryRecord]) -> Result<(), AppError> {
+    if records.iter().any(|record| record.saved_entities_changed) {
+        return Err(AppError::invalid_transition(
+            ai_ex_domain::MEMORY_SAVED_ENTITIES_CHANGED,
+        ));
+    }
+    Ok(())
+}
+
 impl MemoryStore {
     /// Call only while holding write_lock. Readers remain independent snapshots;
     /// the first mutation refreshes that snapshot under an OS writer lease.
-    pub(super) async fn ensure_writer(&self) -> Result<(), AppError> {
+    pub(super) async fn ensure_writer(&self, intent: WriteIntent) -> Result<(), AppError> {
         let mut lease = self.inner.writer_lease.lock().await;
         if lease.is_some() {
+            if matches!(intent, WriteIntent::Rewrite)
+                || self.inner.legacy_format.load(Ordering::Acquire)
+            {
+                check_rewrite(&self.inner.records.read().await)?;
+            }
             return Ok(());
         }
         if let Some(parent) = self.inner.path.parent() {
@@ -28,6 +48,9 @@ impl MemoryStore {
             )
         })?;
         let refreshed = document::read(&self.inner.path).await?;
+        if matches!(intent, WriteIntent::Rewrite) || refreshed.legacy {
+            check_rewrite(&refreshed.records)?;
+        }
         let mut records = self.inner.records.write().await;
         let mut provenance = self.inner.provenance.write().await;
         *records = refreshed.records;
@@ -37,6 +60,11 @@ impl MemoryStore {
             .store(refreshed.legacy, Ordering::Release);
         *lease = Some(file);
         Ok(())
+    }
+
+    /// Defense in depth for callers that serialize the complete shared store.
+    pub(super) async fn check_shared_rewrite(&self) -> Result<(), AppError> {
+        check_rewrite(&self.inner.records.read().await)
     }
 
     pub async fn format_backup_path(&self) -> Option<PathBuf> {

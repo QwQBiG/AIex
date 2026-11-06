@@ -155,6 +155,44 @@ async fn restart(service: &mut ServiceProcess) {
 }
 
 #[tokio::test]
+async fn saved_entity_conflict_returns_stable_error_without_modifying_file() {
+    use ai_ex_domain::MEMORY_SAVED_ENTITIES_CHANGED;
+    use uuid::Uuid;
+
+    let mut service = ServiceProcess::with_memory("--managed", true, "http://127.0.0.1:1", true);
+    service.ready().await;
+    let source = service.directory.join("memory.jsonl");
+    let original = format!(
+        "{}\n",
+        serde_json::json!({
+            "schema_version":2, "record_type":"memory", "id":Uuid::new_v4(),
+            "profile_id":"other", "turn_id":Uuid::new_v4(), "created_ms":1,
+            "user_text":"synthetic neutral text", "assistant_text":"",
+            "knowledge":{"entities":[{"kind":"fact","key":"saved-key",
+                "name":"saved-name","value":"saved-value","confidence":800}]}
+        })
+    );
+    // The first writer refreshes its stale in-memory snapshot under the shared lease.
+    fs::write(&source, original.as_bytes()).unwrap();
+    let error = service
+        .client
+        .send(ControlCommand::Memory {
+            request: MemoryRequest::Remember {
+                profile_id: "default".into(),
+                text: "synthetic note".into(),
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::InvalidTransition);
+    assert_eq!(error.message, MEMORY_SAVED_ENTITIES_CHANGED);
+    assert_eq!(fs::read(&source).unwrap(), original.as_bytes());
+    drop(service.child.stdin.take());
+    service.exited().await;
+    assert_eq!(fs::read(&source).unwrap(), original.as_bytes());
+}
+
+#[tokio::test]
 async fn memory_edits_change_actual_model_context_and_survive_restart() {
     let mut model = ModelServer::start().await;
     let mut service = ServiceProcess::with_memory("--managed", true, &model.url, true);

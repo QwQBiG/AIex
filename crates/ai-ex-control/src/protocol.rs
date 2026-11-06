@@ -77,6 +77,19 @@ pub enum ControlCommand {
         instance_id: Uuid,
         operation_id: Uuid,
     },
+    PrepareRawMemoryBackup {
+        instance_id: Uuid,
+        operation_id: Uuid,
+    },
+    StartRawMemoryBackup {
+        instance_id: Uuid,
+        operation_id: Uuid,
+        plan_id: Uuid,
+    },
+    RawMemoryBackupStatus {
+        instance_id: Uuid,
+        operation_id: Uuid,
+    },
     SetSpeechSplit {
         instance_id: Uuid,
         expected_revision: u64,
@@ -149,6 +162,14 @@ pub enum ControlPayload {
         result: MergeCandidatePreviewResult,
     },
     MergeCandidateStatus(LegacyCandidateStatus),
+    RawMemoryBackupPlan {
+        instance_id: Uuid,
+        operation_id: Uuid,
+        plan_id: Uuid,
+        expires_in_seconds: u64,
+        output: SensitivePath,
+    },
+    RawMemoryBackupStatus(RawMemoryBackupStatus),
     SpeechSplit {
         instance_id: Uuid,
         revision: u64,
@@ -233,6 +254,24 @@ pub enum LegacyCandidateState {
     Running,
     Written { temporary_retained: bool },
     Rejected,
+    CapacityReached,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawMemoryBackupStatus {
+    pub instance_id: Uuid,
+    pub operation_id: Uuid,
+    pub output: Option<SensitivePath>,
+    pub state: RawMemoryBackupState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RawMemoryBackupState {
+    Running,
+    Written { temporary_retained: bool },
     CapacityReached,
     Unknown,
 }

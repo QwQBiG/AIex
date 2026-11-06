@@ -211,7 +211,11 @@ impl MemoryPanel {
                             }
                         }
                         MemoryBackupState::Failed { message } => {
-                            ui.label(format!("备份未完成：{message}"));
+                            if message == ai_ex_domain::MEMORY_SAVED_ENTITIES_CHANGED {
+                                ui.label("角色备份未生成，请先保存完整原始副本并核对。");
+                            } else {
+                                ui.label(format!("备份未完成：{message}"));
+                            }
                         }
                     }
                     if !same_instance

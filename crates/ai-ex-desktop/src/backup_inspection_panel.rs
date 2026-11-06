@@ -16,6 +16,8 @@ use crate::worker::WorkerCommand;
 mod candidate;
 #[path = "backup_merge_panel.rs"]
 mod merge;
+#[path = "backup_raw_panel.rs"]
+mod raw;
 
 #[cfg(test)]
 #[path = "backup_inspection_panel_tests.rs"]
@@ -84,6 +86,20 @@ enum Pending {
         id: u64,
         operation_id: Uuid,
     },
+    RawPrepare {
+        id: u64,
+        instance: Uuid,
+        operation_id: Uuid,
+        requested_at: std::time::Instant,
+    },
+    RawStart {
+        id: u64,
+        operation_id: Uuid,
+    },
+    RawQuery {
+        id: u64,
+        operation_id: Uuid,
+    },
 }
 
 #[derive(Default)]
@@ -104,6 +120,7 @@ pub struct BackupInspectionPanel {
     feedback: Option<&'static str>,
     candidate: candidate::CandidatePanel,
     merge: merge::MergePanel,
+    raw: raw::RawPanel,
 }
 
 impl BackupInspectionPanel {
@@ -120,6 +137,7 @@ impl BackupInspectionPanel {
         if identity_changed || persona_changed || (self.ready && !ready) {
             self.invalidate_candidate();
             self.invalidate_merge();
+            self.invalidate_raw();
             self.cancel_drop();
             self.drop_message = None;
             self.revoke_queued();
@@ -214,7 +232,8 @@ impl BackupInspectionPanel {
         }
     }
 
-    fn revoke_queued(&self) {
+    fn revoke_queued(&mut self) {
+        self.invalidate_raw();
         let _ = self
             .guard
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
@@ -277,11 +296,20 @@ impl BackupInspectionPanel {
             | Pending::MergeContext { id, .. }
             | Pending::MergePreview { id, .. }
             | Pending::MergeStart { id, .. }
-            | Pending::MergeQuery { id, .. } => *id,
+            | Pending::MergeQuery { id, .. }
+            | Pending::RawPrepare { id, .. }
+            | Pending::RawStart { id, .. }
+            | Pending::RawQuery { id, .. } => *id,
         };
         if id != request_id {
             self.pending = Some(pending);
             return None;
+        }
+        if matches!(
+            pending,
+            Pending::RawPrepare { .. } | Pending::RawStart { .. } | Pending::RawQuery { .. }
+        ) {
+            return self.receive_raw(pending, reply);
         }
         if matches!(
             pending,
@@ -403,7 +431,7 @@ impl BackupInspectionPanel {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<WorkerCommand> {
-        let mut command = None;
+        let mut command = self.show_raw(ui);
         egui::CollapsingHeader::new("检查已有记忆备份")
             .id_salt("inspect_memory_backup")
             .show(ui, |ui| {
@@ -427,7 +455,9 @@ impl BackupInspectionPanel {
                 if ui.add(egui::TextEdit::singleline(&mut self.path).hint_text("备份文件绝对路径").desired_width(360.0).char_limit(1024)).changed() {
                     self.path_edited();
                 }
-                command = self.show_actions(ui);
+                if let Some(action) = self.show_actions(ui) {
+                    command = Some(action);
+                }
                 if let Some(message) = self.drop_message { ui.weak(message); }
                 if let Some(feedback) = self.feedback { ui.label(feedback); }
                 if let Some(result) = &self.result {

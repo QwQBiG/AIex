@@ -43,6 +43,9 @@ async fn execute_with<F, Fut>(
                 | ControlCommand::PrepareMergeCandidate { .. }
                 | ControlCommand::StartMergeCandidate { .. }
                 | ControlCommand::MergeCandidateStatus { .. }
+                | ControlCommand::PrepareRawMemoryBackup { .. }
+                | ControlCommand::StartRawMemoryBackup { .. }
+                | ControlCommand::RawMemoryBackupStatus { .. }
         ) {
             send(command)
                 .await

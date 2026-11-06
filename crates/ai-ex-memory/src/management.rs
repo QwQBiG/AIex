@@ -104,7 +104,7 @@ impl MemoryStore {
             ));
         }
         let _write_guard = self.inner.write_lock.lock().await;
-        self.ensure_writer().await?;
+        self.ensure_writer(writer::WriteIntent::Rewrite).await?;
         let mut records = self.inner.records.read().await.clone();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -175,6 +175,7 @@ impl MemoryStore {
     }
 
     pub(super) async fn replace_records(&self, records: Vec<MemoryRecord>) -> Result<(), AppError> {
+        self.check_shared_rewrite().await?;
         let mut provenance = self.inner.provenance.read().await.clone();
         provenance.reconcile(&self.inner.records.read().await, &records);
         let content = provenance::serialize_document(&records, &provenance)?;

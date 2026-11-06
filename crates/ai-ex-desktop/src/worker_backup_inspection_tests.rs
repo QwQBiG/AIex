@@ -224,3 +224,81 @@ async fn merge_operations_use_the_guarded_backup_sender() {
         }
     ));
 }
+
+#[tokio::test]
+async fn raw_backup_commands_use_the_guarded_sender() {
+    let (commands, input) = tokio::sync::mpsc::channel(3);
+    let (events, output) = std::sync::mpsc::channel();
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let instance_id = uuid::Uuid::new_v4();
+    let operation_id = uuid::Uuid::new_v4();
+    let plan_id = uuid::Uuid::new_v4();
+    let guard = Arc::new(AtomicU64::new(1));
+    for (index, command) in [
+        ControlCommand::PrepareRawMemoryBackup {
+            instance_id,
+            operation_id,
+        },
+        ControlCommand::StartRawMemoryBackup {
+            instance_id,
+            operation_id,
+            plan_id,
+        },
+        ControlCommand::RawMemoryBackupStatus {
+            instance_id,
+            operation_id,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        commands
+            .send(WorkerCommand::BackupInspection {
+                request_id: index as u64 + 1,
+                command,
+                generation: if index == 1 { 0 } else { 1 },
+                guard: Arc::clone(&guard),
+            })
+            .await
+            .unwrap();
+    }
+    drop(commands);
+    execute_with(input, &events, move |command| {
+        sent.send(command).unwrap();
+        async { Ok(ControlPayload::Accepted) }
+    })
+    .await;
+    assert!(matches!(
+        received.recv().await,
+        Some(ControlCommand::PrepareRawMemoryBackup { .. })
+    ));
+    assert!(matches!(
+        received.recv().await,
+        Some(ControlCommand::RawMemoryBackupStatus { .. })
+    ));
+    assert!(received.try_recv().is_err());
+    assert!(matches!(
+        output.recv().unwrap(),
+        WorkerEvent::BackupInspection {
+            request_id: 1,
+            result: Ok(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        output.recv().unwrap(),
+        WorkerEvent::BackupInspection {
+            request_id: 2,
+            result: Err(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        output.recv().unwrap(),
+        WorkerEvent::BackupInspection {
+            request_id: 3,
+            result: Ok(_),
+            ..
+        }
+    ));
+}

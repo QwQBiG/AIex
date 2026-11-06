@@ -37,6 +37,7 @@ impl DesktopApp {
             || self.appearance.is_loading()
             || self.memory.has_unsaved()
             || self.backup_inspection.candidate_unresolved()
+            || self.backup_inspection.raw_unresolved()
             || self.native_desktop.proposal_operation_unresolved()
             || self.native.has_unsaved()
             || self.speech_split.has_unsaved()
@@ -63,6 +64,11 @@ impl DesktopApp {
                 if self.backup_inspection.candidate_unresolved() {
                     ui.label(
                         "候选文件操作尚未确认，退出可能丢失操作编号；请先查询并核对目标文件。",
+                    );
+                }
+                if self.backup_inspection.raw_unresolved() {
+                    ui.label(
+                        "完整原始备份尚未确认，离开可能丢失操作编号；请先查询并核对目标文件。",
                     );
                 }
                 if self.native_desktop.proposal_operation_unresolved() {
@@ -120,6 +126,9 @@ impl DesktopApp {
                 }
                 if self.backup_inspection.candidate_unresolved() {
                     ui.label("候选文件操作尚未确认，退出可能丢失操作编号；请先查询并核对目标文件。");
+                }
+                if self.backup_inspection.raw_unresolved() {
+                    ui.label("完整原始备份尚未确认，退出会丢失操作编号；请先查询并核对目标文件。");
                 }
                 if self.native_desktop.proposal_operation_unresolved() {
                     ui.label("视觉操作结果尚未确认；退出会丢失本次操作编号，请先查询并核对目标窗口。");

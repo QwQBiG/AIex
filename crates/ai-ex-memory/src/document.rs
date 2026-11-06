@@ -63,7 +63,10 @@ pub(super) fn parse(content: &str) -> Result<Document, AppError> {
                 document.legacy |= kind.is_none();
                 let mut record: MemoryRecord =
                     serde_json::from_str(line).map_err(|e| invalid(e.to_string()))?;
+                let saved_entities = std::mem::take(&mut record.knowledge.entities);
                 record.rebuild()?;
+                record.saved_entities_changed =
+                    !saved_entities.is_empty() && saved_entities != record.knowledge.entities;
                 if !ids.insert((record.profile_id.clone(), record.id)) {
                     return Err(invalid("duplicate memory identity".into()));
                 }

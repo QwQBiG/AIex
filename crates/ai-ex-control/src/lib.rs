@@ -22,6 +22,6 @@ pub use protocol::{
     ControlCommand, ControlPayload, ControlRequest, ControlResponse, LegacyCandidateState,
     LegacyCandidateStatus, LegacyMemoryBackupInspection, MemoryBackupInspection,
     MemoryMergeConflict, MemoryMergeSummary, MemoryReply, MergeCandidatePreviewResult,
-    SensitivePath,
+    RawMemoryBackupState, RawMemoryBackupStatus, SensitivePath,
 };
 pub use server::{ControlBackend, ControlServer};

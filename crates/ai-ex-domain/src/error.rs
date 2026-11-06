@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Stable protocol message for a rewrite that would alter saved memory entities.
+pub const MEMORY_SAVED_ENTITIES_CHANGED: &str = "memory rewrite would change saved entities; preserve a complete original copy before resolving this data";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {

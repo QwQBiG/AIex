@@ -10,13 +10,11 @@ pub struct MemoryMigrationReport {
     pub imported_entity_candidates: usize,
     pub source_associations: usize,
     pub inactive_source_associations: usize,
+    pub changed_saved_entity_records: usize,
 }
 
-/// Validates an existing store without acquiring a writer or touching its files.
-/// The caller publishes the returned v2 content only to an explicitly chosen output.
-pub fn migrate_jsonl(content: &str) -> Result<(String, MemoryMigrationReport), AppError> {
-    let document = document::parse(content)?;
-    let report = MemoryMigrationReport {
+fn report(document: &document::Document) -> MemoryMigrationReport {
+    MemoryMigrationReport {
         output_schema_version: provenance::SCHEMA_VERSION,
         contains_legacy_records: document.legacy,
         memory_records: document.records.len(),
@@ -28,7 +26,24 @@ pub fn migrate_jsonl(content: &str) -> Result<(String, MemoryMigrationReport), A
             .iter()
             .filter(|source| source.status != ai_ex_domain::MemoryEntitySourceStatus::Active)
             .count(),
-    };
+        changed_saved_entity_records: document
+            .records
+            .iter()
+            .filter(|record| record.saved_entities_changed)
+            .count(),
+    }
+}
+
+/// Inspect without writing or producing an upgraded document.
+pub fn inspect_memory_jsonl(content: &str) -> Result<MemoryMigrationReport, AppError> {
+    Ok(report(&document::parse(content)?))
+}
+
+/// Return a new document only when saved entities survive reconstruction.
+pub fn migrate_jsonl(content: &str) -> Result<(String, MemoryMigrationReport), AppError> {
+    let document = document::parse(content)?;
+    let report = report(&document);
+    writer::check_rewrite(&document.records)?;
     let output = provenance::serialize_document(&document.records, &document.provenance)?;
     Ok((output, report))
 }

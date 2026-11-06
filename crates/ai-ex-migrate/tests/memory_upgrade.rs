@@ -86,3 +86,30 @@ fn preview_is_read_only_and_new_output_rejects_overwrite() {
     }
     assert_eq!(fs::read_dir(&files.0).unwrap().count(), 2);
 }
+
+#[test]
+fn preview_reports_saved_entities_that_cannot_be_safely_rewritten() {
+    let files = Files::new();
+    let old = json!({"id":Uuid::new_v4(), "turn_id":Uuid::new_v4(), "created_ms":100,
+    "user_text":"neutral", "assistant_text":"", "knowledge":{"entities":[{
+        "kind":"fact", "key":"synthetic-key", "name":"synthetic-name",
+        "value":"synthetic-value", "confidence":800
+    }]}});
+    let original = format!("{old}\n");
+    fs::write(files.0.join("old.jsonl"), &original).unwrap();
+    let preview = files.command().arg("--preview").output().unwrap();
+    assert!(preview.status.success());
+    let report: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(report["changed_saved_entity_records"], 1);
+    let output = files
+        .command()
+        .args(["--output", "new.jsonl"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!files.0.join("new.jsonl").exists());
+    assert_eq!(
+        fs::read_to_string(files.0.join("old.jsonl")).unwrap(),
+        original
+    );
+}

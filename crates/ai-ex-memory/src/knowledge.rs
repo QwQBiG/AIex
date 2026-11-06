@@ -96,7 +96,7 @@ impl MemoryStore {
         }
         let profile_id = self.inner.profile_id.read().await;
         let _guard = self.inner.write_lock.lock().await;
-        self.ensure_writer().await?;
+        self.ensure_writer(writer::WriteIntent::Rewrite).await?;
         let records = self.inner.records.read().await;
         let retained: Vec<_> = records
             .iter()

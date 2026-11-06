@@ -18,6 +18,109 @@ pub struct MemoryBackup {
 }
 
 impl MemoryStore {
+    /// Compute the fixed whole-store backup target without reading or writing it.
+    pub fn raw_backup_target(&self, id: Uuid) -> Result<PathBuf, AppError> {
+        if !self.inner.enabled {
+            return Err(AppError::unavailable("memory is disabled"));
+        }
+        if id.get_version_num() != 4 {
+            return Err(AppError::configuration(
+                "raw backup requires a random operation ID",
+            ));
+        }
+        let source = std::path::absolute(&self.inner.path)
+            .map_err(|_| AppError::unavailable("memory copy source unavailable"))?;
+        Ok(raw_backup_paths(&source, id)?.1)
+    }
+
+    /// Publish only if the target still matches the explicitly reviewed path.
+    pub async fn backup_raw_copy_planned(
+        &self,
+        id: Uuid,
+        expected: impl AsRef<Path>,
+    ) -> Result<(PathBuf, bool), AppError> {
+        if !self.inner.enabled {
+            return Err(AppError::unavailable("memory is disabled"));
+        }
+        if id.get_version_num() != 4 {
+            return Err(AppError::configuration(
+                "raw backup requires a random operation ID",
+            ));
+        }
+        let expected = expected.as_ref().to_owned();
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            store.backup_raw_copy_locked_for(id, Some(&expected), copy_raw_file)
+        })
+        .await
+        .map_err(|_| AppError::unavailable("memory copy task stopped"))?
+    }
+
+    /// Copy the complete active memory file, including every profile and unknown field.
+    ///
+    /// Returns the published path and whether its temporary link could not be removed.
+    /// Only writers using the sidecar lease are coordinated; external replacement is
+    /// not prevented. This operation has no status query or cancellation interface.
+    pub async fn backup_raw_copy(&self, id: Uuid) -> Result<(PathBuf, bool), AppError> {
+        if !self.inner.enabled {
+            return Err(AppError::unavailable("memory is disabled"));
+        }
+        if id.is_nil() {
+            return Err(AppError::configuration("invalid memory backup request"));
+        }
+        // Once started, the blocking worker owns the locks through the complete copy.
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.backup_raw_copy_locked(id, copy_raw_file))
+            .await
+            .map_err(|_| AppError::unavailable("memory copy task stopped"))?
+    }
+
+    fn backup_raw_copy_locked<F>(&self, id: Uuid, copy: F) -> Result<(PathBuf, bool), AppError>
+    where
+        F: FnOnce(&Path, &Path, &Path) -> io::Result<(PathBuf, bool)>,
+    {
+        self.backup_raw_copy_locked_for(id, None, copy)
+    }
+
+    fn backup_raw_copy_locked_for<F>(
+        &self,
+        id: Uuid,
+        expected: Option<&Path>,
+        copy: F,
+    ) -> Result<(PathBuf, bool), AppError>
+    where
+        F: FnOnce(&Path, &Path, &Path) -> io::Result<(PathBuf, bool)>,
+    {
+        let _write = self.inner.write_lock.blocking_lock();
+        let lease = self.inner.writer_lease.blocking_lock();
+        let source = std::path::absolute(&self.inner.path)
+            .map_err(|_| AppError::unavailable("memory copy source unavailable"))?;
+        let (temporary, destination) = raw_backup_paths(&source, id)?;
+        if expected.is_some_and(|path| path != destination.as_path()) {
+            return Err(AppError::invalid_transition(
+                "raw memory backup target changed",
+            ));
+        }
+        let _external_lease = if lease.is_none() {
+            let mut lock_name = source.as_os_str().to_os_string();
+            lock_name.push(".lock");
+            let lock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(PathBuf::from(lock_name))
+                .map_err(|_| AppError::unavailable("memory copy lease unavailable"))?;
+            lock.try_lock()
+                .map_err(|_| AppError::unavailable("memory has another active writer"))?;
+            Some(lock)
+        } else {
+            None
+        };
+        copy(&source, &temporary, &destination)
+            .map_err(|_| AppError::unavailable("memory copy failed; temporary file may remain"))
+    }
+
     /// Back up the selected profile without modifying the active memory file.
     /// Other writers must use the same sidecar lock; unrelated file replacement is not guarded.
     pub async fn backup_snapshot(
@@ -91,6 +194,7 @@ impl MemoryStore {
                 .collect::<Vec<_>>();
             (records, document.provenance.for_profile(&profile))
         };
+        super::writer::check_rewrite(&records)?;
         drop(lease);
         drop(_write);
         drop(profile);
@@ -183,6 +287,45 @@ impl MemoryStore {
             *entry = status.clone();
         }
         Ok(MemoryResponse::BackupStatus(status))
+    }
+}
+
+fn raw_backup_paths(source: &Path, id: Uuid) -> Result<(PathBuf, PathBuf), AppError> {
+    let name = source
+        .file_name()
+        .ok_or_else(|| AppError::configuration("memory source has no filename"))?;
+    let sibling = |suffix: &str| {
+        let mut name = OsString::from(name);
+        name.push(format!(".raw-copy-{id}.{suffix}"));
+        source.with_file_name(name)
+    };
+    Ok((sibling("partial"), sibling("jsonl")))
+}
+
+fn copy_raw_file(
+    source: &Path,
+    temporary: &Path,
+    destination: &Path,
+) -> io::Result<(PathBuf, bool)> {
+    let mut input = fs::File::open(source)?;
+    if !input.metadata()?.is_file() {
+        return Err(io::Error::other("memory source is not a file"));
+    }
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temporary)?;
+    let result = (|| {
+        io::copy(&mut input, &mut output)?;
+        output.flush()?;
+        output.sync_all()?;
+        fs::hard_link(temporary, destination)
+    })();
+    drop(output);
+    let cleanup = fs::remove_file(temporary);
+    match (result, cleanup) {
+        (Ok(()), cleanup) => Ok((destination.to_owned(), cleanup.is_err())),
+        (Err(error), _) => Err(error),
     }
 }
 

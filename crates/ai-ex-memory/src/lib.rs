@@ -18,7 +18,7 @@ pub use candidate_merge::{
 };
 pub use knowledge::{MediaStats, observation_media};
 pub use maintenance::MediaMaintenanceReport;
-pub use migration::{MemoryMigrationReport, migrate_jsonl};
+pub use migration::{MemoryMigrationReport, inspect_memory_jsonl, migrate_jsonl};
 mod policy;
 mod provenance;
 mod record;
@@ -27,6 +27,9 @@ mod writer;
 
 #[cfg(test)]
 mod persistence_tests;
+
+#[cfg(test)]
+mod rewrite_guard_tests;
 
 #[cfg(test)]
 mod management_tests;
@@ -278,7 +281,8 @@ impl MemoryStore {
         }
         let profile_id = self.inner.profile_id.read().await;
         let _write_guard = self.inner.write_lock.lock().await;
-        self.ensure_writer().await?;
+        self.ensure_writer(writer::WriteIntent::AppendUnlessLegacy)
+            .await?;
         if let Some(parent) = self.inner.path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -378,6 +382,7 @@ impl MemoryStore {
             .filter(|record| kind.is_none_or(|expected| record.kind == expected))
             .cloned()
             .collect();
+        writer::check_rewrite(&records)?;
         let provenance = if kind.is_none() {
             self.inner.provenance.read().await.for_profile(&profile_id)
         } else {
@@ -404,7 +409,7 @@ impl MemoryStore {
         }
         let profile_id = self.inner.profile_id.read().await;
         let _write_guard = self.inner.write_lock.lock().await;
-        self.ensure_writer().await?;
+        self.ensure_writer(writer::WriteIntent::Rewrite).await?;
         let records = self.inner.records.read().await;
         let retained: Vec<_> = records
             .iter()
