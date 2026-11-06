@@ -21,6 +21,7 @@ fn request() -> Request {
         path: "C:\\synthetic-private-marker.jsonl".into(),
         profile: "a".into(),
         comparison_space: None,
+        legacy: false,
     }
 }
 

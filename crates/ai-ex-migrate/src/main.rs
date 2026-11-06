@@ -3,6 +3,7 @@
 mod jsonl_upgrade;
 mod legacy;
 mod legacy_check;
+mod legacy_template_check;
 
 use std::path::PathBuf;
 
@@ -27,6 +28,38 @@ async fn run() -> Result<(), AppError> {
     let mut arguments: Vec<_> = std::env::args().skip(1).collect();
     if arguments == ["--version"] {
         println!("ai-ex-migrate {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    let template_checks = arguments
+        .iter()
+        .filter(|argument| *argument == "--inspect-legacy-templates")
+        .count();
+    if template_checks > 0 {
+        if template_checks != 1 {
+            return Err(AppError::configuration(
+                "duplicate template inspection mode",
+            ));
+        }
+        arguments.retain(|argument| argument != "--inspect-legacy-templates");
+        let [flag, input] = arguments.as_slice() else {
+            return Err(AppError::configuration(
+                "template inspection requires exactly one --input path and no other options",
+            ));
+        };
+        if flag != "--input" || input.is_empty() || input.starts_with("--") {
+            return Err(AppError::configuration(
+                "template inspection requires exactly one --input path and no other options",
+            ));
+        }
+        let input = PathBuf::from(input);
+        let report = tokio::task::spawn_blocking(move || legacy_template_check::inspect(&input))
+            .await
+            .map_err(|_| AppError::unavailable("template inspection worker failed"))??;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|_| AppError::protocol("cannot encode template inspection report"))?
+        );
         return Ok(());
     }
     let inspections = arguments
@@ -95,6 +128,9 @@ async fn run() -> Result<(), AppError> {
         return jsonl_upgrade::run(arguments).await;
     }
     if arguments == ["--help"] || arguments == ["-h"] {
+        println!(
+            "Read-only legacy template export check: ai-ex-migrate --inspect-legacy-templates --input OLD.json. Reports counts only; does not import or apply templates."
+        );
         println!(
             "Read-only legacy backup check: ai-ex-migrate --inspect-memory-backup --input OLD.json.gz. Checks the memories hash and count; does not establish authenticity or import compatibility."
         );

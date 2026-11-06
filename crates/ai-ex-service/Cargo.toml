@@ -25,6 +25,7 @@ ai-ex-event-bus = { path = "../ai-ex-event-bus" }
 ai-ex-deepseek = { path = "../ai-ex-deepseek" }
 ai-ex-duplex = { path = "../ai-ex-duplex" }
 ai-ex-memory = { path = "../ai-ex-memory" }
+ai-ex-migrate = { path = "../ai-ex-migrate" }
 ai-ex-model-catalog = { path = "../ai-ex-model-catalog" }
 ai-ex-model-manager = { path = "../ai-ex-model-manager" }
 ai-ex-native-models = { path = "../ai-ex-native-models" }
@@ -49,6 +50,9 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
 
 [lints]
 workspace = true

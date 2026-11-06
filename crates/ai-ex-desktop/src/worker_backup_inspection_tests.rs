@@ -66,3 +66,41 @@ async fn queued_inspection_is_not_sent_after_revocation() {
         }
     ));
 }
+
+#[tokio::test]
+async fn legacy_inspection_reaches_sender() {
+    let (commands, input) = tokio::sync::mpsc::channel(1);
+    let (events, output) = std::sync::mpsc::channel();
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    commands
+        .send(WorkerCommand::BackupInspection {
+            request_id: 1,
+            command: ControlCommand::InspectLegacyMemoryBackup {
+                instance_id: uuid::Uuid::new_v4(),
+                profile_id: "synthetic".into(),
+                persona_epoch: 1,
+                path: ai_ex_control::SensitivePath::new("C:\\synthetic\\backup.json.gz"),
+            },
+            generation: 0,
+            guard: Arc::new(AtomicU64::new(0)),
+        })
+        .await
+        .unwrap();
+    drop(commands);
+    execute_with(input, &events, move |command| {
+        sent.send(command).unwrap();
+        async { Ok(ControlPayload::Accepted) }
+    })
+    .await;
+    assert!(matches!(
+        received.recv().await,
+        Some(ControlCommand::InspectLegacyMemoryBackup { .. })
+    ));
+    assert!(matches!(
+        output.recv().unwrap(),
+        WorkerEvent::BackupInspection {
+            request_id: 1,
+            result: Ok(ControlPayload::Accepted)
+        }
+    ));
+}

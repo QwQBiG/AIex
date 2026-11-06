@@ -19,6 +19,7 @@ fn invalid_options_are_rejected_before_source_read() {
             path: path.clone(),
             profile,
             comparison_space,
+            legacy: false,
         };
         assert!(
             inspect_with(request, |_| {

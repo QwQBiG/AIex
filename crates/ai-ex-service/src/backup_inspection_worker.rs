@@ -8,6 +8,7 @@ use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
 
+use ai_ex_control::LegacyMemoryBackupInspection;
 use ai_ex_memory::{BackupInspection, inspect_profile_backup};
 use serde::{Deserialize, Serialize};
 
@@ -21,12 +22,19 @@ pub(super) struct Request {
     pub path: String,
     pub profile: String,
     pub comparison_space: Option<String>,
+    #[serde(default)]
+    pub legacy: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Reply {
-    Ready { summary: BackupInspection },
+    Ready {
+        summary: BackupInspection,
+    },
+    LegacyReady {
+        summary: LegacyMemoryBackupInspection,
+    },
     Invalid,
 }
 
@@ -54,19 +62,16 @@ pub(crate) fn run_stdio() -> io::Result<()> {
 
 fn inspect(request: Request) -> Reply {
     match inspect_inner(request) {
-        Some(summary) => Reply::Ready { summary },
+        Some(reply) => reply,
         None => Reply::Invalid,
     }
 }
 
-fn inspect_inner(request: Request) -> Option<BackupInspection> {
+fn inspect_inner(request: Request) -> Option<Reply> {
     inspect_with(request, read_selected)
 }
 
-fn inspect_with(
-    request: Request,
-    read: impl FnOnce(&Path) -> Option<Vec<u8>>,
-) -> Option<BackupInspection> {
+fn inspect_with(request: Request, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -> Option<Reply> {
     if request.path.is_empty()
         || request.path.chars().count() > 1024
         || request.path.chars().any(char::is_control)
@@ -85,12 +90,27 @@ fn inspect_with(
         return None;
     }
     let bytes = read(path)?;
-    inspect_profile_backup(
-        &bytes,
-        &request.profile,
-        request.comparison_space.as_deref(),
-    )
-    .ok()
+    if request.legacy {
+        let summary = ai_ex_migrate::legacy_memory::inspect_backup_bytes(&bytes).ok()?;
+        Some(Reply::LegacyReady {
+            summary: LegacyMemoryBackupInspection {
+                records: summary.records,
+                local_timestamp_records: summary.local_timestamp_records,
+                unclassified_timestamp_records: summary.unclassified_timestamp_records,
+                nonempty_embedding_records: summary.nonempty_embedding_records,
+                unclassified_embedding_records: summary.unclassified_embedding_records,
+                legacy_metadata_fields_present: summary.legacy_metadata_fields_present,
+            },
+        })
+    } else {
+        let summary = inspect_profile_backup(
+            &bytes,
+            &request.profile,
+            request.comparison_space.as_deref(),
+        )
+        .ok()?;
+        Some(Reply::Ready { summary })
+    }
 }
 
 fn read_selected(path: &Path) -> Option<Vec<u8>> {

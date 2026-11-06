@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use ai_ex_control::LegacyMemoryBackupInspection;
 use ai_ex_domain::AppError;
 use ai_ex_memory::BackupInspection;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -26,11 +27,21 @@ pub(crate) struct BackupInspector {
     inner: Arc<Inner>,
 }
 
-pub(crate) struct PendingInspection(oneshot::Receiver<Result<BackupInspection, AppError>>);
+pub(crate) struct PendingInspection(oneshot::Receiver<Result<Reply, AppError>>);
 
 impl PendingInspection {
     pub(crate) async fn wait(self) -> Result<BackupInspection, AppError> {
-        self.0.await.map_err(|_| unavailable())?
+        match self.0.await.map_err(|_| unavailable())?? {
+            Reply::Ready { summary } => Ok(summary),
+            _ => Err(invalid()),
+        }
+    }
+
+    pub(crate) async fn wait_legacy(self) -> Result<LegacyMemoryBackupInspection, AppError> {
+        match self.0.await.map_err(|_| unavailable())?? {
+            Reply::LegacyReady { summary } => Ok(summary),
+            _ => Err(invalid()),
+        }
     }
 }
 
@@ -162,8 +173,8 @@ async fn run_owned(
     encoded: &[u8],
     deadline: Duration,
     stop: &mut watch::Receiver<bool>,
-    response: &mut oneshot::Sender<Result<BackupInspection, AppError>>,
-) -> Result<BackupInspection, AppError> {
+    response: &mut oneshot::Sender<Result<Reply, AppError>>,
+) -> Result<Reply, AppError> {
     if *stop.borrow() || response.is_closed() {
         return Err(unavailable());
     }
@@ -213,7 +224,7 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
     }
 }
 
-async fn exchange(child: &mut Child, encoded: &[u8]) -> Result<BackupInspection, AppError> {
+async fn exchange(child: &mut Child, encoded: &[u8]) -> Result<Reply, AppError> {
     let mut input = child.stdin.take().ok_or_else(unavailable)?;
     input
         .write_u32(encoded.len() as u32)
@@ -241,9 +252,24 @@ async fn exchange(child: &mut Child, encoded: &[u8]) -> Result<BackupInspection,
         return Err(unavailable());
     }
     match serde_json::from_slice::<Reply>(&frame).map_err(|_| invalid())? {
-        Reply::Ready { summary } if valid_summary(&summary) => Ok(summary),
+        Reply::Ready { summary } if valid_summary(&summary) => Ok(Reply::Ready { summary }),
+        Reply::LegacyReady { summary } if valid_legacy_summary(&summary) => {
+            Ok(Reply::LegacyReady { summary })
+        }
         _ => Err(invalid()),
     }
+}
+
+fn valid_legacy_summary(summary: &LegacyMemoryBackupInspection) -> bool {
+    summary.records <= 50_000
+        && summary
+            .local_timestamp_records
+            .saturating_add(summary.unclassified_timestamp_records)
+            <= summary.records
+        && summary
+            .nonempty_embedding_records
+            .saturating_add(summary.unclassified_embedding_records)
+            <= summary.records
 }
 
 fn valid_summary(summary: &BackupInspection) -> bool {

@@ -182,18 +182,42 @@ pub struct LegacyBackupInspection {
     authenticity: &'static str,
     import_compatibility: &'static str,
     guidance: &'static str,
-    legacy_metadata_fields_present: bool,
-    records: usize,
-    local_timestamp_records: usize,
-    unclassified_timestamp_records: usize,
-    nonempty_embedding_records: usize,
-    unclassified_embedding_records: usize,
+    pub legacy_metadata_fields_present: bool,
+    pub records: usize,
+    pub local_timestamp_records: usize,
+    pub unclassified_timestamp_records: usize,
+    pub nonempty_embedding_records: usize,
+    pub unclassified_embedding_records: usize,
 }
 
 pub fn inspect_backup(path: &Path) -> Result<LegacyBackupInspection, AppError> {
     let content = read_backup(path)?;
-    let backup = validate_backup(&content)?;
-    let root: Value = serde_json::from_slice(&content)
+    inspect_content(&content)
+}
+
+/// Inspect a bounded, already selected file without opening any additional path.
+pub fn inspect_backup_bytes(bytes: &[u8]) -> Result<LegacyBackupInspection, AppError> {
+    if bytes.len() as u64 > MAX_BACKUP_BYTES {
+        return Err(AppError::configuration(
+            "compressed memory backup exceeds 32 MiB",
+        ));
+    }
+    if bytes.len() < 2 {
+        return Err(AppError::configuration(
+            "memory backup is empty or truncated",
+        ));
+    }
+    let content = if bytes.starts_with(&[0x1f, 0x8b]) {
+        read_bounded(MultiGzDecoder::new(bytes), MAX_BACKUP_BYTES)?
+    } else {
+        bytes.to_vec()
+    };
+    inspect_content(&content)
+}
+
+fn inspect_content(content: &[u8]) -> Result<LegacyBackupInspection, AppError> {
+    let backup = validate_backup(content)?;
+    let root: Value = serde_json::from_slice(content)
         .map_err(|_| AppError::configuration("invalid legacy memory backup JSON"))?;
     let legacy_metadata_fields_present = root.as_object().is_some_and(|object| {
         object.contains_key("backup_timestamp") && object.contains_key("collection_name")

@@ -264,6 +264,36 @@ async fn backup_inspection_rejects_results_after_persona_changes_back() {
             .await
     });
     received.await.unwrap();
+    let (legacy_started, legacy_received) = oneshot::channel();
+    let (legacy_release, legacy_held) = oneshot::channel();
+    let legacy_control = control.clone();
+    let legacy_task = tokio::spawn(async move {
+        let path = std::env::temp_dir().join("synthetic-unread.json.gz");
+        legacy_control
+            .inspect_legacy_memory_backup_with(
+                instance_id,
+                "default".into(),
+                persona_epoch,
+                SensitivePath::new(path.to_string_lossy()),
+                |request| {
+                    assert!(request.legacy);
+                    Ok(async {
+                        legacy_started.send(()).unwrap();
+                        legacy_held.await.unwrap();
+                        Ok(ai_ex_control::LegacyMemoryBackupInspection {
+                            records: 1,
+                            local_timestamp_records: 0,
+                            unclassified_timestamp_records: 0,
+                            nonempty_embedding_records: 0,
+                            unclassified_embedding_records: 0,
+                            legacy_metadata_fields_present: false,
+                        })
+                    })
+                },
+            )
+            .await
+    });
+    legacy_received.await.unwrap();
     let other = PersonaSnapshot {
         profile_id: "other".into(),
         ..PersonaSnapshot::default()
@@ -279,8 +309,13 @@ async fn backup_inspection_rejects_results_after_persona_changes_back() {
         .await
         .unwrap();
     release.send(()).unwrap();
+    legacy_release.send(()).unwrap();
     assert_eq!(
         task.await.unwrap().unwrap_err().kind,
+        ai_ex_domain::ErrorKind::InvalidTransition
+    );
+    assert_eq!(
+        legacy_task.await.unwrap().unwrap_err().kind,
         ai_ex_domain::ErrorKind::InvalidTransition
     );
     let accepted = Arc::new(std::sync::atomic::AtomicBool::new(false));

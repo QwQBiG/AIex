@@ -258,7 +258,10 @@ fn inspection_requires_user_start_and_matches_context_and_summary() {
             )
             .is_none()
     );
-    assert_eq!(panel.result.as_ref().unwrap().memory_records, 2);
+    assert!(matches!(
+        panel.result.as_ref(),
+        Some(InspectionResult::Current(result)) if result.memory_records == 2
+    ));
     panel.path = "C:\\synthetic\\other.jsonl".into();
     panel.path_edited();
     assert!(panel.result.is_none());
@@ -372,6 +375,117 @@ fn inspection_rejects_wrong_epoch_instance_and_invalid_summary() {
             profile_id: "synthetic".into(),
             persona_epoch: 4,
             summary: invalid,
+        }),
+    );
+    assert!(panel.result.is_none());
+}
+
+#[test]
+fn legacy_inspection_requires_explicit_format_and_discards_old_requests() {
+    let (mut panel, id) = ready();
+    let (old_query, _) = request_id(panel.start().unwrap());
+    panel.set_format(BackupFormat::Legacy);
+    assert!(
+        panel
+            .receive(old_query, Ok(context(id, "synthetic", 1)))
+            .is_none()
+    );
+    assert!(panel.pending.is_none());
+    assert!(panel.result.is_none());
+
+    let (query, _) = request_id(panel.start().unwrap());
+    let (inspect, command) = request_id(
+        panel
+            .receive(query, Ok(context(id, "synthetic", 7)))
+            .unwrap(),
+    );
+    assert!(
+        matches!(command, ControlCommand::InspectLegacyMemoryBackup {
+        instance_id, ref profile_id, persona_epoch: 7, ref path
+    } if instance_id == id && profile_id == "synthetic" && path.as_str() == "C:\\synthetic\\memory.jsonl")
+    );
+    let legacy = LegacyMemoryBackupInspection {
+        records: 2,
+        local_timestamp_records: 1,
+        unclassified_timestamp_records: 1,
+        nonempty_embedding_records: 1,
+        unclassified_embedding_records: 0,
+        legacy_metadata_fields_present: true,
+    };
+    panel.receive(
+        inspect,
+        Ok(ControlPayload::LegacyMemoryBackupInspection {
+            instance_id: id,
+            profile_id: "synthetic".into(),
+            persona_epoch: 7,
+            summary: legacy.clone(),
+        }),
+    );
+    assert!(
+        matches!(panel.result.as_ref(), Some(InspectionResult::Legacy(result)) if result.records == 2)
+    );
+    let (query, _) = request_id(panel.start().unwrap());
+    let (inspect, _) = request_id(
+        panel
+            .receive(query, Ok(context(id, "synthetic", 8)))
+            .unwrap(),
+    );
+    panel.set_format(BackupFormat::Current);
+    panel.receive(
+        inspect,
+        Ok(ControlPayload::LegacyMemoryBackupInspection {
+            instance_id: id,
+            profile_id: "synthetic".into(),
+            persona_epoch: 8,
+            summary: legacy,
+        }),
+    );
+    assert!(panel.pending.is_none());
+    assert!(panel.result.is_none());
+}
+
+#[test]
+fn legacy_inspection_rejects_mismatched_epoch_and_invalid_counts() {
+    let (mut panel, id) = ready();
+    panel.set_format(BackupFormat::Legacy);
+    let (query, _) = request_id(panel.start().unwrap());
+    let (inspect, _) = request_id(
+        panel
+            .receive(query, Ok(context(id, "synthetic", 1)))
+            .unwrap(),
+    );
+    let mut legacy = LegacyMemoryBackupInspection {
+        records: 2,
+        local_timestamp_records: 1,
+        unclassified_timestamp_records: 1,
+        nonempty_embedding_records: 1,
+        unclassified_embedding_records: 0,
+        legacy_metadata_fields_present: false,
+    };
+    panel.receive(
+        inspect,
+        Ok(ControlPayload::LegacyMemoryBackupInspection {
+            instance_id: id,
+            profile_id: "synthetic".into(),
+            persona_epoch: 2,
+            summary: legacy.clone(),
+        }),
+    );
+    assert!(panel.result.is_none());
+    let (query, _) = request_id(panel.start().unwrap());
+    let (inspect, _) = request_id(
+        panel
+            .receive(query, Ok(context(id, "synthetic", 3)))
+            .unwrap(),
+    );
+    legacy.unclassified_timestamp_records = 2;
+    panel.receive(
+        inspect,
+        Ok(ControlPayload::LegacyMemoryBackupInspection {
+            instance_id: id,
+            profile_id: "synthetic".into(),
+            persona_epoch: 3,
+            summary: legacy,
         }),
     );
     assert!(panel.result.is_none());

@@ -1,4 +1,7 @@
-use ai_ex_control::{ControlCommand, ControlPayload, MemoryBackupInspection, SensitivePath};
+use ai_ex_control::{
+    ControlCommand, ControlPayload, LegacyMemoryBackupInspection, MemoryBackupInspection,
+    SensitivePath,
+};
 use ai_ex_domain::AppError;
 use eframe::egui;
 use std::sync::{
@@ -20,6 +23,18 @@ struct Context {
     epoch: u64,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum BackupFormat {
+    #[default]
+    Current,
+    Legacy,
+}
+
+enum InspectionResult {
+    Current(MemoryBackupInspection),
+    Legacy(LegacyMemoryBackupInspection),
+}
+
 enum Pending {
     Context {
         id: u64,
@@ -39,13 +54,14 @@ pub struct BackupInspectionPanel {
     persona_revision: u64,
     ready: bool,
     path: String,
+    format: BackupFormat,
     path_generation: u64,
     waiting_for_drop: bool,
     drop_message: Option<&'static str>,
     guard: Arc<AtomicU64>,
     next_id: u64,
     pending: Option<Pending>,
-    result: Option<MemoryBackupInspection>,
+    result: Option<InspectionResult>,
     feedback: Option<&'static str>,
 }
 
@@ -85,6 +101,13 @@ impl BackupInspectionPanel {
         self.result = None;
         self.feedback = None;
         self.path_generation = self.path_generation.saturating_add(1);
+    }
+
+    fn set_format(&mut self, format: BackupFormat) {
+        if self.format != format {
+            self.format = format;
+            self.path_edited();
+        }
     }
 
     pub fn cancel_drop(&mut self) {
@@ -221,11 +244,19 @@ impl BackupInspectionPanel {
                     profile: profile_id,
                     epoch: persona_epoch,
                 };
-                let command = ControlCommand::InspectMemoryBackup {
-                    instance_id,
-                    profile_id: context.profile.clone(),
-                    persona_epoch,
-                    path: SensitivePath::new(selected_path(&self.path)),
+                let command = match self.format {
+                    BackupFormat::Current => ControlCommand::InspectMemoryBackup {
+                        instance_id,
+                        profile_id: context.profile.clone(),
+                        persona_epoch,
+                        path: SensitivePath::new(selected_path(&self.path)),
+                    },
+                    BackupFormat::Legacy => ControlCommand::InspectLegacyMemoryBackup {
+                        instance_id,
+                        profile_id: context.profile.clone(),
+                        persona_epoch,
+                        path: SensitivePath::new(selected_path(&self.path)),
+                    },
                 };
                 self.feedback = Some("正在检查备份…");
                 self.next_request(command, |id| Pending::Inspection {
@@ -253,9 +284,36 @@ impl BackupInspectionPanel {
                 && context.instance == instance_id
                 && context.profile == profile_id
                 && context.epoch == persona_epoch
+                && self.format == BackupFormat::Current
                 && valid_summary(&summary) =>
             {
-                self.result = Some(summary);
+                self.result = Some(InspectionResult::Current(summary));
+                self.feedback = Some("检查完成。");
+                None
+            }
+            (
+                Pending::Inspection {
+                    path_generation,
+                    context,
+                    ..
+                },
+                Ok(ControlPayload::LegacyMemoryBackupInspection {
+                    instance_id,
+                    profile_id,
+                    persona_epoch,
+                    summary,
+                }),
+            ) if self.ready
+                && self.instance == Some(instance_id)
+                && self.profile == profile_id
+                && self.path_generation == path_generation
+                && context.instance == instance_id
+                && context.profile == profile_id
+                && context.epoch == persona_epoch
+                && self.format == BackupFormat::Legacy
+                && valid_legacy_summary(&summary) =>
+            {
+                self.result = Some(InspectionResult::Legacy(summary));
                 self.feedback = Some("检查完成。");
                 None
             }
@@ -272,11 +330,22 @@ impl BackupInspectionPanel {
         egui::CollapsingHeader::new("检查已有记忆备份")
             .id_salt("inspect_memory_backup")
             .show(ui, |ui| {
-                ui.weak("手动输入服务所在电脑上的备份文件绝对路径，仅支持新版 JSONL。只有点击检查才会读取文件。");
+                ui.weak("手动输入服务所在电脑上的备份文件绝对路径。只有点击检查才会读取文件。");
                 #[cfg(windows)]
                 ui.weak("支持粘贴 Windows“复制为路径”的结果，包括外层双引号。");
                 ui.weak("如果输入 UNC 或其他网络路径，检查会访问相应网络位置。");
-                ui.weak("仅核对角色标签和统计记录，不会恢复或合并记忆，也无法证明文件来源或完整性。旧版压缩备份请使用迁移工具检查。");
+                let mut format = self.format;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("备份格式：");
+                    ui.selectable_value(&mut format, BackupFormat::Current, "新版 JSONL");
+                    ui.selectable_value(&mut format, BackupFormat::Legacy, "旧版 JSON / JSON.GZ");
+                });
+                self.set_format(format);
+                match self.format {
+                    BackupFormat::Current => ui.weak("仅核对角色标签和统计记录，无法证明文件来源或完整性。"),
+                    BackupFormat::Legacy => ui.weak("仅核对 memories 的哈希和数量；未核验角色归属，无法证明文件来源、其他字段完整性或能否导入。"),
+                };
+                ui.weak("检查不会恢复或合并记忆，迁移需要另行操作。");
                 ui.weak("等待中的检查会在发送前核对；已开始发送的检查可能继续。");
                 if ui.add(egui::TextEdit::singleline(&mut self.path).hint_text("备份文件绝对路径").desired_width(360.0).char_limit(1024)).changed() {
                     self.path_edited();
@@ -285,9 +354,19 @@ impl BackupInspectionPanel {
                 if let Some(message) = self.drop_message { ui.weak(message); }
                 if let Some(feedback) = self.feedback { ui.label(feedback); }
                 if let Some(result) = &self.result {
-                    ui.label(format!("记忆记录：{} · 实体候选：{}", result.memory_records, result.entity_candidates));
-                    ui.label(format!("来源关联：{}（其中非活跃：{}）", result.source_associations, result.inactive_source_associations));
-                    ui.label(format!("包含向量的记录：{} · 向量空间数量：{}", result.embedded_records, result.distinct_embedding_spaces));
+                    match result {
+                        InspectionResult::Current(result) => {
+                            ui.label(format!("记忆记录：{} · 实体候选：{}", result.memory_records, result.entity_candidates));
+                            ui.label(format!("来源关联：{}（其中非活跃：{}）", result.source_associations, result.inactive_source_associations));
+                            ui.label(format!("包含向量的记录：{} · 向量空间数量：{}", result.embedded_records, result.distinct_embedding_spaces));
+                        }
+                        InspectionResult::Legacy(result) => {
+                            ui.label(format!("记忆记录：{} · 备份时间与集合字段：{}", result.records, if result.legacy_metadata_fields_present { "已包含" } else { "未全部包含" }));
+                            ui.label(format!("需要指定时区的记录：{} · 时间未分类：{}", result.local_timestamp_records, result.unclassified_timestamp_records));
+                            ui.label(format!("包含向量的记录：{} · 向量未分类：{}", result.nonempty_embedding_records, result.unclassified_embedding_records));
+                            ui.weak("含本地时间或向量的记录迁移时需分别指定时区或向量空间；未分类的记录需要进一步核对。");
+                        }
+                    }
                 }
             });
         command
@@ -342,4 +421,14 @@ fn valid_summary(summary: &MemoryBackupInspection) -> bool {
         && summary
             .matching_embeddings
             .is_none_or(|count| count <= summary.embedded_records)
+}
+
+fn valid_legacy_summary(summary: &LegacyMemoryBackupInspection) -> bool {
+    summary.records <= 50_000
+        && summary.local_timestamp_records <= summary.records
+        && summary.unclassified_timestamp_records
+            <= summary.records - summary.local_timestamp_records
+        && summary.nonempty_embedding_records <= summary.records
+        && summary.unclassified_embedding_records
+            <= summary.records - summary.nonempty_embedding_records
 }

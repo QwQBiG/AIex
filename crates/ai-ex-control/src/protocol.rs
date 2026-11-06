@@ -31,6 +31,12 @@ pub enum ControlCommand {
         persona_epoch: u64,
         path: SensitivePath,
     },
+    InspectLegacyMemoryBackup {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        path: SensitivePath,
+    },
     SetSpeechSplit {
         instance_id: Uuid,
         expected_revision: u64,
@@ -78,6 +84,12 @@ pub enum ControlPayload {
         profile_id: String,
         persona_epoch: u64,
         summary: MemoryBackupInspection,
+    },
+    LegacyMemoryBackupInspection {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        summary: LegacyMemoryBackupInspection,
     },
     SpeechSplit {
         instance_id: Uuid,
@@ -133,6 +145,17 @@ pub struct MemoryBackupInspection {
     pub embedded_records: usize,
     pub distinct_embedding_spaces: usize,
     pub matching_embeddings: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyMemoryBackupInspection {
+    pub records: usize,
+    pub local_timestamp_records: usize,
+    pub unclassified_timestamp_records: usize,
+    pub nonempty_embedding_records: usize,
+    pub unclassified_embedding_records: usize,
+    pub legacy_metadata_fields_present: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

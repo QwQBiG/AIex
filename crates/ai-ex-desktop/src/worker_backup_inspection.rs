@@ -34,7 +34,9 @@ async fn execute_with<F, Fut>(
             Err(AppError::unavailable("备份检查已失效。"))
         } else if matches!(
             command,
-            ControlCommand::MemoryInspectionContext | ControlCommand::InspectMemoryBackup { .. }
+            ControlCommand::MemoryInspectionContext
+                | ControlCommand::InspectMemoryBackup { .. }
+                | ControlCommand::InspectLegacyMemoryBackup { .. }
         ) {
             send(command)
                 .await

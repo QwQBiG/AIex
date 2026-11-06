@@ -127,6 +127,12 @@ pwsh -NoProfile -File tools/test_architecture.ps1
 
 便携包同时提供 `ai-ex-migrate.exe`。在解压目录运行迁移器即可导入数据，无需安装 Rust；迁移文档中的 `cargo run -p ai-ex-migrate --locked --` 可替换为 `.\ai-ex-migrate.exe`，保留后续参数，并明确选择输入、全新输出和角色 ID。
 
+### 旧模板导出检查
+
+`ai-ex-migrate.exe --inspect-legacy-templates --input <旧模板导出.json>` 只读取旧 `TemplateManager.export_templates` 生成的 JSON，对条目、重复 ID、未知顶层或条目字段、非零或无效坐标偏移进行计数。输入限制为 4 MiB、最多 10000 项；仅输出统计数字，不输出路径、名称、动作数据或未知字段内容。模板的 `data` 按不透明对象统计，源文件保持不变，不创建文件、不导入数据，也不会触发动作。
+
+此检查不解析 `data` 内部的具体动作，不验证模板能否用于新版本，也不检测 JSON 重复键；异常条目和偏移有各自计数。未知字段和原始数据仍仅保留在源文件中，使用前请保留副本。它与[图片模板导入](../docs/TEMPLATE_GAME.md#将旧模板图片注册到独立副本)处理的格式不同，不代表游戏模板运行链或历史动态模板迁移已完成。
+
 ### 显式多模态快照导入
 
 `ai-ex-migrate --multimodal-memory` 可将旧 `MultimodalMemory` dataclass 的显式 JSON 数组转换为独立 Rust JSONL，0.8 便携包已提供迁移器入口。旧模块没有磁盘导出接口；此模式需要已经准备好的快照，不会连接 Python、读取 Chroma，也不能从旧主记忆 gzip 备份找回其中未保存的媒体对象。

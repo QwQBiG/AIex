@@ -1,6 +1,7 @@
 use super::*;
 use ai_ex_control::SensitivePath;
 use serde_json::json;
+use std::io::Write;
 use uuid::Uuid;
 
 #[tokio::test]
@@ -72,6 +73,52 @@ async fn backup_inspection_control_uses_instance_profile_and_redacted_response()
         assert!(!error.to_string().contains("private-path-marker"));
         assert!(!error.to_string().contains("private-text-marker"));
     }
+    let legacy_path = service.directory.join("private-legacy-marker.json.gz");
+    let fixture = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../ai-ex-migrate/tests/fixtures/legacy-memory.json"
+    ));
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(fixture).unwrap();
+    let legacy_original = encoder.finish().unwrap();
+    fs::write(&legacy_path, &legacy_original).unwrap();
+    let legacy_command = |instance_id, profile_id: String, persona_epoch| {
+        ControlCommand::InspectLegacyMemoryBackup {
+            instance_id,
+            profile_id,
+            persona_epoch,
+            path: SensitivePath::new(legacy_path.to_string_lossy()),
+        }
+    };
+    let legacy_result = service
+        .client
+        .send(legacy_command(
+            instance_id,
+            profile_id.clone(),
+            persona_epoch,
+        ))
+        .await
+        .unwrap();
+    let ControlPayload::LegacyMemoryBackupInspection { summary, .. } = &legacy_result else {
+        panic!("legacy inspection")
+    };
+    assert_eq!(summary.records, 1);
+    assert_eq!(summary.local_timestamp_records, 1);
+    assert_eq!(summary.nonempty_embedding_records, 1);
+    assert!(
+        !serde_json::to_string(&legacy_result)
+            .unwrap()
+            .contains("private-legacy-marker")
+    );
+    for stale in [
+        legacy_command(Uuid::new_v4(), profile_id.clone(), persona_epoch),
+        legacy_command(instance_id, "other".into(), persona_epoch),
+        legacy_command(instance_id, profile_id.clone(), persona_epoch + 1),
+    ] {
+        assert!(service.client.send(stale).await.is_err());
+    }
+    assert_eq!(fs::read(&legacy_path).unwrap(), legacy_original);
+    fs::remove_file(legacy_path).unwrap();
     assert_eq!(fs::read_to_string(&path).unwrap(), original);
     fs::remove_file(path).unwrap();
     drop(service.child.stdin.take());
@@ -80,5 +127,6 @@ async fn backup_inspection_control_uses_instance_profile_and_redacted_response()
         let log = fs::read_to_string(service.directory.join(name)).unwrap();
         assert!(!log.contains("private-path-marker"));
         assert!(!log.contains("private-text-marker"));
+        assert!(!log.contains("private-legacy-marker"));
     }
 }

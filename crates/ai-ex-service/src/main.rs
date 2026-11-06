@@ -1572,6 +1572,15 @@ impl ControlBackend for ServiceControl {
                 self.inspect_memory_backup(instance_id, profile_id, persona_epoch, path)
                     .await
             }
+            ControlCommand::InspectLegacyMemoryBackup {
+                instance_id,
+                profile_id,
+                persona_epoch,
+                path,
+            } => {
+                self.inspect_legacy_memory_backup(instance_id, profile_id, persona_epoch, path)
+                    .await
+            }
             ControlCommand::Native { request } => {
                 request.validate()?;
                 let native = self.native.as_ref().ok_or_else(|| {

@@ -171,6 +171,7 @@ fn policy() -> Policy {
                 "ai-ex-duplex",
                 "ai-ex-koboldcpp",
                 "ai-ex-memory",
+                "ai-ex-migrate",
                 "ai-ex-observability",
                 "ai-ex-model-catalog",
                 "ai-ex-model-manager",
