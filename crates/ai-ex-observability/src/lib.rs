@@ -3,6 +3,9 @@
 #[cfg(test)]
 mod preview_tests;
 mod speech;
+mod timing;
+
+pub use timing::{RuntimeTiming, TurnTiming};
 
 use std::collections::VecDeque;
 use std::sync::{
@@ -14,6 +17,7 @@ use ai_ex_core::EventSink;
 use ai_ex_domain::{AppError, ConversationState, Emotion, SystemEvent, TurnId};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use tokio::sync::{broadcast, watch};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +79,8 @@ pub struct EventHub {
     snapshot: watch::Sender<RuntimeSnapshot>,
     sequence: Arc<AtomicU64>,
     history: Arc<Mutex<VecDeque<SequencedEvent>>>,
+    timing: Arc<Mutex<timing::TimingTracker>>,
+    instance_id: uuid::Uuid,
     capacity: usize,
 }
 
@@ -86,8 +92,9 @@ impl EventHub {
             ));
         }
         let (events, _receiver) = broadcast::channel(capacity);
+        let instance_id = uuid::Uuid::new_v4();
         let (snapshot, _receiver) = watch::channel(RuntimeSnapshot {
-            instance_id: Some(uuid::Uuid::new_v4()),
+            instance_id: Some(instance_id),
             ..Default::default()
         });
         Ok(Self {
@@ -95,6 +102,8 @@ impl EventHub {
             snapshot,
             sequence: Arc::new(AtomicU64::new(0)),
             history: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
+            timing: Arc::new(Mutex::new(timing::TimingTracker::default())),
+            instance_id,
             capacity,
         })
     }
@@ -109,6 +118,23 @@ impl EventHub {
 
     pub fn current(&self) -> RuntimeSnapshot {
         self.snapshot.borrow().clone()
+    }
+
+    /// Read timing and its event prefix under the same lock used to publish.
+    pub fn runtime_timing(&self) -> RuntimeTiming {
+        let _history = self
+            .history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let timing = self
+            .timing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        RuntimeTiming {
+            instance_id: self.instance_id,
+            sequence: self.sequence.load(Ordering::Acquire),
+            turn: timing.current(),
+        }
     }
 
     /// Publish an independently ordered activity observation without a new event variant.
@@ -137,6 +163,27 @@ impl EventHub {
         self.snapshot.send_modify(|snapshot| {
             snapshot.last_sequence = sequence;
             snapshot.observe_speech_event(event);
+            if matches!(
+                event,
+                SystemEvent::TurnStarted { .. }
+                    | SystemEvent::ProactiveStarted { .. }
+                    | SystemEvent::ModelChunk { .. }
+                    | SystemEvent::SpeechPlayback { .. }
+                    | SystemEvent::TurnFinished { .. }
+                    | SystemEvent::SpeechCancelled
+                    | SystemEvent::SpeechPreviewStarted { .. }
+                    | SystemEvent::TurnInterrupted { .. }
+                    | SystemEvent::Fault { .. }
+                    | SystemEvent::StateChanged {
+                        to: ConversationState::Stopped | ConversationState::Failed,
+                        ..
+                    }
+            ) {
+                self.timing
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .observe(event, snapshot, Instant::now());
+            }
             match event {
                 SystemEvent::TurnStarted { turn_id, .. }
                 | SystemEvent::ProactiveStarted { turn_id } => {

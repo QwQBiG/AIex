@@ -374,6 +374,97 @@ fn backup_drop_waiting_is_cleared_when_leaving_memory_page() {
 }
 
 #[test]
+fn runtime_timing_tracks_the_current_connection_turn_and_event_sequence() {
+    use ai_ex_control::{RuntimeTiming, TurnTiming};
+    use ai_ex_domain::TurnId;
+    use ai_ex_observability::SequencedEvent;
+
+    let (mut app, events, _sent) = app();
+    let instance = uuid::Uuid::new_v4();
+    let turn = TurnId::new();
+    app.state.runtime.instance_id = Some(instance);
+    app.state.runtime.speech_turn = Some(turn);
+    app.state.runtime.last_sequence = 1;
+    let context = egui::Context::default();
+    let timing = |sequence, turn_id| RuntimeTiming {
+        instance_id: instance,
+        sequence,
+        turn: Some(TurnTiming {
+            turn_id,
+            first_chunk_ms: Some(12),
+            first_playback_request_ms: None,
+        }),
+    };
+    events
+        .send(WorkerEvent::RuntimeTiming {
+            generation: 0,
+            timing: timing(1, turn),
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(
+        app.runtime_timing
+            .visible(&app.state.runtime, true, false)
+            .is_some()
+    );
+    events
+        .send(WorkerEvent::Events(vec![SequencedEvent {
+            sequence: 2,
+            event: SystemEvent::SpeechCancelled,
+        }]))
+        .unwrap();
+    events
+        .send(WorkerEvent::RuntimeTiming {
+            generation: 0,
+            timing: timing(1, turn),
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(
+        app.runtime_timing
+            .visible(&app.state.runtime, true, false)
+            .is_none()
+    );
+    let next = TurnId::new();
+    events
+        .send(WorkerEvent::Events(vec![SequencedEvent {
+            sequence: 3,
+            event: SystemEvent::TurnStarted {
+                turn_id: next,
+                user_text: String::new(),
+            },
+        }]))
+        .unwrap();
+    events
+        .send(WorkerEvent::RuntimeTiming {
+            generation: 0,
+            timing: timing(3, next),
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(
+        app.runtime_timing
+            .visible(&app.state.runtime, true, false)
+            .is_some()
+    );
+    events
+        .send(WorkerEvent::VoiceSamplingGeneration(1))
+        .unwrap();
+    events
+        .send(WorkerEvent::RuntimeTiming {
+            generation: 0,
+            timing: timing(3, next),
+        })
+        .unwrap();
+    render(&mut app, &context, [1000.0, 720.0], vec![]);
+    assert!(
+        app.runtime_timing
+            .visible(&app.state.runtime, true, false)
+            .is_none()
+    );
+}
+
+#[test]
 fn native_input_status_rejects_old_instances_and_connections() {
     let (mut app, events, _sent) = app();
     app.native_mode = true;

@@ -16,6 +16,7 @@ pub use ai_ex_domain::{
     AutomationSessionSnapshot, AutomationSnapshot, AutomationStepOutcome, AutomationTemplateMode,
 };
 pub use ai_ex_domain::{NativeReply, NativeRequest};
+pub use ai_ex_observability::{RuntimeTiming, TurnTiming};
 pub use client::ControlClient;
 pub use protocol::{
     ControlCommand, ControlPayload, ControlRequest, ControlResponse, LegacyCandidateState,

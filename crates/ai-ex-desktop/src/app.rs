@@ -92,6 +92,7 @@ pub struct DesktopApp {
     voice_input_fresh: bool,
     voice_sampling_generation: u64,
     native_input_status: NativeInputStatus,
+    runtime_timing: crate::runtime_timing::TimingView,
     backup_inspection: crate::backup_inspection_panel::BackupInspectionPanel,
     reflex: reflex::ReflexPanel,
     reflex_runtime_ready: bool,
@@ -166,6 +167,7 @@ impl DesktopApp {
             voice_input_fresh: false,
             voice_sampling_generation: 0,
             native_input_status: NativeInputStatus::Unknown,
+            runtime_timing: Default::default(),
             backup_inspection: Default::default(),
             reflex: Default::default(),
             reflex_runtime_ready: false,
@@ -312,6 +314,7 @@ impl DesktopApp {
                 WorkerEvent::Connection(connected) => {
                     self.voice_input_fresh = false;
                     self.native_input_status = NativeInputStatus::Unknown;
+                    self.runtime_timing.clear();
                     self.reflex_runtime_ready = false;
                     self.reflex.disconnected();
                     self.memory.connection_changed();
@@ -336,6 +339,7 @@ impl DesktopApp {
                         && snapshot.instance_id != self.state.runtime.instance_id;
                     if snapshot.instance_id != self.state.runtime.instance_id {
                         self.native_input_status = NativeInputStatus::Unknown;
+                        self.runtime_timing.clear();
                     }
                     let voice_known = self.state.merge_voice_input(&snapshot);
                     if (self.state.runtime.instance_id.is_none()
@@ -354,6 +358,7 @@ impl DesktopApp {
                     self.voice_sampling_generation = generation;
                     self.voice_input_fresh = false;
                     self.native_input_status = NativeInputStatus::Unknown;
+                    self.runtime_timing.clear();
                 }
                 WorkerEvent::VoiceInputSnapshot {
                     generation,
@@ -390,6 +395,19 @@ impl DesktopApp {
                 }
                 WorkerEvent::NativeInputStatus { .. }
                 | WorkerEvent::NativeInputStatusUnavailable(_) => {}
+                WorkerEvent::RuntimeTiming { generation, timing }
+                    if generation == self.voice_sampling_generation
+                        && self.state.connection == ConnectionState::Connected =>
+                {
+                    self.runtime_timing
+                        .accept(timing, self.state.runtime.instance_id);
+                }
+                WorkerEvent::RuntimeTimingUnavailable(generation)
+                    if generation == self.voice_sampling_generation =>
+                {
+                    self.runtime_timing.unavailable();
+                }
+                WorkerEvent::RuntimeTiming { .. } | WorkerEvent::RuntimeTimingUnavailable(_) => {}
                 WorkerEvent::Memory { request_id, result } => {
                     self.memory.set_profile(&self.active_persona.profile_id);
                     self.memory
@@ -437,6 +455,7 @@ impl DesktopApp {
                         && snapshot.instance_id != self.state.runtime.instance_id;
                     if snapshot.instance_id != self.state.runtime.instance_id {
                         self.native_input_status = NativeInputStatus::Unknown;
+                        self.runtime_timing.clear();
                     }
                     let voice_known = self.state.merge_voice_input(&snapshot);
                     self.state.recover_snapshot(snapshot);
@@ -555,6 +574,7 @@ impl DesktopApp {
                 }
                 WorkerEvent::Events(events) => {
                     for event in events {
+                        self.runtime_timing.observe(event.sequence, &event.event);
                         match &event.event {
                             ai_ex_domain::SystemEvent::LiveEventReceived {
                                 event_type,

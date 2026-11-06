@@ -479,6 +479,24 @@ impl DesktopApp {
                 self.state.runtime.faults,
                 self.state.runtime.last_sequence
             ));
+            if let Some(timing) = self.runtime_timing.visible(
+                &self.state.runtime,
+                self.state.connection == ConnectionState::Connected,
+                self.state.needs_resync,
+            ) {
+                let display = |value: Option<u64>| match value {
+                    Some(ms) => format!("{ms} 毫秒"),
+                    None => "暂无".to_owned(),
+                };
+                ui.weak(format!(
+                    "首段可见文本：{} · 首次播放请求：{}",
+                    display(timing.first_chunk_ms),
+                    display(timing.first_playback_request_ms),
+                ));
+            } else {
+                ui.weak("本轮耗时：暂无");
+            }
+            ui.weak("从轮次开始事件计时；播放请求不等于实际听到声音。");
             self.show_developer_panel(ui);
             self.show_stage_panel(ui);
         }

@@ -1748,6 +1748,9 @@ impl ControlBackend for ServiceControl {
             ControlCommand::Status => Ok(ControlPayload::Snapshot(control_snapshot::bounded(
                 self.events.current(),
             ))),
+            ControlCommand::RuntimeTiming => {
+                Ok(ControlPayload::RuntimeTiming(self.events.runtime_timing()))
+            }
             ControlCommand::SpeechSplit => {
                 let instance_id = self.events.current().instance_id.ok_or_else(|| {
                     AppError::unavailable("service instance identity is unavailable")

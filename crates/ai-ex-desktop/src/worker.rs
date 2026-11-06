@@ -20,6 +20,8 @@ mod desktop;
 mod input_status;
 #[path = "worker_native.rs"]
 mod native;
+#[path = "worker_runtime_timing.rs"]
+mod runtime_timing;
 #[path = "worker_speech_split.rs"]
 mod speech_split;
 #[cfg(test)]
@@ -131,6 +133,11 @@ pub enum WorkerEvent {
         status: ai_ex_domain::NativeInputStatus,
     },
     NativeInputStatusUnavailable(u64),
+    RuntimeTiming {
+        generation: u64,
+        timing: ai_ex_control::RuntimeTiming,
+    },
+    RuntimeTimingUnavailable(u64),
     HistoryGap(RuntimeSnapshot),
     Memory {
         request_id: u64,
@@ -463,7 +470,8 @@ async fn run_polling(
     tokio::select! {
         _ = run_primary_polling(client.clone(), events.clone(), persona_epoch, &voice_target) => {},
         _ = run_voice_sampling(&client, &events, voice_receiver.clone()) => {},
-        _ = input_status::run(&client, &events, voice_receiver) => {},
+        _ = input_status::run(&client, &events, voice_receiver.clone()) => {},
+        _ = runtime_timing::run(&client, &events, voice_receiver) => {},
     }
 }
 

@@ -2,7 +2,7 @@ use ai_ex_domain::{
     AppError, AutomationRequest, AutomationSnapshot, ComponentHealth, MemoryRequest,
     MemoryResponse, PersonaSnapshot, StageSnapshot,
 };
-use ai_ex_observability::{RuntimeSnapshot, SequencedEvent};
+use ai_ex_observability::{RuntimeSnapshot, RuntimeTiming, SequencedEvent};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -23,6 +23,7 @@ pub enum ControlCommand {
         reason: String,
     },
     Status,
+    RuntimeTiming,
     SpeechSplit,
     MemoryInspectionContext,
     InspectMemoryBackup {
@@ -126,6 +127,7 @@ pub enum ControlPayload {
         minimum: Option<usize>,
     },
     Snapshot(RuntimeSnapshot),
+    RuntimeTiming(RuntimeTiming),
     Persona(PersonaSnapshot),
     Memory(Box<MemoryReply>),
     Automation(Box<AutomationSnapshot>),

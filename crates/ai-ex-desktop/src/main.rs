@@ -20,6 +20,7 @@ mod native_panel;
 mod navigation;
 mod portable;
 mod preview;
+mod runtime_timing;
 mod scene_files;
 mod scene_resume;
 mod service_process;

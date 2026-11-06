@@ -162,6 +162,30 @@ async fn standalone_service_ignores_closed_standard_input() {
 }
 
 #[tokio::test]
+async fn runtime_timing_query_is_read_only_and_matches_service_instance() {
+    let mut service = ServiceProcess::start("--managed", true);
+    service.ready().await;
+    let ControlPayload::Snapshot(status) =
+        service.client.send(ControlCommand::Status).await.unwrap()
+    else {
+        panic!("expected service status");
+    };
+    let ControlPayload::RuntimeTiming(timing) = service
+        .client
+        .send(ControlCommand::RuntimeTiming)
+        .await
+        .unwrap()
+    else {
+        panic!("expected runtime timing");
+    };
+    assert_eq!(Some(timing.instance_id), status.instance_id);
+    assert!(timing.sequence >= status.last_sequence);
+    assert!(timing.turn.is_none());
+    drop(service.child.stdin.take());
+    service.exited().await;
+}
+
+#[tokio::test]
 async fn closing_owner_cancels_a_model_request_that_has_not_responded() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let model = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
