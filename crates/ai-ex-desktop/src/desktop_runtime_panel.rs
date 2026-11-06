@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use ai_ex_domain::{
     AppError, DesktopRuntimeReply, DesktopRuntimeRequest, DesktopRuntimeSettings,
     DesktopRuntimeSnapshot, DiscoveredVtsHotkey, VtsMappingCheck, VtsMappingState,
-    VtsParameterPage,
+    VtsParameterFilter, VtsParameterPage,
 };
 use eframe::egui;
 use uuid::Uuid;
@@ -28,6 +28,7 @@ pub struct DesktopRuntimePanel {
     feedback: Option<String>,
     vts: Vec<DiscoveredVtsHotkey>,
     vts_parameters: Option<VtsParameterPage>,
+    vts_parameter_filter: Option<VtsParameterFilter>,
     vts_mappings: Option<VtsMappingCheck>,
     component_observations: Option<Vec<ai_ex_domain::DiagnosticComponentObservation>>,
 }
@@ -75,6 +76,13 @@ impl DesktopRuntimePanel {
     pub fn begin(&mut self, request: DesktopRuntimeRequest) -> Option<WorkerCommand> {
         if !self.connected || self.pending.len() >= 8 {
             return None;
+        }
+        if is_parameter_request(&request) && self.pending.values().any(is_parameter_request) {
+            return None;
+        }
+        if is_parameter_request(&request) {
+            self.vts_parameters = None;
+            self.feedback = Some("正在读取 VTS 输入参数…".into());
         }
         if matches!(request, DesktopRuntimeRequest::CheckVtsMappings) {
             if self
@@ -142,17 +150,21 @@ impl DesktopRuntimePanel {
                 self.feedback = Some(format!("当前 VTS 模型有 {} 个热键。", self.vts.len()));
             }
             Ok(DesktopRuntimeReply::VtsParameters(page)) => {
-                let valid = matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { offset } if page.offset == offset.min(page.total))
-                    && self.connected
-                    && page.total <= 1024
-                    && page.parameters.len() == page.total.saturating_sub(page.offset).min(16);
-                if valid {
-                    self.feedback = Some(format!("VTS 返回 {} 个参数。", page.total));
-                    self.vts_parameters = Some(page);
-                } else {
-                    self.vts_parameters = None;
-                    self.feedback = Some("VTS 参数结果无效，请重试。".into());
-                }
+                let offset = match request {
+                    DesktopRuntimeRequest::DiscoverVtsParameters { offset } => Some(offset),
+                    _ => None,
+                };
+                self.receive_parameter_page(page, None, offset);
+            }
+            Ok(DesktopRuntimeReply::VtsFilteredParameters { filter, page }) => {
+                let offset = match request {
+                    DesktopRuntimeRequest::DiscoverVtsParametersFiltered {
+                        filter: expected,
+                        offset,
+                    } if expected == filter => Some(offset),
+                    _ => None,
+                };
+                self.receive_parameter_page(page, Some(filter), offset);
             }
             Ok(DesktopRuntimeReply::VtsMappingCheck(check)) => {
                 let valid = matches!(request, DesktopRuntimeRequest::CheckVtsMappings)
@@ -197,8 +209,17 @@ impl DesktopRuntimePanel {
                     ));
                     return;
                 }
-                if matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { .. }) {
+                if is_parameter_request(&request) {
                     self.vts_parameters = None;
+                    if matches!(
+                        request,
+                        DesktopRuntimeRequest::DiscoverVtsParametersFiltered { .. }
+                    ) {
+                        self.feedback = Some(format!(
+                            "筛选查询失败，旧版服务可能不支持此功能；可选择“全部输入参数”查看。请检查连接后重试：{error}"
+                        ));
+                        return;
+                    }
                 }
                 if matches!(
                     request,
@@ -208,6 +229,26 @@ impl DesktopRuntimePanel {
                 }
                 self.feedback = Some(format!("操作未确认，请刷新核对：{error}"));
             }
+        }
+    }
+
+    fn receive_parameter_page(
+        &mut self,
+        page: VtsParameterPage,
+        filter: Option<VtsParameterFilter>,
+        offset: Option<usize>,
+    ) {
+        let valid = offset.is_some_and(|offset| page.offset == offset.min(page.total))
+            && self.connected
+            && page.total <= 1024
+            && page.parameters.len() == page.total.saturating_sub(page.offset).min(16);
+        if valid {
+            self.feedback = Some(format!("VTS 返回 {} 个参数。", page.total));
+            self.vts_parameter_filter = filter;
+            self.vts_parameters = Some(page);
+        } else {
+            self.vts_parameters = None;
+            self.feedback = Some("VTS 参数结果无效，请重试。".into());
         }
     }
 
@@ -270,6 +311,21 @@ impl DesktopRuntimePanel {
                 settings: self.draft.clone(),
             })
         }
+    }
+}
+
+fn is_parameter_request(request: &DesktopRuntimeRequest) -> bool {
+    matches!(
+        request,
+        DesktopRuntimeRequest::DiscoverVtsParameters { .. }
+            | DesktopRuntimeRequest::DiscoverVtsParametersFiltered { .. }
+    )
+}
+
+fn parameter_request(filter: Option<VtsParameterFilter>, offset: usize) -> DesktopRuntimeRequest {
+    match filter {
+        Some(filter) => DesktopRuntimeRequest::DiscoverVtsParametersFiltered { filter, offset },
+        None => DesktopRuntimeRequest::DiscoverVtsParameters { offset },
     }
 }
 

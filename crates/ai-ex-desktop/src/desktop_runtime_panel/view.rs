@@ -126,14 +126,15 @@ impl DesktopRuntimePanel {
                 {
                     requests.push(DesktopRuntimeRequest::CheckVtsMappings);
                 }
-                let parameter_pending = self.pending.values().any(|request| {
-                    matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { .. })
-                });
-                if ui
-                    .add_enabled(vts && !parameter_pending, egui::Button::new("查询 VTS 输入参数"))
-                    .clicked()
-                {
-                    requests.push(DesktopRuntimeRequest::DiscoverVtsParameters { offset: 0 });
+                let parameter_pending = self.pending.values().any(is_parameter_request);
+                for (label, filter) in [
+                    ("全部输入参数", None),
+                    ("嘴部参数", Some(VtsParameterFilter::Mouth)),
+                    ("声音参数", Some(VtsParameterFilter::Voice)),
+                ] {
+                    if ui.add_enabled(vts && !parameter_pending, egui::Button::new(label)).clicked() {
+                        requests.push(parameter_request(filter, 0));
+                    }
                 }
             });
             ui.weak(
@@ -181,15 +182,27 @@ impl DesktopRuntimePanel {
                 ui.label(format!("{} · {}", key.name, key.id));
             }
             if let Some(page) = &self.vts_parameters {
+                ui.strong(match self.vts_parameter_filter {
+                    None => "全部输入参数",
+                    Some(VtsParameterFilter::Mouth) => "嘴部参数",
+                    Some(VtsParameterFilter::Voice) => "声音参数",
+                });
+                ui.weak("筛选按参数名称匹配 mouth、lip 或 voice；其他命名请查看全部参数。 ");
                 ui.weak("翻页时会重新读取当前参数；人物或参数变化时结果可能改变。");
                 if !page.model_loaded {
                     ui.weak("VTS 当前没有载入人物，输入参数仍可查询。");
+                }
+                if page.parameters.is_empty() && page.total > 0 {
+                    ui.weak("参数列表已变化，当前页为空，请回到首页重新查看。");
+                    if ui.add_enabled(!self.pending.values().any(is_parameter_request), egui::Button::new("回到首页")).clicked() {
+                        requests.push(parameter_request(self.vts_parameter_filter, 0));
+                    }
                 }
                 for parameter in &page.parameters {
                     ui.label(format!(
                         "{}{} · 当前 {} · 映射参考范围 {}–{} · 默认 {}",
                         parameter.name,
-                        if parameter.is_custom { "（自定义）" } else { "" },
+                        if parameter.is_custom { "（自定义参数）" } else { "（默认参数）" },
                         parameter.value,
                         parameter.min,
                         parameter.max,
@@ -199,16 +212,14 @@ impl DesktopRuntimePanel {
                         ui.weak(format!("来源：{}", parameter.added_by));
                     }
                 }
-                let busy = self.pending.values().any(|request| {
-                    matches!(request, DesktopRuntimeRequest::DiscoverVtsParameters { .. })
-                });
+                let busy = self.pending.values().any(is_parameter_request);
                 ui.horizontal(|ui| {
                     if ui.add_enabled(!busy && page.offset > 0, egui::Button::new("上一页")).clicked() {
-                        requests.push(DesktopRuntimeRequest::DiscoverVtsParameters { offset: page.offset.saturating_sub(16) });
+                        requests.push(parameter_request(self.vts_parameter_filter, page.offset.saturating_sub(16)));
                     }
                     ui.label(format!("{}–{} / {}", if page.parameters.is_empty() { page.offset } else { page.offset + 1 }, page.offset + page.parameters.len(), page.total));
                     if ui.add_enabled(!busy && page.offset + page.parameters.len() < page.total, egui::Button::new("下一页")).clicked() {
-                        requests.push(DesktopRuntimeRequest::DiscoverVtsParameters { offset: page.offset + page.parameters.len() });
+                        requests.push(parameter_request(self.vts_parameter_filter, page.offset + page.parameters.len()));
                     }
                 });
             }

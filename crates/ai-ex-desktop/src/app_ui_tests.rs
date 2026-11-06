@@ -342,6 +342,137 @@ fn navigation_keeps_drafts_and_requires_confirmation_before_leaving_the_window()
 }
 
 #[test]
+fn close_request_preserves_draft_until_explicit_exit() {
+    let (mut app, _events, _sent) = app();
+    app.input = "尚未发送的内容".into();
+    let context = egui::Context::default();
+    let frame = |app: &mut DesktopApp, requested, events| {
+        context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 720.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                app.handle_close_request(ui.ctx(), requested);
+                app.show_close_confirmation(ui.ctx());
+            },
+        )
+    };
+    let output = frame(&mut app, true, vec![]);
+    assert!(
+        output
+            .viewport_output
+            .values()
+            .any(|v| v.commands.contains(&egui::ViewportCommand::CancelClose))
+    );
+    let output = frame(&mut app, false, vec![]);
+    let pos = label_position(&output, "返回继续编辑");
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            false,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(!app.confirm_close);
+    assert_eq!(app.input, "尚未发送的内容");
+    frame(&mut app, true, vec![]);
+    let output = frame(&mut app, false, vec![]);
+    let pos = label_position(&output, "仍要退出");
+    let mut closed = false;
+    for pressed in [true, false] {
+        let output = frame(
+            &mut app,
+            false,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        closed |= output
+            .viewport_output
+            .values()
+            .any(|v| v.commands.contains(&egui::ViewportCommand::Close));
+    }
+    assert!(closed && app.allow_close);
+}
+
+#[test]
+fn close_request_handles_retained_messages_and_navigation_without_duplicate_dialogs() {
+    let (mut app, _events, _sent) = app();
+    let context = egui::Context::default();
+    let output = context.run_ui(egui::RawInput::default(), |ui| {
+        app.handle_close_request(ui.ctx(), true)
+    });
+    assert!(
+        !output
+            .viewport_output
+            .values()
+            .any(|v| v.commands.contains(&egui::ViewportCommand::CancelClose))
+    );
+    assert!(!app.confirm_close);
+    app.retained_messages
+        .push_back(navigation::RetainedMessage {
+            text: "结果待核对".into(),
+            state: navigation::DeliveryState::Uncertain,
+        });
+    app.request_navigation(&context, crate::navigation::Destination::Setup);
+    assert!(app.pending_navigation.is_some());
+    let output = context.run_ui(egui::RawInput::default(), |ui| {
+        app.handle_close_request(ui.ctx(), true)
+    });
+    assert!(
+        output
+            .viewport_output
+            .values()
+            .any(|v| v.commands.contains(&egui::ViewportCommand::CancelClose))
+    );
+    assert!(app.confirm_close);
+    assert!(app.pending_navigation.is_none());
+    app.request_navigation(&context, crate::navigation::Destination::Home);
+    assert!(app.pending_navigation.is_none());
+    assert!(app.navigation.take().is_none());
+    assert_eq!(app.retained_messages[0].text, "结果待核对");
+}
+
+#[test]
+fn close_interception_clears_navigation_requested_before_a_new_draft() {
+    let (mut app, _events, _sent) = app();
+    let context = egui::Context::default();
+    app.request_navigation(&context, crate::navigation::Destination::Setup);
+    app.input = "异步出现的草稿".into();
+    let output = context.run_ui(egui::RawInput::default(), |ui| {
+        app.handle_close_request(ui.ctx(), true);
+    });
+    assert!(
+        output
+            .viewport_output
+            .values()
+            .any(|v| v.commands.contains(&egui::ViewportCommand::CancelClose))
+    );
+    assert!(app.confirm_close);
+    assert!(app.navigation.take().is_none());
+    assert_eq!(app.input, "异步出现的草稿");
+}
+
+#[test]
 fn rejected_messages_restore_empty_drafts_and_preserve_newer_typing() {
     let (mut app, events, _sent) = app();
     events

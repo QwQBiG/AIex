@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use ai_ex_domain::{
     AppError, DesktopDiagnosticReport, DesktopRuntimeReply, DesktopRuntimeRequest,
     DesktopRuntimeSettings, DesktopRuntimeSnapshot, DiscoveredVtsHotkey, DiscoveredVtsParameter,
-    VtsMappingCheck, VtsParameterPage,
+    VtsMappingCheck, VtsParameterFilter, VtsParameterPage,
 };
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -386,6 +386,32 @@ impl DesktopRuntime {
                     port.discover_parameters().await?,
                     offset,
                 )?))
+            }
+            DesktopRuntimeRequest::DiscoverVtsParametersFiltered { filter, offset } => {
+                if offset > 1024 {
+                    return Err(AppError::configuration(
+                        "VTS parameter offset exceeds limit",
+                    ));
+                }
+                let port = self
+                    .vts
+                    .as_ref()
+                    .ok_or_else(|| AppError::unavailable("VTS discovery is disabled"))?;
+                let mut list = port.discover_parameters().await?;
+                if list.parameters.len() > 1024 {
+                    return Err(AppError::protocol("VTS parameter list exceeds limit"));
+                }
+                list.parameters.retain(|parameter| {
+                    let name = parameter.name.to_ascii_lowercase();
+                    match filter {
+                        VtsParameterFilter::Mouth => name.contains("mouth") || name.contains("lip"),
+                        VtsParameterFilter::Voice => name.contains("voice"),
+                    }
+                });
+                Ok(DesktopRuntimeReply::VtsFilteredParameters {
+                    filter,
+                    page: parameter_page(list, offset)?,
+                })
             }
             DesktopRuntimeRequest::Diagnostics => {
                 Ok(DesktopRuntimeReply::Diagnostics(DesktopDiagnosticReport {

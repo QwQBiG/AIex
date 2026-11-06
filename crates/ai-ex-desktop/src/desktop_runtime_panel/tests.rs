@@ -107,6 +107,152 @@ fn vts_parameter_pages_are_correlated_and_cleared_on_disconnect() {
     assert!(panel.vts_parameters.is_none());
 }
 
+#[test]
+fn vts_filtered_parameter_pages_keep_filter_and_reject_mismatched_replies() {
+    let id = Uuid::new_v4();
+    let mut panel = DesktopRuntimePanel::default();
+    panel.synchronize(Some(id), true);
+    let page = VtsParameterPage {
+        model_loaded: true,
+        offset: 0,
+        total: 0,
+        parameters: vec![],
+    };
+    let request = parameter_request(Some(VtsParameterFilter::Mouth), 0);
+    let WorkerCommand::DesktopRuntime { request_id, .. } = panel.begin(request.clone()).unwrap()
+    else {
+        unreachable!()
+    };
+    assert!(
+        panel
+            .begin(parameter_request(Some(VtsParameterFilter::Voice), 0))
+            .is_none()
+    );
+    panel.receive(
+        request_id,
+        Ok(DesktopRuntimeReply::VtsFilteredParameters {
+            filter: VtsParameterFilter::Voice,
+            page: page.clone(),
+        }),
+    );
+    assert!(panel.vts_parameters.is_none());
+    let WorkerCommand::DesktopRuntime { request_id, .. } = panel.begin(request).unwrap() else {
+        unreachable!()
+    };
+    panel.receive(
+        request_id,
+        Ok(DesktopRuntimeReply::VtsFilteredParameters {
+            filter: VtsParameterFilter::Mouth,
+            page,
+        }),
+    );
+    assert_eq!(panel.vts_parameter_filter, Some(VtsParameterFilter::Mouth));
+    assert_eq!(panel.vts_parameters.as_ref().unwrap().total, 0);
+    assert!(matches!(
+        parameter_request(panel.vts_parameter_filter, 16),
+        DesktopRuntimeRequest::DiscoverVtsParametersFiltered {
+            filter: VtsParameterFilter::Mouth,
+            offset: 16
+        }
+    ));
+    panel.synchronize(Some(id), false);
+    assert!(panel.vts_parameters.is_none());
+}
+
+#[test]
+fn vts_filtered_parameter_feedback_and_page_labels_explain_next_steps() {
+    let mut panel = DesktopRuntimePanel::default();
+    panel.synchronize(Some(Uuid::new_v4()), true);
+    panel.vts_parameters = Some(VtsParameterPage {
+        model_loaded: true,
+        offset: 0,
+        total: 0,
+        parameters: vec![],
+    });
+    let WorkerCommand::DesktopRuntime { request_id, .. } = panel
+        .begin(parameter_request(Some(VtsParameterFilter::Mouth), 16))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    assert!(panel.vts_parameters.is_none());
+    panel.receive(request_id, Err(AppError::connectivity("fixture")));
+    let feedback = panel.feedback.as_deref().unwrap();
+    assert!(feedback.contains("旧版服务") && feedback.contains("全部输入参数"));
+    let WorkerCommand::DesktopRuntime { request_id, .. } = panel
+        .begin(parameter_request(Some(VtsParameterFilter::Mouth), 16))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    panel.receive(
+        request_id,
+        Ok(DesktopRuntimeReply::VtsFilteredParameters {
+            filter: VtsParameterFilter::Mouth,
+            page: VtsParameterPage {
+                model_loaded: true,
+                offset: 2,
+                total: 2,
+                parameters: vec![],
+            },
+        }),
+    );
+    let context = egui::Context::default();
+    let render = |panel: &mut DesktopRuntimePanel| {
+        context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 1600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                panel.show(ui);
+            },
+        )
+    };
+    let output = render(&mut panel);
+    let labels: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(labels.iter().any(|label| label.contains("参数列表已变化")));
+    assert!(labels.contains(&"回到首页"));
+    panel.vts_parameters = Some(VtsParameterPage {
+        model_loaded: true,
+        offset: 0,
+        total: 2,
+        parameters: [false, true]
+            .into_iter()
+            .map(|is_custom| ai_ex_domain::DiscoveredVtsParameter {
+                name: "fixture".into(),
+                added_by: String::new(),
+                value: 0.into(),
+                min: 0.into(),
+                max: 1.into(),
+                default_value: 0.into(),
+                is_custom,
+            })
+            .collect(),
+    });
+    let output = render(&mut panel);
+    let labels: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(labels.iter().any(|label| label.contains("（默认参数）")));
+    assert!(labels.iter().any(|label| label.contains("（自定义参数）")));
+}
+
 fn mappings(model_loaded: bool) -> VtsMappingCheck {
     use ai_ex_domain::{Emotion, VtsMappingStatus};
     VtsMappingCheck {

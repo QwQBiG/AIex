@@ -113,6 +113,7 @@ max_message_bytes = 65536
 {"type":"desktop_runtime","request":{"type":"discover_vts"}}
 {"type":"desktop_runtime","request":{"type":"check_vts_mappings"}}
 {"type":"desktop_runtime","request":{"type":"discover_vts_parameters","offset":0}}
+{"type":"desktop_runtime","request":{"type":"discover_vts_parameters_filtered","filter":"mouth","offset":0}}
 ```
 
 `native_desktop` 返回 `NativeDesktopReply{snapshot,windows}`。窗口扫描只在显式 `windows` 请求时进行，最多 256 项且整份响应受 32 KiB 预算限制；完整授权路径不能截断，超出路径界限的项目不返回。服务启动、状态查询和界面预览不扫描窗口。
@@ -128,6 +129,8 @@ max_message_bytes = 65536
 `diagnostics` 使用专门的允许字段结构，不拼接运行日志或聊天快照。开发分支的版本 2 报告可包含固定名称的组件及其最近一次已记录的就绪标志；缺少组件表示未知，`false` 可能是未启用或不可用，不包括错误详情，读取报告不会主动检查设备或外部服务。状态可能已经过期，不能据此认定模型已完成推理或设备可用。VTS 热键发现返回有限 ID/名称，不触发热键。输入参数发现每页最多返回 16 项，包含当前值、范围、默认值及来源；每次请求重新读取，参数变化时不同页不保证属于同一快照。主动输出使用 `proactive_started` 事件启用输出代次，不发带伪造用户文本的 `turn_started`，也不写用户历史或记忆。
 
 开发分支的 `check_vts_mappings` 以一次发现结果核对运行中使用的表情映射，返回人物载入状态和五种情绪的 `unconfigured`、`matched`、`missing` 或 `unknown`。显示用的热键 ID 最多 256 个字符，截短时 `id_truncated` 为真，比较仍使用完整 ID。未载入人物时已配置项为 `unknown`；连接失败返回错误。结果是查询时的快照，不修改配置或触发热键；旧版服务不提供此请求。
+
+开发分支的 `discover_vts_parameters_filtered` 先按参数名筛选再分页：`mouth` 匹配 mouth 或 lip，`voice` 匹配 voice，不区分 ASCII 大小写。旧版服务不提供此请求；原有的全部参数查询保持可用。每页重新发现参数，不保证跨页是同一快照。
 
 ## 记忆管理
 

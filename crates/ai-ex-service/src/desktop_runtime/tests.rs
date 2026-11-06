@@ -47,6 +47,41 @@ struct Fixture(PathBuf);
 
 struct Parameters;
 
+struct FilterParameters;
+
+#[async_trait]
+impl VtsDiscoveryPort for FilterParameters {
+    async fn discover(&self) -> Result<Vec<DiscoveredVtsHotkey>, AppError> {
+        Ok(Vec::new())
+    }
+
+    async fn check_mappings(&self) -> Result<VtsMappingCheck, AppError> {
+        Err(AppError::unavailable("not used by this fixture"))
+    }
+
+    async fn discover_parameters(&self) -> Result<ai_ex_vts::VtsParameterList, AppError> {
+        let parameter = |name: String, is_custom| ai_ex_vts::VtsParameter {
+            name,
+            added_by: "fixture".into(),
+            value: 0.5,
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            is_custom,
+        };
+        let mut parameters = (0..20)
+            .map(|index| parameter(format!("other-{index}"), false))
+            .collect::<Vec<_>>();
+        parameters.extend((0..17).map(|index| parameter(format!("Mouth-{index}"), false)));
+        parameters.push(parameter("LIP-VOICE".into(), true));
+        parameters.push(parameter("VoIcE-level".into(), true));
+        Ok(ai_ex_vts::VtsParameterList {
+            model_loaded: false,
+            parameters,
+        })
+    }
+}
+
 #[async_trait]
 impl VtsDiscoveryPort for Parameters {
     async fn discover(&self) -> Result<Vec<DiscoveredVtsHotkey>, AppError> {
@@ -148,6 +183,62 @@ async fn vts_parameter_discovery_is_bounded_and_preserves_out_of_range_values() 
     assert!(
         runtime
             .handle(DesktopRuntimeRequest::DiscoverVtsParameters { offset: 1025 })
+            .await
+            .is_err()
+    );
+    runtime.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn vts_parameter_filter_runs_before_pagination_and_preserves_sources() {
+    let fixture = Fixture::new();
+    let runtime = DesktopRuntime::new(
+        Uuid::new_v4(),
+        fixture.path(),
+        Arc::new(Actions::default()),
+        Some(Arc::new(FilterParameters)),
+    )
+    .unwrap();
+    let request =
+        |filter, offset| DesktopRuntimeRequest::DiscoverVtsParametersFiltered { filter, offset };
+    let DesktopRuntimeReply::VtsFilteredParameters { filter, page } = runtime
+        .handle(request(VtsParameterFilter::Mouth, 16))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected VTS response")
+    };
+    assert_eq!(filter, VtsParameterFilter::Mouth);
+    assert!(!page.model_loaded);
+    assert_eq!(
+        (page.offset, page.total, page.parameters.len()),
+        (16, 18, 2)
+    );
+    assert_eq!(page.parameters[0].name, "Mouth-16");
+    assert!(!page.parameters[0].is_custom);
+    assert_eq!(page.parameters[1].name, "LIP-VOICE");
+    assert!(page.parameters[1].is_custom);
+    let DesktopRuntimeReply::VtsFilteredParameters { page, .. } = runtime
+        .handle(request(VtsParameterFilter::Voice, 0))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected VTS response")
+    };
+    assert_eq!(page.total, 2);
+    assert_eq!(page.parameters[0].name, "LIP-VOICE");
+    assert_eq!(page.parameters[1].name, "VoIcE-level");
+    let DesktopRuntimeReply::VtsFilteredParameters { page, .. } = runtime
+        .handle(request(VtsParameterFilter::Voice, 16))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected VTS response")
+    };
+    assert_eq!((page.offset, page.total, page.parameters.len()), (2, 2, 0));
+    assert!(
+        runtime
+            .handle(request(VtsParameterFilter::Mouth, 1025))
             .await
             .is_err()
     );

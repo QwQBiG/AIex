@@ -14,7 +14,18 @@ pub(super) struct RetainedMessage {
 
 impl DesktopApp {
     pub(super) fn request_navigation(&mut self, context: &egui::Context, destination: Destination) {
-        let has_drafts = !self.input.is_empty()
+        if self.confirm_close {
+            return;
+        }
+        if self.has_unsaved_or_in_progress() {
+            self.pending_navigation = Some(destination);
+        } else {
+            self.navigation.request(context, destination);
+        }
+    }
+
+    fn has_unsaved_or_in_progress(&self) -> bool {
+        !self.input.is_empty()
             || !self.retained_messages.is_empty()
             || self.persona_dirty
             || self.confirm_persona
@@ -22,16 +33,10 @@ impl DesktopApp {
             || self.state.runtime.active_turn.is_some()
             || self.scene_busy()
             || self.character_files.is_loading()
-            || self.appearance.is_loading();
-        let has_drafts = has_drafts
+            || self.appearance.is_loading()
             || self.memory.has_unsaved()
             || self.native.has_unsaved()
-            || self.speech_split.has_unsaved();
-        if has_drafts {
-            self.pending_navigation = Some(destination);
-        } else {
-            self.navigation.request(context, destination);
-        }
+            || self.speech_split.has_unsaved()
     }
 
     pub(super) fn show_navigation_confirmation(&mut self, context: &egui::Context) {
@@ -62,46 +67,51 @@ impl DesktopApp {
             });
         if leave {
             self.pending_navigation = None;
-            self.allow_backup_close = true;
+            self.allow_close = true;
             self.navigation.request(context, destination);
         } else if stay {
             self.pending_navigation = None;
         }
     }
 
-    pub(super) fn handle_backup_close(&mut self, context: &egui::Context, requested: bool) {
-        if requested && !self.allow_backup_close && self.memory.backup_unresolved() {
+    pub(super) fn handle_close_request(&mut self, context: &egui::Context, requested: bool) {
+        if requested && !self.allow_close && self.has_unsaved_or_in_progress() {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm_backup_close = true;
+            self.pending_navigation = None;
+            self.navigation.take();
+            self.confirm_close = true;
         }
     }
 
-    pub(super) fn show_backup_close_confirmation(&mut self, context: &egui::Context) {
-        if !self.confirm_backup_close {
+    pub(super) fn show_close_confirmation(&mut self, context: &egui::Context) {
+        if !self.confirm_close {
             return;
         }
-        if !self.memory.backup_unresolved() {
-            self.confirm_backup_close = false;
+        if !self.has_unsaved_or_in_progress() {
+            self.confirm_close = false;
             return;
         }
         let mut stay = false;
         let mut close = false;
-        egui::Window::new("备份尚未确认")
+        egui::Window::new("退出当前窗口？")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(context, |ui| {
-                ui.label("关闭应用会丢失本次备份编号；如果本应用管理服务，备份也可能中断。请检查原保存目录。");
+                ui.label("当前还有消息草稿、角色修改或正在处理的操作。退出后，部分草稿或操作状态可能无法恢复。");
+                if self.memory.backup_unresolved() {
+                    ui.label("关闭应用会丢失本次备份编号；如果本应用管理服务，备份也可能中断。请检查原保存目录。");
+                }
                 ui.horizontal(|ui| {
-                    stay = ui.button("返回等待").clicked();
+                    stay = ui.button("返回继续编辑").clicked();
                     close = ui.button("仍要退出").clicked();
                 });
             });
         if stay {
-            self.confirm_backup_close = false;
+            self.confirm_close = false;
         } else if close {
-            self.confirm_backup_close = false;
-            self.allow_backup_close = true;
+            self.confirm_close = false;
+            self.allow_close = true;
             context.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }

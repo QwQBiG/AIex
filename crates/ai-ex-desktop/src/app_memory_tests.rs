@@ -91,8 +91,8 @@ fn unresolved_memory_backup_intercepts_window_close_until_user_confirms() {
             ..Default::default()
         },
         |ui| {
-            app.handle_backup_close(ui.ctx(), true);
-            app.show_backup_close_confirmation(ui.ctx());
+            app.handle_close_request(ui.ctx(), true);
+            app.show_close_confirmation(ui.ctx());
         },
     );
     assert!(output.viewport_output.values().any(|viewport| {
@@ -100,16 +100,20 @@ fn unresolved_memory_backup_intercepts_window_close_until_user_confirms() {
             .commands
             .contains(&egui::ViewportCommand::CancelClose)
     }));
-    assert!(app.confirm_backup_close);
+    assert!(app.confirm_close);
     let output = context.run_ui(
         egui::RawInput {
             screen_rect: Some(screen),
             ..Default::default()
         },
         |ui| {
-            app.show_backup_close_confirmation(ui.ctx());
+            app.show_close_confirmation(ui.ctx());
         },
     );
+    assert!(output.shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Text(text) if text.galley.job.text.contains("关闭应用会丢失本次备份编号")
+    )));
     let pos = output
         .shapes
         .iter()
@@ -136,7 +140,7 @@ fn unresolved_memory_backup_intercepts_window_close_until_user_confirms() {
                 ],
                 ..Default::default()
             },
-            |ui| app.show_backup_close_confirmation(ui.ctx()),
+            |ui| app.show_close_confirmation(ui.ctx()),
         );
         closed |= output
             .viewport_output
@@ -144,7 +148,7 @@ fn unresolved_memory_backup_intercepts_window_close_until_user_confirms() {
             .any(|viewport| viewport.commands.contains(&egui::ViewportCommand::Close));
     }
     assert!(closed);
-    assert!(app.allow_backup_close);
+    assert!(app.allow_close);
 }
 
 #[test]

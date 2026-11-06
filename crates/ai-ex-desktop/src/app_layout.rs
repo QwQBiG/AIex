@@ -15,7 +15,7 @@ pub(super) enum Page {
 impl DesktopApp {
     pub(super) fn show_contents(&mut self, ui: &mut egui::Ui) {
         self.drain_events();
-        self.handle_backup_close(
+        self.handle_close_request(
             ui.ctx(),
             ui.input(|input| input.viewport().close_requested()),
         );
@@ -88,7 +88,7 @@ impl DesktopApp {
         self.show_persona_confirmation(ui.ctx());
         self.show_emergency_confirmation(ui.ctx());
         self.show_navigation_confirmation(ui.ctx());
-        self.show_backup_close_confirmation(ui.ctx());
+        self.show_close_confirmation(ui.ctx());
         self.show_retained_messages(ui.ctx());
     }
 

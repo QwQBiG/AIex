@@ -105,6 +105,17 @@ pub enum DesktopRuntimeRequest {
     DiscoverVtsParameters {
         offset: usize,
     },
+    DiscoverVtsParametersFiltered {
+        filter: VtsParameterFilter,
+        offset: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VtsParameterFilter {
+    Mouth,
+    Voice,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,4 +212,8 @@ pub enum DesktopRuntimeReply {
     VtsDiscovery(Vec<DiscoveredVtsHotkey>),
     VtsMappingCheck(VtsMappingCheck),
     VtsParameters(VtsParameterPage),
+    VtsFilteredParameters {
+        filter: VtsParameterFilter,
+        page: VtsParameterPage,
+    },
 }
