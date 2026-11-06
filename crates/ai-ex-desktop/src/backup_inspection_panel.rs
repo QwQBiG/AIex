@@ -12,6 +12,9 @@ use uuid::Uuid;
 
 use crate::worker::WorkerCommand;
 
+#[path = "backup_candidate_panel.rs"]
+mod candidate;
+
 #[cfg(test)]
 #[path = "backup_inspection_panel_tests.rs"]
 mod tests;
@@ -45,6 +48,23 @@ enum Pending {
         path_generation: u64,
         context: Context,
     },
+    CandidateContext {
+        id: u64,
+        path_generation: u64,
+    },
+    CandidatePreview {
+        id: u64,
+        path_generation: u64,
+        context: Context,
+    },
+    CandidateStart {
+        id: u64,
+        operation_id: Uuid,
+    },
+    CandidateQuery {
+        id: u64,
+        operation_id: Uuid,
+    },
 }
 
 #[derive(Default)]
@@ -63,6 +83,7 @@ pub struct BackupInspectionPanel {
     pending: Option<Pending>,
     result: Option<InspectionResult>,
     feedback: Option<&'static str>,
+    candidate: candidate::CandidatePanel,
 }
 
 impl BackupInspectionPanel {
@@ -77,6 +98,7 @@ impl BackupInspectionPanel {
         let persona_changed = self.persona_revision != persona_revision;
         let ready = ready && instance.is_some();
         if identity_changed || persona_changed || (self.ready && !ready) {
+            self.invalidate_candidate();
             self.cancel_drop();
             self.drop_message = None;
             self.revoke_queued();
@@ -94,6 +116,7 @@ impl BackupInspectionPanel {
     }
 
     fn path_edited(&mut self) {
+        self.invalidate_candidate();
         self.cancel_drop();
         self.drop_message = None;
         self.revoke_queued();
@@ -116,6 +139,7 @@ impl BackupInspectionPanel {
 
     pub fn arm_drop(&mut self) {
         if self.ready {
+            self.invalidate_candidate();
             self.revoke_queued();
             self.pending = None;
             self.result = None;
@@ -200,6 +224,7 @@ impl BackupInspectionPanel {
         {
             return None;
         }
+        self.invalidate_candidate();
         self.result = None;
         self.feedback = Some("正在确认当前角色…");
         let generation = self.path_generation;
@@ -218,11 +243,25 @@ impl BackupInspectionPanel {
     ) -> Option<WorkerCommand> {
         let pending = self.pending.take()?;
         let id = match &pending {
-            Pending::Context { id, .. } | Pending::Inspection { id, .. } => *id,
+            Pending::Context { id, .. }
+            | Pending::Inspection { id, .. }
+            | Pending::CandidateContext { id, .. }
+            | Pending::CandidatePreview { id, .. }
+            | Pending::CandidateStart { id, .. }
+            | Pending::CandidateQuery { id, .. } => *id,
         };
         if id != request_id {
             self.pending = Some(pending);
             return None;
+        }
+        if matches!(
+            pending,
+            Pending::CandidateContext { .. }
+                | Pending::CandidatePreview { .. }
+                | Pending::CandidateStart { .. }
+                | Pending::CandidateQuery { .. }
+        ) {
+            return self.receive_candidate(pending, reply);
         }
         match (pending, reply) {
             (
@@ -367,6 +406,9 @@ impl BackupInspectionPanel {
                             ui.weak("含本地时间或向量的记录迁移时需分别指定时区或向量空间；未分类的记录需要进一步核对。");
                         }
                     }
+                }
+                if let Some(candidate_command) = self.show_candidate(ui) {
+                    command = Some(candidate_command);
                 }
             });
         command

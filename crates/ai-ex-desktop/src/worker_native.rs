@@ -13,7 +13,7 @@ pub(super) struct QueuedNative {
 pub(super) fn route(
     request_id: u64,
     request: NativeRequest,
-    lanes: [&mpsc::Sender<QueuedNative>; 3],
+    lanes: [&mpsc::Sender<QueuedNative>; 4],
     events: &Sender<WorkerEvent>,
     epoch: &AtomicU64,
 ) -> bool {
@@ -27,6 +27,7 @@ pub(super) fn route(
         );
     }
     let index = match request {
+        NativeRequest::InputDevices => 3,
         NativeRequest::Cancel { .. } | NativeRequest::StopPreview => 2,
         NativeRequest::State
         | NativeRequest::Packages

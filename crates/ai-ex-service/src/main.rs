@@ -11,12 +11,14 @@ mod desktop_runtime;
 mod desktop_runtime_actions;
 mod diagnostic_health;
 mod events;
+mod legacy_candidate;
 mod lifecycle;
 mod native_desktop;
 mod native_desktop_port;
 mod native_ports;
 mod native_runtime;
 mod playback;
+mod speech_cleanup_settings;
 mod strategy_loop;
 mod template_game;
 mod template_host;
@@ -307,7 +309,13 @@ async fn run() -> Result<(), AppError> {
     if obs_runtime.connected {
         tracing::info!("OBS WebSocket stage connected");
     }
-    let (speech, receiver) = SpeechQueue::new(config.audio.queue_capacity)?;
+    let native_cleanup = native
+        .as_ref()
+        .and_then(|runtime| runtime.config().ok())
+        .and_then(|settings| settings.speech_cleanup);
+    let cleanup =
+        speech_cleanup_settings::startup_cleanup(&config.audio.cleanup, native_cleanup.as_ref());
+    let (speech, receiver) = SpeechQueue::new_with_cleanup(config.audio.queue_capacity, cleanup)?;
     let player = receiver.player();
     let speech_activity = speech.activity();
     let tts = if native.is_none() {
@@ -1532,6 +1540,7 @@ struct ServiceControl {
     persona: Arc<RwLock<PersonaSnapshot>>,
     persona_epoch: Arc<AtomicU64>,
     backup_inspector: Result<backup_inspection_coordinator::BackupInspector, AppError>,
+    legacy_candidates: Arc<legacy_candidate::LegacyCandidates>,
     native: Option<Arc<NativeRuntime>>,
     native_desktop: Option<native_desktop::NativeDesktopHost>,
     desktop_runtime: Option<desktop_runtime::DesktopRuntime>,
@@ -1579,6 +1588,44 @@ impl ControlBackend for ServiceControl {
                 path,
             } => {
                 self.inspect_legacy_memory_backup(instance_id, profile_id, persona_epoch, path)
+                    .await
+            }
+            ControlCommand::PrepareLegacyCandidate {
+                instance_id,
+                profile_id,
+                persona_epoch,
+                path,
+            } => {
+                self.prepare_legacy_candidate(instance_id, profile_id, persona_epoch, path)
+                    .await
+            }
+            ControlCommand::StartLegacyCandidate {
+                instance_id,
+                profile_id,
+                persona_epoch,
+                preview_id,
+                operation_id,
+                output_directory,
+                utc_offset,
+                embedding_space,
+            } => {
+                self.start_legacy_candidate(legacy_candidate::StartCandidate {
+                    instance_id,
+                    profile_id,
+                    persona_epoch,
+                    preview_id,
+                    operation_id,
+                    output_directory,
+                    utc_offset,
+                    embedding_space,
+                })
+                .await
+            }
+            ControlCommand::LegacyCandidateStatus {
+                instance_id,
+                operation_id,
+            } => {
+                self.legacy_candidate_status(instance_id, operation_id)
                     .await
             }
             ControlCommand::Native { request } => {
@@ -1904,6 +1951,7 @@ async fn spawn_control(
         persona: Arc::new(RwLock::new(persona)),
         persona_epoch: Arc::new(AtomicU64::new(0)),
         backup_inspector: inspector.clone(),
+        legacy_candidates: Arc::default(),
         stage,
         automation,
         native,

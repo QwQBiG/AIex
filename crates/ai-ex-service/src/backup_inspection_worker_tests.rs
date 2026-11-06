@@ -20,6 +20,7 @@ fn invalid_options_are_rejected_before_source_read() {
             profile,
             comparison_space,
             legacy: false,
+            candidate: None,
         };
         assert!(
             inspect_with(request, |_| {

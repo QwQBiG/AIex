@@ -8,6 +8,8 @@ use crate::AppError;
 pub const NATIVE_MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub const NATIVE_MAX_PACKAGES: usize = 64;
 pub const NATIVE_MAX_ERROR_BYTES: usize = 8192;
+pub const NATIVE_MAX_INPUT_DEVICES: usize = 128;
+pub const NATIVE_MAX_INPUT_NAME_BYTES: usize = 12 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -34,6 +36,7 @@ pub enum NativeRequest {
         package_id: String,
     },
     Settings,
+    InputDevices,
     SaveSettings {
         expected_revision: u64,
         document: String,
@@ -77,8 +80,16 @@ pub enum NativeReply {
         revision: u64,
         document: String,
     },
+    InputDevices(Vec<NativeInputDevice>),
     Operation(NativeOperation),
     Accepted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeInputDevice {
+    pub name: String,
+    pub ambiguous: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +247,28 @@ impl NativeReply {
                 revision: value, ..
             } => revision(*value),
             Self::State(state) => bounded(&state.configuration_path, 4096, true),
+            Self::InputDevices(devices) => {
+                if devices.len() > NATIVE_MAX_INPUT_DEVICES {
+                    return Err(AppError::protocol("too many input devices"));
+                }
+                let mut bytes = 0usize;
+                let mut names = std::collections::HashSet::new();
+                for device in devices {
+                    bytes += device.name.len();
+                    if device.name.trim().is_empty()
+                        || device.name.chars().count() > 256
+                        || device.name.len() > 1024
+                        || device.name.chars().any(char::is_control)
+                        || !names.insert(device.name.to_ascii_lowercase())
+                    {
+                        return Err(AppError::protocol("invalid input device list"));
+                    }
+                }
+                if bytes > NATIVE_MAX_INPUT_NAME_BYTES {
+                    return Err(AppError::protocol("input device names exceed limit"));
+                }
+                Ok(())
+            }
             Self::Settings {
                 revision: value,
                 document,
@@ -300,6 +333,36 @@ fn revision(value: u64) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_device_reply_is_bounded_and_rejects_duplicate_names() {
+        let device = |name: &str, ambiguous| NativeInputDevice {
+            name: name.into(),
+            ambiguous,
+        };
+        let valid = NativeReply::InputDevices(vec![device("合成麦克风", false)]);
+        assert!(valid.validate().is_ok());
+        let encoded = serde_json::to_string(&valid).unwrap();
+        assert_eq!(
+            serde_json::from_str::<NativeReply>(&encoded).unwrap(),
+            valid
+        );
+        assert!(
+            NativeReply::InputDevices(vec![device("A", false), device("a", false)])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NativeReply::InputDevices(vec![device("line\nbreak", false)])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NativeReply::InputDevices(vec![device(&"a".repeat(257), false)])
+                .validate()
+                .is_err()
+        );
+    }
 
     #[test]
     fn voice_binding_preserves_the_existing_unicode_persona_identifier_limit() {

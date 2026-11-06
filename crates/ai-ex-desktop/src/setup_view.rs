@@ -115,6 +115,11 @@ impl SetupApp {
             egui::CollapsingHeader::new("更多选项 · 语音、启动与直播")
                 .id_salt("setup_advanced")
                 .show(ui, |ui| {
+                    ui.label("朗读文本处理");
+                    ui.checkbox(&mut self.speech_cleanup.remove_emoji, "省略表情符号");
+                    ui.checkbox(&mut self.speech_cleanup.remove_markdown, "处理格式标记并省略代码片段");
+                    ui.checkbox(&mut self.speech_cleanup.remove_parenthetical, "省略括号中的内容");
+                    ui.small("影响朗读和播放字幕，不改变对话正文；保存后需重启对应服务。本地伙伴使用独立设置。");
                     ui.checkbox(&mut self.soft_split_enabled, "在中文逗号和顿号处分段朗读");
                     ui.add_enabled(
                         self.soft_split_enabled,

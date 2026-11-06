@@ -203,7 +203,7 @@ impl DesktopApp {
         }
         if self.native_mode && self.native.microphone_restart_required() {
             ui.horizontal_wrapped(|ui| {
-                ui.weak("麦克风开关重新进入对话后生效。");
+                ui.weak("麦克风设置重启服务后生效。");
                 if self.owned_service.is_some() {
                     if ui.small_button("重新进入本地对话").clicked() {
                         self.request_navigation(
@@ -541,8 +541,7 @@ impl DesktopApp {
                 self.request_navigation(ui.ctx(), crate::navigation::Destination::NativeChat);
             } else {
                 if self.native.microphone_restart_required() {
-                    self.notice =
-                        Some("麦克风开关重新进入对话后生效，请由启动服务的窗口重启服务。".into());
+                    self.notice = Some("麦克风设置需要重启服务，请由启动服务的窗口重启。".into());
                 }
                 self.page = Page::Conversation;
             }

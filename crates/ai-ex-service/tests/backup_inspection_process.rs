@@ -34,6 +34,7 @@ async fn backup_inspection_real_service_worker_uses_only_selected_synthetic_file
         profile: profile.into(),
         comparison_space: None,
         legacy: false,
+        candidate: None,
     };
     let summary = inspector
         .inspect(request("synthetic"), Duration::from_secs(12))
@@ -78,14 +79,19 @@ async fn legacy_backup_inspection_real_service_worker_is_bounded_and_read_only()
         profile: "synthetic".into(),
         comparison_space: None,
         legacy: true,
+        candidate: None,
     };
-    let summary = inspector
+    let (summary, digest) = inspector
         .start(request(), Duration::from_secs(12))
         .unwrap()
-        .wait_legacy()
+        .wait_legacy_digest()
         .await
         .unwrap();
     assert_eq!(summary.records, 1);
+    assert_eq!(
+        digest,
+        ai_ex_migrate::legacy_memory::backup_digest(&original)
+    );
     assert_eq!(summary.local_timestamp_records, 1);
     assert_eq!(summary.nonempty_embedding_records, 1);
     assert!(!serde_json::to_string(&summary).unwrap().contains("private"));
@@ -113,5 +119,72 @@ async fn legacy_backup_inspection_real_service_worker_is_bounded_and_read_only()
     }
     inspector.shutdown().await.unwrap();
     fs::remove_file(path).unwrap();
+    fs::remove_dir(directory).unwrap();
+}
+
+#[tokio::test]
+async fn legacy_candidate_uses_checked_bytes_and_never_overwrites() {
+    use backup_inspection_coordinator::CandidateOutcome;
+    use backup_inspection_worker::CandidateWrite;
+
+    let directory = std::env::temp_dir().join(format!("candidate-worker-{}", Uuid::new_v4()));
+    fs::create_dir(&directory).unwrap();
+    let input = directory.join("synthetic.json");
+    let output = directory.join("candidate.jsonl");
+    let fixture = include_bytes!("../../ai-ex-migrate/tests/fixtures/legacy-memory.json");
+    fs::write(&input, fixture).unwrap();
+    let inspector =
+        BackupInspector::new(PathBuf::from(env!("CARGO_BIN_EXE_ai-ex-service"))).unwrap();
+    let request = || Request {
+        path: input.to_string_lossy().into_owned(),
+        profile: "synthetic".into(),
+        comparison_space: None,
+        legacy: true,
+        candidate: Some(CandidateWrite {
+            digest: ai_ex_migrate::legacy_memory::backup_digest(fixture),
+            output: output.to_string_lossy().into_owned(),
+            utc_offset: Some(480),
+            embedding_space: Some("synthetic-space".into()),
+        }),
+    };
+    fs::write(&input, b"changed").unwrap();
+    assert!(matches!(
+        inspector
+            .start(request(), Duration::from_secs(12))
+            .unwrap()
+            .wait_candidate()
+            .await
+            .unwrap(),
+        CandidateOutcome::Rejected
+    ));
+    assert!(!output.exists());
+    fs::write(&input, fixture).unwrap();
+    assert!(matches!(
+        inspector
+            .start(request(), Duration::from_secs(12))
+            .unwrap()
+            .wait_candidate()
+            .await
+            .unwrap(),
+        CandidateOutcome::Written {
+            temporary_retained: false
+        }
+    ));
+    let original_output = fs::read(&output).unwrap();
+    assert!(serde_json::from_slice::<serde_json::Value>(&original_output).is_ok());
+    assert!(matches!(
+        inspector
+            .start(request(), Duration::from_secs(12))
+            .unwrap()
+            .wait_candidate()
+            .await
+            .unwrap(),
+        CandidateOutcome::Uncertain
+    ));
+    assert_eq!(fs::read(&output).unwrap(), original_output);
+    assert_eq!(fs::read(&input).unwrap(), fixture);
+    inspector.shutdown().await.unwrap();
+    fs::remove_file(input).unwrap();
+    fs::remove_file(output).unwrap();
     fs::remove_dir(directory).unwrap();
 }

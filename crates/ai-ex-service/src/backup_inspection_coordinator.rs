@@ -29,6 +29,12 @@ pub(crate) struct BackupInspector {
 
 pub(crate) struct PendingInspection(oneshot::Receiver<Result<Reply, AppError>>);
 
+pub(crate) enum CandidateOutcome {
+    Written { temporary_retained: bool },
+    Rejected,
+    Uncertain,
+}
+
 impl PendingInspection {
     pub(crate) async fn wait(self) -> Result<BackupInspection, AppError> {
         match self.0.await.map_err(|_| unavailable())?? {
@@ -39,7 +45,27 @@ impl PendingInspection {
 
     pub(crate) async fn wait_legacy(self) -> Result<LegacyMemoryBackupInspection, AppError> {
         match self.0.await.map_err(|_| unavailable())?? {
-            Reply::LegacyReady { summary } => Ok(summary),
+            Reply::LegacyReady { summary, .. } => Ok(summary),
+            _ => Err(invalid()),
+        }
+    }
+
+    pub(crate) async fn wait_legacy_digest(
+        self,
+    ) -> Result<(LegacyMemoryBackupInspection, [u8; 32]), AppError> {
+        match self.0.await.map_err(|_| unavailable())?? {
+            Reply::LegacyReady { summary, digest } => Ok((summary, digest)),
+            _ => Err(invalid()),
+        }
+    }
+
+    pub(crate) async fn wait_candidate(self) -> Result<CandidateOutcome, AppError> {
+        match self.0.await.map_err(|_| unavailable())?? {
+            Reply::CandidateWritten { temporary_retained } => {
+                Ok(CandidateOutcome::Written { temporary_retained })
+            }
+            Reply::CandidateRejected => Ok(CandidateOutcome::Rejected),
+            Reply::CandidateUncertain => Ok(CandidateOutcome::Uncertain),
             _ => Err(invalid()),
         }
     }
@@ -253,9 +279,14 @@ async fn exchange(child: &mut Child, encoded: &[u8]) -> Result<Reply, AppError> 
     }
     match serde_json::from_slice::<Reply>(&frame).map_err(|_| invalid())? {
         Reply::Ready { summary } if valid_summary(&summary) => Ok(Reply::Ready { summary }),
-        Reply::LegacyReady { summary } if valid_legacy_summary(&summary) => {
-            Ok(Reply::LegacyReady { summary })
+        Reply::LegacyReady { summary, digest } if valid_legacy_summary(&summary) => {
+            Ok(Reply::LegacyReady { summary, digest })
         }
+        Reply::CandidateWritten { temporary_retained } => {
+            Ok(Reply::CandidateWritten { temporary_retained })
+        }
+        Reply::CandidateRejected => Ok(Reply::CandidateRejected),
+        Reply::CandidateUncertain => Ok(Reply::CandidateUncertain),
         _ => Err(invalid()),
     }
 }

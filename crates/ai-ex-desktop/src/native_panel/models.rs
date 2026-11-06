@@ -45,6 +45,16 @@ impl NativePanel {
                     ui.add(egui::Label::new(&self.status).selectable(true));
                 });
         }
+        if matches!(self.unconfirmed, Some(NativeRequest::SaveSettings { .. })) {
+            ui.weak(
+                "如果原服务仍在处理，旧设置可能稍后才写入。请先停止原服务，再重新连接并核对设置。",
+            );
+            if ui.button("已确认原服务停止，重新核对").clicked()
+                && self.confirm_old_service_stopped()
+            {
+                requests.push(NativeRequest::Settings);
+            }
+        }
         if let Some(state) = &self.state {
             if !state.configured {
                 theme::card().show(ui, |ui| {
@@ -132,14 +142,16 @@ impl NativePanel {
             } else {
                 ui.weak("已保存的麦克风和对话声音开关均为关闭。");
             }
-            if self.device_draft.is_some() {
-                ui.weak("语音开关有未应用的修改，进入聊天不会自动保存。");
+            if self.device_draft.is_some() || self.microphone_input_draft.is_some() {
+                ui.weak("语音设置有未应用的修改，进入聊天不会自动保存。");
             }
             if self.voice_edit_dirty() {
                 ui.weak("声音修改尚未保存，进入聊天后仍使用已保存的声音。");
             }
             if self.microphone_restart_required() {
-                ui.weak("麦克风设置需要重新进入对话才能生效。");
+                ui.weak("麦克风设置需要重启服务才能生效。");
+            } else {
+                ui.weak("当前服务使用的麦克风设置无法确认；如有修改请重启服务。");
             }
         }
         if let Some(reason) = reason {

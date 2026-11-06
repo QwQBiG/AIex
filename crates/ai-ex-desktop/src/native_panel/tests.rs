@@ -38,6 +38,235 @@ fn panel() -> NativePanel {
     }
 }
 
+#[test]
+fn microphone_discovery_is_explicit_and_old_connection_replies_are_ignored() {
+    let mut panel = panel();
+    assert!(panel.input_devices.is_none());
+    assert!(!mutating(&NativeRequest::InputDevices));
+    let old = id(panel.begin(NativeRequest::InputDevices).unwrap());
+    panel.disconnected();
+    panel.receive(
+        old,
+        Ok(NativeReply::InputDevices(vec![NativeInputDevice {
+            name: "过期设备".into(),
+            ambiguous: false,
+        }])),
+    );
+    assert!(panel.input_devices.is_none());
+    let fresh = id(panel.begin(NativeRequest::InputDevices).unwrap());
+    panel.receive(
+        fresh,
+        Ok(NativeReply::InputDevices(vec![NativeInputDevice {
+            name: "合成设备".into(),
+            ambiguous: true,
+        }])),
+    );
+    assert!(panel.input_devices.as_ref().unwrap()[0].ambiguous);
+}
+
+#[test]
+fn microphone_choice_is_saved_with_switches_and_requires_service_restart() {
+    let mut panel = panel();
+    let baseline = panel.config.clone().unwrap();
+    let first = id(panel.begin(NativeRequest::Settings).unwrap());
+    panel.receive(
+        first,
+        Ok(NativeReply::Settings {
+            revision: baseline.revision,
+            document: baseline.to_toml().unwrap(),
+        }),
+    );
+    panel.microphone_input_draft = Some(Some(NativeMicrophoneInput::Named {
+        name: "合成麦克风".into(),
+    }));
+    let mut switches = baseline.devices;
+    switches.microphone_enabled = true;
+    panel.device_draft = Some(switches);
+    let request = panel.voice_settings_request().unwrap();
+    let NativeRequest::SaveSettings {
+        expected_revision,
+        document,
+    } = &request
+    else {
+        panic!("expected settings update");
+    };
+    assert_eq!(*expected_revision, baseline.revision);
+    let mut committed = NativeConfig::parse(document).unwrap();
+    assert_eq!(
+        committed.microphone_input,
+        panel.microphone_input_draft.clone().unwrap()
+    );
+    assert!(committed.devices.microphone_enabled);
+    let id = id(panel.begin(request).unwrap());
+    committed.revision += 1;
+    panel.receive(
+        id,
+        Ok(NativeReply::Settings {
+            revision: committed.revision,
+            document: committed.to_toml().unwrap(),
+        }),
+    );
+    assert!(panel.microphone_input_draft.is_none());
+    assert!(panel.device_draft.is_none());
+    assert!(panel.microphone_restart_required());
+    panel.disconnected();
+    assert!(panel.microphone_restart_required());
+    panel.runtime_restarted();
+    assert!(!panel.microphone_restart_required());
+}
+
+#[test]
+fn pending_or_unconfirmed_settings_cannot_be_edited() {
+    for lost_reply in [false, true] {
+        let mut panel = panel();
+        panel.device_draft = Some(ai_ex_config::native::NativeDevices {
+            microphone_enabled: true,
+            playback_enabled: false,
+        });
+        panel.speech_cleanup_draft = Some(Some(NativeSpeechCleanup::default()));
+        let request = panel.voice_settings_request().unwrap();
+        let request_id = id(panel.begin(request).unwrap());
+        if lost_reply {
+            panel.receive(request_id, Err(AppError::connectivity("synthetic")));
+        }
+        let context = egui::Context::default();
+        let draw = |panel: &mut NativePanel, events| {
+            context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 1600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| panel.device_settings(ui, &mut Vec::new()),
+            )
+        };
+        for label in ["启用麦克风，进行语音输入", "为本地伙伴单独设置"] {
+            let output = draw(&mut panel, Vec::new());
+            let position = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            for pressed in [true, false] {
+                draw(
+                    &mut panel,
+                    vec![
+                        egui::Event::PointerMoved(position),
+                        egui::Event::PointerButton {
+                            pos: position,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        }
+        assert!(panel.device_draft.unwrap().microphone_enabled);
+        assert_eq!(
+            panel.speech_cleanup_draft,
+            Some(Some(NativeSpeechCleanup::default()))
+        );
+    }
+}
+
+#[test]
+fn settings_query_before_or_after_timeout_cannot_confirm_an_old_revision() {
+    let mut panel = panel();
+    let original = panel.config.clone().unwrap();
+    let old_query = id(panel.begin(NativeRequest::Settings).unwrap());
+    panel.device_draft = Some(ai_ex_config::native::NativeDevices {
+        microphone_enabled: true,
+        playback_enabled: false,
+    });
+    let request = panel.voice_settings_request().unwrap();
+    let NativeRequest::SaveSettings { document, .. } = &request else {
+        panic!("expected settings update")
+    };
+    let mut saved = NativeConfig::parse(document).unwrap();
+    let save = id(panel.begin(request).unwrap());
+    panel.receive(
+        old_query,
+        Ok(NativeReply::Settings {
+            revision: original.revision,
+            document: original.to_toml().unwrap(),
+        }),
+    );
+    assert!(panel.device_draft.unwrap().microphone_enabled);
+    let stale = id(panel.begin(NativeRequest::Settings).unwrap());
+    panel.receive(save, Err(AppError::connectivity("synthetic")));
+    panel.receive(
+        stale,
+        Ok(NativeReply::Settings {
+            revision: original.revision,
+            document: original.to_toml().unwrap(),
+        }),
+    );
+    assert!(panel.uncertain && panel.saving_settings());
+    assert!(panel.device_draft.unwrap().microphone_enabled);
+    let later = id(panel.begin(NativeRequest::Settings).unwrap());
+    panel.receive(
+        later,
+        Ok(NativeReply::Settings {
+            revision: original.revision,
+            document: original.to_toml().unwrap(),
+        }),
+    );
+    assert!(panel.uncertain && panel.saving_settings());
+    assert!(panel.status.contains("重启服务"));
+    let later = id(panel.begin(NativeRequest::Settings).unwrap());
+    saved.revision += 1;
+    panel.receive(
+        later,
+        Ok(NativeReply::Settings {
+            revision: saved.revision,
+            document: saved.to_toml().unwrap(),
+        }),
+    );
+    assert!(!panel.uncertain);
+    assert!(panel.device_draft.is_none());
+}
+
+#[test]
+fn instance_change_preserves_unknown_save_until_explicit_recovery() {
+    let mut panel = panel();
+    panel.device_draft = Some(ai_ex_config::native::NativeDevices {
+        microphone_enabled: true,
+        playback_enabled: false,
+    });
+    let request = panel.voice_settings_request().unwrap();
+    panel.begin(request).unwrap();
+    panel.runtime_restarted();
+    assert!(panel.uncertain && panel.saving_settings());
+    assert!(panel.device_draft.unwrap().microphone_enabled);
+    panel.disconnected();
+    assert!(panel.uncertain && panel.saving_settings());
+    let stop = id(panel.begin(NativeRequest::StopPreview).unwrap());
+    panel.receive(stop, Err(AppError::unavailable("synthetic")));
+    assert!(panel.uncertain && panel.saving_settings());
+    assert!(panel.confirm_old_service_stopped());
+    assert!(panel.uncertain && panel.saving_settings());
+    let query = id(panel.begin(NativeRequest::Settings).unwrap());
+    let current = NativeConfig::default();
+    panel.receive(
+        query,
+        Ok(NativeReply::Settings {
+            revision: current.revision,
+            document: current.to_toml().unwrap(),
+        }),
+    );
+    assert!(!panel.uncertain);
+    assert!(panel.device_draft.unwrap().microphone_enabled);
+}
+
 fn begin_space_check(panel: &mut NativePanel, package_id: &str) -> u64 {
     panel.close_download_confirmation();
     panel.download_confirmation = Some(package_id.to_owned());
@@ -921,7 +1150,7 @@ fn microphone_change_needs_a_new_runtime_and_survives_a_connection_retry() {
         }),
     );
     assert!(panel.microphone_restart_required());
-    assert!(panel.status.contains("重新进入对话后生效"));
+    assert!(panel.status.contains("重启服务后生效"));
     panel.disconnected();
     let reload = id(panel.begin(NativeRequest::Settings).unwrap());
     panel.receive(
@@ -942,6 +1171,34 @@ fn microphone_change_needs_a_new_runtime_and_survives_a_connection_retry() {
         }),
     );
     assert!(!panel.microphone_restart_required());
+}
+
+#[test]
+fn connecting_to_running_service_does_not_claim_microphone_settings_are_active() {
+    let mut panel = panel();
+    let settings = id(panel.begin(NativeRequest::Settings).unwrap());
+    panel.receive(
+        settings,
+        Ok(NativeReply::Settings {
+            revision: 1,
+            document: NativeConfig::default().to_toml().unwrap(),
+        }),
+    );
+    let context = egui::Context::default();
+    let output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 720.0),
+            )),
+            ..Default::default()
+        },
+        |ui| panel.text_chat_entry(ui),
+    );
+    assert!(output.shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Text(text) if text.galley.job.text.contains("当前服务使用的麦克风设置无法确认")
+    )));
 }
 
 #[test]

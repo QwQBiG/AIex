@@ -34,6 +34,24 @@ fn ordinary_setup_persists_sentence_settings_without_losing_other_values() {
     assert!(saved.contains("other = \"kept\""));
 }
 
+#[test]
+fn setup_persists_speech_cleanup_without_losing_extensions() {
+    let files = Files::new();
+    let original = "[audio.cleanup]\nremove_emoji = false\nremove_markdown = true\nremove_parenthetical = false\ncustom = 'inside'\n[extensions]\nother = 'kept'\n";
+    let mut app = files.app(Some(original.to_owned()));
+    assert!(!app.speech_cleanup.remove_emoji);
+    assert!(app.speech_cleanup.remove_markdown);
+    assert!(!app.speech_cleanup.remove_parenthetical);
+    app.speech_cleanup.remove_markdown = false;
+    let saved = app.config_text(0).unwrap();
+    let config = AppConfig::parse(&saved).unwrap();
+    assert!(!config.audio.cleanup.remove_emoji);
+    assert!(!config.audio.cleanup.remove_markdown);
+    assert!(!config.audio.cleanup.remove_parenthetical);
+    assert!(saved.contains("custom = \"inside\""));
+    assert!(saved.contains("other = \"kept\""));
+}
+
 struct Files(PathBuf);
 
 impl Files {

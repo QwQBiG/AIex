@@ -7,6 +7,8 @@ mod validation;
 mod voice;
 
 #[cfg(test)]
+mod speech_cleanup_tests;
+#[cfg(test)]
 mod tests;
 
 pub use migration::{
@@ -34,6 +36,12 @@ pub struct NativeConfig {
     pub storage: NativeStorage,
     #[serde(default)]
     pub devices: NativeDevices,
+    /// Absent preserves the input device configured by the service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microphone_input: Option<NativeMicrophoneInput>,
+    /// Absent preserves speech cleanup from the service startup configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech_cleanup: Option<NativeSpeechCleanup>,
     pub dialogue: Option<ModelSelection>,
     pub transcription: Option<ModelSelection>,
     pub embedding: Option<ModelSelection>,
@@ -49,6 +57,32 @@ pub struct NativeConfig {
 pub struct NativeDevices {
     pub microphone_enabled: bool,
     pub playback_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NativeMicrophoneInput {
+    SystemDefault,
+    Named { name: String },
+}
+
+/// Native settings reject unknown fields because updates rewrite the document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NativeSpeechCleanup {
+    pub remove_emoji: bool,
+    pub remove_markdown: bool,
+    pub remove_parenthetical: bool,
+}
+
+impl Default for NativeSpeechCleanup {
+    fn default() -> Self {
+        Self {
+            remove_emoji: true,
+            remove_markdown: true,
+            remove_parenthetical: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +120,8 @@ impl Default for NativeConfig {
             revision: 1,
             storage: NativeStorage::default(),
             devices: NativeDevices::default(),
+            microphone_input: None,
+            speech_cleanup: None,
             dialogue: Some(ModelSelection::cpu(NativeBackend::Ollama, "qwen3-4b")),
             transcription: Some(ModelSelection::cpu(
                 NativeBackend::SherpaWhisper,

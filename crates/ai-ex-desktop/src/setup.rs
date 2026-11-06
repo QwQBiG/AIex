@@ -8,7 +8,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-use ai_ex_config::{AppConfig, ModelBackend};
+use ai_ex_config::{AppConfig, ModelBackend, SpeechCleanupConfig};
 use ai_ex_domain::AppError;
 use eframe::egui;
 
@@ -80,6 +80,7 @@ struct SetupApp {
     memory_enabled: bool,
     soft_split_enabled: bool,
     soft_split_min_chars: usize,
+    speech_cleanup: SpeechCleanupConfig,
     bilibili_enabled: bool,
     bilibili_room_id: String,
     bilibili_cookie_env: String,
@@ -142,6 +143,7 @@ impl SetupApp {
             memory_enabled: true,
             soft_split_enabled: false,
             soft_split_min_chars: ai_ex_domain::SOFT_SPLIT_DEFAULT_CHARS,
+            speech_cleanup: SpeechCleanupConfig::default(),
             bilibili_enabled: false,
             bilibili_room_id: String::new(),
             bilibili_cookie_env: "BILIBILI_COOKIE".to_owned(),
@@ -173,6 +175,7 @@ impl SetupApp {
             app.memory_enabled = config.memory.enabled;
             app.soft_split_enabled = config.conversation.soft_split_enabled;
             app.soft_split_min_chars = config.conversation.soft_split_min_chars;
+            app.speech_cleanup = config.audio.cleanup;
             app.bilibili_enabled = config.bilibili.enabled;
             app.bilibili_room_id = config.bilibili.room_id.to_string();
             app.bilibili_cookie_env = config.bilibili.cookie_env.unwrap_or_default();
@@ -338,6 +341,7 @@ impl SetupApp {
         config.memory.enabled = self.memory_enabled;
         config.conversation.soft_split_enabled = self.soft_split_enabled;
         config.conversation.soft_split_min_chars = self.soft_split_min_chars;
+        config.audio.cleanup = self.speech_cleanup.clone();
         config.desktop.auto_start_service = self.start_service;
         if self.original.is_some() && config.persona.name != self.persona_name.trim() {
             config.persona.revision = config

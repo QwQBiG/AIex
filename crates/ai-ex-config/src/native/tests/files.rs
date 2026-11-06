@@ -63,10 +63,17 @@ fn revision_save_is_atomic_preserves_original_backup_and_refuses_stale_edit() {
     store.create_new(&config).unwrap();
     let original = fs::read(store.path()).unwrap();
     config.devices.playback_enabled = true;
+    config.microphone_input = Some(NativeMicrophoneInput::Named {
+        name: "合成麦克风 (USB)".into(),
+    });
     let saved = store.update(1, &config).unwrap();
     assert_eq!(saved.config.revision, 2);
     assert_eq!(fs::read(saved.backup).unwrap(), original);
     assert_eq!(store.load().unwrap(), saved.config);
+    assert_eq!(
+        store.load().unwrap().microphone_input,
+        config.microphone_input
+    );
     assert!(store.update(1, &config).is_err());
     assert_eq!(store.load().unwrap().revision, 2);
     assert!(!fs::read_dir(&fixture.0).unwrap().any(|entry| {

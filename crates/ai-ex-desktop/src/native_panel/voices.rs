@@ -1,5 +1,7 @@
-use ai_ex_config::native::{NativeConfig, VoiceLanguage, VoicePreset, VoiceSource};
-use ai_ex_domain::{NativePackageState, NativeRequest};
+use ai_ex_config::native::{
+    NativeConfig, NativeMicrophoneInput, VoiceLanguage, VoicePreset, VoiceSource,
+};
+use ai_ex_domain::{AppError, NativePackageState, NativeRequest};
 use eframe::egui;
 
 use super::NativePanel;
@@ -97,6 +99,30 @@ impl VoiceEdit {
 }
 
 impl NativePanel {
+    pub(super) fn record_microphone_input_edit(&mut self, input: Option<NativeMicrophoneInput>) {
+        if let Some(config) = &self.config {
+            self.microphone_input_draft =
+                (input != config.microphone_input || self.saving_settings()).then_some(input);
+        }
+    }
+
+    pub(super) fn voice_settings_request(&self) -> Result<NativeRequest, AppError> {
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| AppError::unavailable("本地设置尚未准备"))?;
+        let mut next = config.clone();
+        next.devices = self.device_draft.unwrap_or(config.devices);
+        next.microphone_input = self
+            .microphone_input_draft
+            .clone()
+            .unwrap_or_else(|| config.microphone_input.clone());
+        Ok(NativeRequest::SaveSettings {
+            expected_revision: config.revision,
+            document: next.to_toml()?,
+        })
+    }
+
     pub(super) fn voice_edit_dirty(&self) -> bool {
         self.voice_edit.as_ref().is_some_and(VoiceEdit::dirty)
     }
@@ -174,39 +200,106 @@ impl NativePanel {
             return;
         };
         let mut devices = self.device_draft.unwrap_or(config.devices);
+        let mut input = self
+            .microphone_input_draft
+            .clone()
+            .unwrap_or_else(|| config.microphone_input.clone());
         theme::card().show(ui, |ui| {
             ui.strong("按你的习惯开启语音");
             ui.label("启用后，对话会使用相应设备。默认可以只用文字聊天。");
-            ui.weak("麦克风开关重新进入对话后生效；对话声音从下一句话起使用新设置。");
-            if ui
-                .checkbox(&mut devices.microphone_enabled, "启用麦克风，进行语音输入")
-                .changed()
-                | ui.checkbox(&mut devices.playback_enabled, "启用扬声器，朗读对话回复")
+            ui.weak("麦克风设置重启服务后生效；对话声音从下一句话起使用新设置。");
+            ui.weak("当前服务使用的麦克风设置无法确认；如有修改请重启服务。");
+            let locked = self.saving_settings();
+            if locked {
+                ui.weak("设置正在保存或结果未确认；请等待核对，必要时重启服务。草稿会保留。");
+            }
+            ui.add_enabled_ui(!locked, |ui| {
+                if ui
+                    .checkbox(&mut devices.microphone_enabled, "启用麦克风，进行语音输入")
                     .changed()
-            {
-                self.device_draft = Some(devices);
-            }
-            if self.device_draft.is_some() {
-                ui.weak("开关尚未保存。");
-            }
-            if ui
-                .add_enabled(
-                    self.device_draft.is_some() && !self.has_pending() && !self.uncertain,
-                    egui::Button::new("应用语音开关"),
-                )
-                .clicked()
-            {
-                let mut next = config.clone();
-                next.devices = devices;
-                match next.to_toml() {
-                    Ok(document) => requests.push(NativeRequest::SaveSettings {
-                        expected_revision: config.revision,
-                        document,
-                    }),
-                    Err(error) => self.status = error.to_string(),
+                    | ui.checkbox(&mut devices.playback_enabled, "启用扬声器，朗读对话回复")
+                        .changed()
+                {
+                    self.device_draft = Some(devices);
                 }
-            }
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("麦克风设备：");
+                    let before = input.clone();
+                    let label = match &input {
+                        None => "沿用服务配置".to_owned(),
+                        Some(NativeMicrophoneInput::SystemDefault) => "系统默认麦克风".to_owned(),
+                        Some(NativeMicrophoneInput::Named { name }) => name.clone(),
+                    };
+                    egui::ComboBox::from_id_salt("native_microphone_input")
+                        .selected_text(label)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut input, None, "沿用服务配置");
+                            ui.selectable_value(
+                                &mut input,
+                                Some(NativeMicrophoneInput::SystemDefault),
+                                "系统默认麦克风",
+                            );
+                            if let Some(choices) = &self.input_devices {
+                                for choice in choices {
+                                    ui.add_enabled_ui(!choice.ambiguous, |ui| {
+                                        ui.selectable_value(
+                                            &mut input,
+                                            Some(NativeMicrophoneInput::Named {
+                                                name: choice.name.clone(),
+                                            }),
+                                            if choice.ambiguous {
+                                                format!("{}（名称重复）", choice.name)
+                                            } else {
+                                                choice.name.clone()
+                                            },
+                                        );
+                                    });
+                                }
+                            }
+                        });
+                    if input != before {
+                        self.record_microphone_input_edit(input.clone());
+                    }
+                    if ui
+                        .add_enabled(
+                            !self
+                                .pending
+                                .values()
+                                .any(|request| matches!(request, NativeRequest::InputDevices)),
+                            egui::Button::new("刷新麦克风列表"),
+                        )
+                        .clicked()
+                    {
+                        self.input_devices = None;
+                        self.status = "正在读取麦克风列表。".into();
+                        requests.push(NativeRequest::InputDevices);
+                    }
+                });
+                if self.input_devices.is_none() {
+                    ui.weak("点击刷新后读取设备列表；名称重复的设备无法单独选择。");
+                } else if self.input_devices.as_ref().is_some_and(Vec::is_empty) {
+                    ui.weak("没有发现可命名麦克风；可使用系统默认或检查设备连接。");
+                }
+                if self.device_draft.is_some() || self.microphone_input_draft.is_some() {
+                    ui.weak("语音设置尚未保存。");
+                }
+                if ui
+                    .add_enabled(
+                        (self.device_draft.is_some() || self.microphone_input_draft.is_some())
+                            && !self.has_pending()
+                            && !self.uncertain,
+                        egui::Button::new("应用语音设置"),
+                    )
+                    .clicked()
+                {
+                    match self.voice_settings_request() {
+                        Ok(request) => requests.push(request),
+                        Err(error) => self.status = error.to_string(),
+                    }
+                }
+            });
         });
+        self.speech_cleanup_settings(ui, requests);
     }
 
     pub(super) fn voice_choices(&mut self, ui: &mut egui::Ui, requests: &mut Vec<NativeRequest>) {
@@ -489,7 +582,7 @@ impl NativePanel {
         });
         ui.label("准备好对话模型后，可以切到“聊天”开始交流；其他组件可随后继续准备。");
         if self.microphone_restart_required() {
-            ui.weak("麦克风开关重新进入对话后生效；自有本地服务会在进入聊天时重新打开。");
+            ui.weak("麦克风设置重启服务后生效；本应用管理的服务会在进入聊天时重新打开。");
         }
         if ui
             .add_enabled(

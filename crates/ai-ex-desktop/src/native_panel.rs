@@ -1,4 +1,5 @@
 mod models;
+mod speech_cleanup;
 #[cfg(test)]
 mod tests;
 mod voices;
@@ -6,9 +7,10 @@ mod voices;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use ai_ex_config::native::NativeConfig;
+use ai_ex_config::native::{NativeConfig, NativeMicrophoneInput, NativeSpeechCleanup};
 use ai_ex_domain::{
-    AppError, NativeOperation, NativePackage, NativeReply, NativeRequest, NativeState,
+    AppError, NativeInputDevice, NativeOperation, NativePackage, NativeReply, NativeRequest,
+    NativeState,
 };
 use eframe::egui;
 use uuid::Uuid;
@@ -39,6 +41,7 @@ pub struct NativePanel {
     pub(super) status: String,
     pub(super) uncertain: bool,
     unconfirmed: Option<NativeRequest>,
+    unconfirmed_since: Option<u64>,
     pub(super) download_confirmation: Option<String>,
     storage_space: Option<StorageSpaceCheck>,
     pub(super) remove_confirmation: Option<String>,
@@ -54,10 +57,14 @@ pub struct NativePanel {
     pub(super) preview_text: String,
     pub(super) step: usize,
     pub(super) device_draft: Option<ai_ex_config::native::NativeDevices>,
+    pub(super) microphone_input_draft: Option<Option<NativeMicrophoneInput>>,
+    pub(super) speech_cleanup_draft: Option<Option<NativeSpeechCleanup>>,
+    pub(super) input_devices: Option<Vec<NativeInputDevice>>,
     pub(super) preview_operation: Option<Uuid>,
     voice_imports: BTreeMap<Uuid, voices::VoiceImport>,
     completed_voice_import: Option<voices::VoiceImport>,
     applied_microphone: Option<bool>,
+    applied_microphone_input: Option<Option<NativeMicrophoneInput>>,
     microphone_restart_required: bool,
     pub(super) open_chat: bool,
 }
@@ -76,6 +83,7 @@ impl Default for NativePanel {
             status: String::new(),
             uncertain: false,
             unconfirmed: None,
+            unconfirmed_since: None,
             download_confirmation: None,
             storage_space: None,
             remove_confirmation: None,
@@ -91,10 +99,14 @@ impl Default for NativePanel {
             preview_text: "你好，很高兴认识你。今天过得怎么样？".into(),
             step: 0,
             device_draft: None,
+            microphone_input_draft: None,
+            speech_cleanup_draft: None,
+            input_devices: None,
             preview_operation: None,
             voice_imports: BTreeMap::new(),
             completed_voice_import: None,
             applied_microphone: None,
+            applied_microphone_input: None,
             microphone_restart_required: false,
             open_chat: false,
         }
@@ -209,12 +221,16 @@ impl NativePanel {
                     return;
                 }
                 if mutating(&request) {
-                    self.uncertain = matches!(
-                        error.kind,
-                        ai_ex_domain::ErrorKind::Connectivity | ai_ex_domain::ErrorKind::Protocol
-                    );
-                    if self.uncertain {
-                        self.unconfirmed = Some(request.clone());
+                    if !matches!(self.unconfirmed, Some(NativeRequest::SaveSettings { .. })) {
+                        self.uncertain = matches!(
+                            error.kind,
+                            ai_ex_domain::ErrorKind::Connectivity
+                                | ai_ex_domain::ErrorKind::Protocol
+                        );
+                        if self.uncertain {
+                            self.unconfirmed = Some(request.clone());
+                            self.unconfirmed_since = Some(self.next_request);
+                        }
                     }
                     self.refresh = true;
                 }
@@ -266,6 +282,33 @@ impl NativePanel {
                 }
             }
             NativeReply::Settings { revision, document } => {
+                if matches!(request, NativeRequest::Settings) {
+                    if self
+                        .pending
+                        .values()
+                        .any(|pending| matches!(pending, NativeRequest::SaveSettings { .. }))
+                    {
+                        return;
+                    }
+                    if let Some(NativeRequest::SaveSettings {
+                        expected_revision, ..
+                    }) = &self.unconfirmed
+                    {
+                        if self
+                            .unconfirmed_since
+                            .is_some_and(|barrier| request_id <= barrier)
+                        {
+                            self.refresh = true;
+                            return;
+                        }
+                        if revision <= *expected_revision {
+                            self.status =
+                                "保存结果仍未确认，请稍后刷新，或重启服务后核对；不会自动重发。"
+                                    .into();
+                            return;
+                        }
+                    }
+                }
                 self.clear_storage_space();
                 match NativeConfig::parse(&document) {
                     Ok(config) => {
@@ -296,8 +339,18 @@ impl NativePanel {
                         let baseline = *self
                             .applied_microphone
                             .get_or_insert(config.devices.microphone_enabled);
-                        self.microphone_restart_required =
-                            baseline != config.devices.microphone_enabled;
+                        let input_baseline = self
+                            .applied_microphone_input
+                            .get_or_insert_with(|| config.microphone_input.clone());
+                        self.microphone_restart_required = baseline
+                            != config.devices.microphone_enabled
+                            || *input_baseline != config.microphone_input;
+                        if self.microphone_input_draft.as_ref() == Some(&config.microphone_input) {
+                            self.microphone_input_draft = None;
+                        }
+                        if self.speech_cleanup_draft.as_ref() == Some(&config.speech_cleanup) {
+                            self.speech_cleanup_draft = None;
+                        }
                         if let (Some(previous), Some(mut draft)) = (&self.config, self.device_draft)
                         {
                             if draft.microphone_enabled == previous.devices.microphone_enabled {
@@ -340,7 +393,7 @@ impl NativePanel {
                         }
                         if mutating(&request) {
                             self.status = if self.microphone_restart_required {
-                                "设置已保存。麦克风开关重新进入对话后生效。".into()
+                                "设置已保存。麦克风设置重启服务后生效。".into()
                             } else {
                                 "设置已保存。".into()
                             };
@@ -400,6 +453,12 @@ impl NativePanel {
                     space.available_bytes = available_bytes;
                 }
             }
+            NativeReply::InputDevices(devices) => {
+                if matches!(request, NativeRequest::InputDevices) {
+                    self.input_devices = Some(devices);
+                    self.status = "设备列表已更新。".into();
+                }
+            }
         }
     }
 
@@ -435,6 +494,8 @@ impl NativePanel {
                 .as_ref()
                 .is_some_and(|state| state.preview_active)
             || self.device_draft.is_some()
+            || self.microphone_input_draft.is_some()
+            || self.speech_cleanup_draft.is_some()
             || self.voice_edit_dirty()
             || !self.reference_path.is_empty()
             || !self.reference_text.is_empty()
@@ -443,6 +504,7 @@ impl NativePanel {
     fn confirm_outcome(&mut self) {
         self.uncertain = false;
         self.unconfirmed = None;
+        self.unconfirmed_since = None;
         self.status = "状态已重新核对，可继续操作。".into();
     }
 
@@ -452,7 +514,17 @@ impl NativePanel {
         let initialized = self.state.is_some()
             || self.config.is_some()
             || !self.pending.is_empty()
-            || !self.operations.is_empty();
+            || !self.operations.is_empty()
+            || self.uncertain
+            || self.unconfirmed.is_some();
+        let pending_save = self.pending.values().find_map(|request| match request {
+            NativeRequest::SaveSettings { .. } => Some(request.clone()),
+            _ => None,
+        });
+        let unknown_save = self
+            .unconfirmed
+            .take()
+            .filter(|request| matches!(request, NativeRequest::SaveSettings { .. }));
         self.pending.clear();
         self.operations.clear();
         self.preview_operation = None;
@@ -461,10 +533,14 @@ impl NativePanel {
         self.state = None;
         self.config = None;
         self.packages.clear();
+        self.input_devices = None;
         self.refresh = true;
         self.last_poll = None;
         self.uncertain = initialized;
-        self.unconfirmed = initialized.then_some(NativeRequest::Settings);
+        self.unconfirmed = unknown_save
+            .or(pending_save)
+            .or_else(|| initialized.then_some(NativeRequest::Settings));
+        self.unconfirmed_since = self.unconfirmed.as_ref().map(|_| self.next_request);
         if initialized {
             self.status = "连接已断开。恢复后会重新核对设置和模型，操作不会重发。".into();
         }
@@ -473,11 +549,33 @@ impl NativePanel {
     pub fn runtime_restarted(&mut self) {
         self.disconnected();
         self.applied_microphone = None;
+        self.applied_microphone_input = None;
         self.microphone_restart_required = false;
     }
 
     pub fn microphone_restart_required(&self) -> bool {
         self.microphone_restart_required
+    }
+
+    fn saving_settings(&self) -> bool {
+        self.uncertain
+            || matches!(self.unconfirmed, Some(NativeRequest::SaveSettings { .. }))
+            || self
+                .pending
+                .values()
+                .any(|request| matches!(request, NativeRequest::SaveSettings { .. }))
+    }
+
+    fn confirm_old_service_stopped(&mut self) -> bool {
+        if !matches!(self.unconfirmed, Some(NativeRequest::SaveSettings { .. })) {
+            return false;
+        }
+        self.pending
+            .retain(|_, request| !matches!(request, NativeRequest::Settings));
+        self.unconfirmed = Some(NativeRequest::Settings);
+        self.unconfirmed_since = None;
+        self.status = "已确认原服务停止，正在重新核对设置。草稿不会自动保存。".into();
+        true
     }
 
     pub fn take_open_chat(&mut self) -> bool {
@@ -554,6 +652,7 @@ fn mutating(request: &NativeRequest) -> bool {
         NativeRequest::State
             | NativeRequest::Packages
             | NativeRequest::Settings
+            | NativeRequest::InputDevices
             | NativeRequest::StorageSpace { .. }
             | NativeRequest::Operation { .. }
     )

@@ -37,6 +37,9 @@ async fn execute_with<F, Fut>(
             ControlCommand::MemoryInspectionContext
                 | ControlCommand::InspectMemoryBackup { .. }
                 | ControlCommand::InspectLegacyMemoryBackup { .. }
+                | ControlCommand::PrepareLegacyCandidate { .. }
+                | ControlCommand::StartLegacyCandidate { .. }
+                | ControlCommand::LegacyCandidateStatus { .. }
         ) {
             send(command)
                 .await

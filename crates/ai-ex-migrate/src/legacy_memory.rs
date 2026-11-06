@@ -72,6 +72,30 @@ pub fn import_backup(
     convert_backup(&content, profile, utc_offset, embedding_space)
 }
 
+/// Convert exactly the supplied bounded source bytes, without reopening a path.
+pub fn import_backup_bytes(
+    bytes: &[u8],
+    profile: &str,
+    utc_offset: Option<i16>,
+    embedding_space: Option<&str>,
+) -> Result<Vec<u8>, AppError> {
+    let content = decode_backup_bytes(bytes)?;
+    let output = convert_backup(&content, profile, utc_offset, embedding_space)?;
+    if output.is_empty() {
+        return Err(AppError::configuration(
+            "empty backup cannot identify a profile",
+        ));
+    }
+    Ok(output)
+}
+
+/// Fingerprint the complete selected file; this does not authenticate its source.
+pub fn backup_digest(bytes: &[u8]) -> [u8; 32] {
+    let mut result = [0; 32];
+    result.copy_from_slice(digest(&SHA256, bytes).as_ref());
+    result
+}
+
 fn read_backup(path: &Path) -> Result<Vec<u8>, AppError> {
     let file =
         std::fs::File::open(path).map_err(|_| AppError::unavailable("cannot open backup"))?;
@@ -197,6 +221,11 @@ pub fn inspect_backup(path: &Path) -> Result<LegacyBackupInspection, AppError> {
 
 /// Inspect a bounded, already selected file without opening any additional path.
 pub fn inspect_backup_bytes(bytes: &[u8]) -> Result<LegacyBackupInspection, AppError> {
+    let content = decode_backup_bytes(bytes)?;
+    inspect_content(&content)
+}
+
+fn decode_backup_bytes(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
     if bytes.len() as u64 > MAX_BACKUP_BYTES {
         return Err(AppError::configuration(
             "compressed memory backup exceeds 32 MiB",
@@ -212,7 +241,7 @@ pub fn inspect_backup_bytes(bytes: &[u8]) -> Result<LegacyBackupInspection, AppE
     } else {
         bytes.to_vec()
     };
-    inspect_content(&content)
+    Ok(content)
 }
 
 fn inspect_content(content: &[u8]) -> Result<LegacyBackupInspection, AppError> {

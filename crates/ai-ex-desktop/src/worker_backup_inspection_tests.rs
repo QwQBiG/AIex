@@ -104,3 +104,42 @@ async fn legacy_inspection_reaches_sender() {
         }
     ));
 }
+
+#[tokio::test]
+async fn candidate_operations_reach_sender_only_when_generation_is_current() {
+    let (commands, input) = tokio::sync::mpsc::channel(2);
+    let (events, output) = std::sync::mpsc::channel();
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let guard = Arc::new(AtomicU64::new(0));
+    let operation_id = uuid::Uuid::new_v4();
+    commands
+        .send(WorkerCommand::BackupInspection {
+            request_id: 1,
+            command: ControlCommand::StartLegacyCandidate {
+                instance_id: uuid::Uuid::new_v4(),
+                profile_id: "synthetic".into(),
+                persona_epoch: 1,
+                preview_id: uuid::Uuid::new_v4(),
+                operation_id,
+                output_directory: ai_ex_control::SensitivePath::new("C:\\synthetic"),
+                utc_offset: Some(480),
+                embedding_space: None,
+            },
+            generation: 0,
+            guard: Arc::clone(&guard),
+        })
+        .await
+        .unwrap();
+    drop(commands);
+    execute_with(input, &events, move |command| {
+        sent.send(command).unwrap();
+        async { Ok(ControlPayload::Accepted) }
+    })
+    .await;
+    assert!(matches!(received.recv().await,
+        Some(ControlCommand::StartLegacyCandidate { operation_id: actual, .. }) if actual == operation_id));
+    assert!(matches!(
+        output.recv().unwrap(),
+        WorkerEvent::BackupInspection { result: Ok(_), .. }
+    ));
+}

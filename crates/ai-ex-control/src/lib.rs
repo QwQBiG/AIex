@@ -18,7 +18,8 @@ pub use ai_ex_domain::{
 pub use ai_ex_domain::{NativeReply, NativeRequest};
 pub use client::ControlClient;
 pub use protocol::{
-    ControlCommand, ControlPayload, ControlRequest, ControlResponse, LegacyMemoryBackupInspection,
-    MemoryBackupInspection, MemoryReply, SensitivePath,
+    ControlCommand, ControlPayload, ControlRequest, ControlResponse, LegacyCandidateState,
+    LegacyCandidateStatus, LegacyMemoryBackupInspection, MemoryBackupInspection, MemoryReply,
+    SensitivePath,
 };
 pub use server::{ControlBackend, ControlServer};

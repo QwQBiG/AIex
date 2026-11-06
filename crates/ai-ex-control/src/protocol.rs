@@ -37,6 +37,26 @@ pub enum ControlCommand {
         persona_epoch: u64,
         path: SensitivePath,
     },
+    PrepareLegacyCandidate {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        path: SensitivePath,
+    },
+    StartLegacyCandidate {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        preview_id: Uuid,
+        operation_id: Uuid,
+        output_directory: SensitivePath,
+        utc_offset: Option<i16>,
+        embedding_space: Option<String>,
+    },
+    LegacyCandidateStatus {
+        instance_id: Uuid,
+        operation_id: Uuid,
+    },
     SetSpeechSplit {
         instance_id: Uuid,
         expected_revision: u64,
@@ -91,6 +111,15 @@ pub enum ControlPayload {
         persona_epoch: u64,
         summary: LegacyMemoryBackupInspection,
     },
+    LegacyCandidatePreview {
+        instance_id: Uuid,
+        profile_id: String,
+        persona_epoch: u64,
+        preview_id: Uuid,
+        expires_in_seconds: u64,
+        summary: LegacyMemoryBackupInspection,
+    },
+    LegacyCandidateStatus(LegacyCandidateStatus),
     SpeechSplit {
         instance_id: Uuid,
         revision: u64,
@@ -156,6 +185,26 @@ pub struct LegacyMemoryBackupInspection {
     pub nonempty_embedding_records: usize,
     pub unclassified_embedding_records: usize,
     pub legacy_metadata_fields_present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyCandidateStatus {
+    pub instance_id: Uuid,
+    pub operation_id: Uuid,
+    pub profile_id: Option<String>,
+    pub output: Option<SensitivePath>,
+    pub state: LegacyCandidateState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LegacyCandidateState {
+    Running,
+    Written { temporary_retained: bool },
+    Rejected,
+    CapacityReached,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

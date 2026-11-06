@@ -491,11 +491,33 @@ impl Default for ObsConfig {
 #[serde(default)]
 pub struct AudioConfig {
     pub queue_capacity: usize,
+    pub cleanup: SpeechCleanupConfig,
 }
 
 impl Default for AudioConfig {
     fn default() -> Self {
-        Self { queue_capacity: 32 }
+        Self {
+            queue_capacity: 32,
+            cleanup: SpeechCleanupConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpeechCleanupConfig {
+    pub remove_emoji: bool,
+    pub remove_markdown: bool,
+    pub remove_parenthetical: bool,
+}
+
+impl Default for SpeechCleanupConfig {
+    fn default() -> Self {
+        Self {
+            remove_emoji: true,
+            remove_markdown: true,
+            remove_parenthetical: true,
+        }
     }
 }
 
@@ -944,6 +966,21 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn speech_cleanup_defaults_and_partial_config_are_compatible() {
+        let old = AppConfig::parse("[audio]\nqueue_capacity = 12\n").unwrap();
+        assert_eq!(old.audio.cleanup, SpeechCleanupConfig::default());
+        let configured = AppConfig::parse(
+            "[audio.cleanup]\nremove_emoji = false\nremove_parenthetical = false\n",
+        )
+        .unwrap();
+        assert!(!configured.audio.cleanup.remove_emoji);
+        assert!(configured.audio.cleanup.remove_markdown);
+        assert!(!configured.audio.cleanup.remove_parenthetical);
+        let roundtrip = AppConfig::parse(&configured.to_toml().unwrap()).unwrap();
+        assert_eq!(roundtrip.audio.cleanup, configured.audio.cleanup);
     }
 }
 

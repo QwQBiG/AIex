@@ -130,7 +130,7 @@ impl ServiceControl {
         })
     }
 
-    async fn inspect_backup_with_context<F, Fut, T>(
+    pub(super) async fn inspect_backup_with_context<F, Fut, T>(
         &self,
         instance_id: Uuid,
         profile_id: String,
@@ -170,6 +170,7 @@ impl ServiceControl {
             // No current model identity is sent to this independent worker.
             comparison_space: None,
             legacy,
+            candidate: None,
         })?;
         drop(persona);
         let summary = pending.await?;
@@ -181,7 +182,7 @@ impl ServiceControl {
         Ok((expected, summary))
     }
 
-    async fn inspection_context(&self) -> Result<(Uuid, String, u64), AppError> {
+    pub(super) async fn inspection_context(&self) -> Result<(Uuid, String, u64), AppError> {
         let persona = self.persona.read().await;
         let instance = self
             .events

@@ -130,13 +130,24 @@ pub fn spawn_duplex(
     automation: crate::template_host::TemplateHost,
     voice_input: crate::voice_input_activity::VoiceInputActivity,
 ) -> Result<Option<tokio::task::JoinHandle<()>>, AppError> {
-    if !native.config().is_ok_and(|c| c.devices.microphone_enabled) {
+    let Some(native_config) = native
+        .config()
+        .ok()
+        .filter(|c| c.devices.microphone_enabled)
+    else {
         return Ok(None);
-    }
+    };
     let settings = config.duplex.clone();
     Ok(Some(tokio::spawn(async move {
-        if let Err(error) =
-            run_native_capture(settings, native, runtime, automation, voice_input).await
+        if let Err(error) = run_native_capture(
+            settings,
+            native_config.microphone_input,
+            native,
+            runtime,
+            automation,
+            voice_input,
+        )
+        .await
         {
             // An unavailable recognizer or input device leaves the control and
             // conversation service alive so the user can correct its settings.
@@ -148,6 +159,7 @@ pub fn spawn_duplex(
 #[cfg(feature = "native-capture")]
 async fn run_native_capture(
     settings: ai_ex_config::DuplexConfig,
+    microphone_input: Option<ai_ex_config::native::NativeMicrophoneInput>,
     native: Arc<NativeRuntime>,
     runtime: crate::conversation_activity::ConversationActivity,
     automation: crate::template_host::TemplateHost,
@@ -166,13 +178,17 @@ async fn run_native_capture(
     let transcriber = NativeTranscriber::new(pool.clone(), selection.clone())?;
     pool.wait_ready(&selection, Duration::from_secs(120))
         .await?;
-    let source = NativeAudioSource::open(CaptureSettings {
-        device_name: match settings.input_device.trim() {
-            "" => None,
-            device => Some(device.to_owned()),
-        },
+    let (device_name, explicit) =
+        capture_selection(&settings.input_device, microphone_input.as_ref());
+    let capture = CaptureSettings {
+        device_name,
         queue_capacity: settings.capture_queue_capacity,
-    })?;
+    };
+    let source = if explicit {
+        NativeAudioSource::open_explicit(capture)?
+    } else {
+        NativeAudioSource::open(capture)?
+    };
     let vad = EnergyVad::new(VadConfig {
         start_threshold: settings.start_threshold,
         continue_threshold: settings.continue_threshold,
@@ -188,4 +204,48 @@ async fn run_native_capture(
         voice_input,
     )
     .await
+}
+
+#[cfg(any(feature = "native-capture", test))]
+fn capture_selection(
+    legacy: &str,
+    selection: Option<&ai_ex_config::native::NativeMicrophoneInput>,
+) -> (Option<String>, bool) {
+    use ai_ex_config::native::NativeMicrophoneInput;
+    match selection {
+        None => {
+            let name = legacy.trim();
+            ((!name.is_empty()).then(|| name.to_owned()), false)
+        }
+        Some(NativeMicrophoneInput::SystemDefault) => (None, true),
+        Some(NativeMicrophoneInput::Named { name }) => (Some(name.clone()), true),
+    }
+}
+
+#[cfg(test)]
+mod microphone_tests {
+    use super::*;
+    use ai_ex_config::native::NativeMicrophoneInput;
+
+    #[test]
+    fn explicit_device_selection_overrides_legacy_without_changing_legacy_policy() {
+        assert_eq!(
+            capture_selection(" Legacy ", None),
+            (Some("Legacy".into()), false)
+        );
+        assert_eq!(capture_selection("", None), (None, false));
+        assert_eq!(
+            capture_selection("Legacy", Some(&NativeMicrophoneInput::SystemDefault)),
+            (None, true)
+        );
+        assert_eq!(
+            capture_selection(
+                "Legacy",
+                Some(&NativeMicrophoneInput::Named {
+                    name: "合成麦克风".into()
+                })
+            ),
+            (Some("合成麦克风".into()), true)
+        );
+    }
 }

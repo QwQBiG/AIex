@@ -22,6 +22,7 @@ fn request() -> Request {
         profile: "a".into(),
         comparison_space: None,
         legacy: false,
+        candidate: None,
     }
 }
 

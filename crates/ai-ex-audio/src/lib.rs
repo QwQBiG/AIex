@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use ai_ex_core::SpeechPort;
 use ai_ex_domain::{AppError, ComponentHealth, Emotion, SpeechPlaybackSnapshot, TurnId};
 use ai_ex_stage::{StageAction, StageCapability, StageExecutor};
-use ai_ex_text::clean_for_speech;
+pub use ai_ex_text::SpeechCleanup;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -255,6 +255,7 @@ pub struct SpeechQueue {
     sender: mpsc::Sender<SpeechJob>,
     generation: Arc<AtomicU64>,
     activity: SpeechActivity,
+    cleanup: SpeechCleanup,
 }
 
 pub struct SpeechReceiver {
@@ -324,6 +325,13 @@ impl PreviewSpeech {
 
 impl SpeechQueue {
     pub fn new(capacity: usize) -> Result<(Self, SpeechReceiver), AppError> {
+        Self::new_with_cleanup(capacity, SpeechCleanup::default())
+    }
+
+    pub fn new_with_cleanup(
+        capacity: usize,
+        cleanup: SpeechCleanup,
+    ) -> Result<(Self, SpeechReceiver), AppError> {
         if capacity == 0 {
             return Err(AppError::configuration(
                 "audio queue capacity must be positive",
@@ -337,6 +345,7 @@ impl SpeechQueue {
                 sender,
                 generation: Arc::clone(&generation),
                 activity: activity.clone(),
+                cleanup,
             },
             SpeechReceiver {
                 receiver,
@@ -351,7 +360,7 @@ impl SpeechQueue {
     }
 
     pub fn preview_job(&self, text: String) -> Result<PreviewSpeech, AppError> {
-        let text = clean_for_speech(&text);
+        let text = self.cleanup.clean(&text);
         if text.trim().is_empty() || text.len() > 4096 {
             return Err(AppError::configuration("invalid speech preview text"));
         }
@@ -439,7 +448,7 @@ impl SpeechPort for SpeechQueue {
         sentence: String,
         emotion: Emotion,
     ) -> Result<(), AppError> {
-        let sentence = clean_for_speech(&sentence);
+        let sentence = self.cleanup.clean(&sentence);
         if sentence.is_empty() {
             return Err(AppError::configuration("speech sentence must not be empty"));
         }
@@ -510,6 +519,53 @@ impl StageExecutor for SpeechQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn configurable_cleanup_applies_to_preview_and_queued_speech() {
+        let sample = "你好😀 **朋友**（轻声）".to_owned();
+        for (cleanup, expected) in [
+            (SpeechCleanup::default(), "你好 朋友"),
+            (
+                SpeechCleanup {
+                    remove_emoji: false,
+                    remove_markdown: false,
+                    remove_parenthetical: false,
+                },
+                "你好😀 **朋友**（轻声）",
+            ),
+            (
+                SpeechCleanup {
+                    remove_parenthetical: false,
+                    ..SpeechCleanup::default()
+                },
+                "你好 朋友（轻声）",
+            ),
+            (
+                SpeechCleanup {
+                    remove_emoji: false,
+                    ..SpeechCleanup::default()
+                },
+                "你好😀 朋友",
+            ),
+            (
+                SpeechCleanup {
+                    remove_markdown: false,
+                    ..SpeechCleanup::default()
+                },
+                "你好 **朋友**",
+            ),
+        ] {
+            let (mut queue, mut receiver) = SpeechQueue::new_with_cleanup(1, cleanup).unwrap();
+            let preview = queue.preview_job(sample.clone()).unwrap();
+            assert_eq!(preview.job().text, expected);
+            drop(preview);
+            queue.enqueue(TurnId::new(), sample.clone()).await.unwrap();
+            let job = receiver.receive().await.unwrap();
+            assert_eq!(job.text, expected);
+            assert_eq!(job.playback_snapshot(0, 1000, 0).text, expected);
+        }
+        assert_eq!(sample, "你好😀 **朋友**（轻声）");
+    }
 
     #[tokio::test]
     async fn cancellation_wakes_pending_synthesis_without_cancelling_new_jobs() {

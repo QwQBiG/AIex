@@ -2,6 +2,7 @@
 
 mod control;
 mod dialogue;
+mod input_devices;
 mod lifecycle;
 mod operations;
 mod packages;
@@ -37,6 +38,8 @@ pub(crate) struct NativeRuntime {
     preview: Mutex<Option<preview::Resources>>,
     bootstrap: Mutex<Option<JoinHandle<()>>>,
     bootstrap_cancel: Arc<AtomicBool>,
+    #[cfg(feature = "native-capture")]
+    input_devices_busy: Arc<AtomicBool>,
     changed: Notify,
     closed: AtomicBool,
 }
@@ -111,6 +114,8 @@ impl NativeRuntime {
             preview: Mutex::new(None),
             bootstrap: Mutex::new(None),
             bootstrap_cancel: Arc::new(AtomicBool::new(false)),
+            #[cfg(feature = "native-capture")]
+            input_devices_busy: Arc::new(AtomicBool::new(false)),
             changed: Notify::new(),
             closed: AtomicBool::new(false),
         });

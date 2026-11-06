@@ -117,6 +117,77 @@ async fn backup_inspection_control_uses_instance_profile_and_redacted_response()
     ] {
         assert!(service.client.send(stale).await.is_err());
     }
+    let prepared = service
+        .client
+        .send(ControlCommand::PrepareLegacyCandidate {
+            instance_id,
+            profile_id: profile_id.clone(),
+            persona_epoch,
+            path: SensitivePath::new(legacy_path.to_string_lossy()),
+        })
+        .await
+        .unwrap();
+    let ControlPayload::LegacyCandidatePreview {
+        preview_id,
+        summary,
+        ..
+    } = prepared
+    else {
+        panic!("candidate preview expected")
+    };
+    assert_eq!(summary.records, 1);
+    let operation_id = Uuid::new_v4();
+    let start = |id| ControlCommand::StartLegacyCandidate {
+        instance_id,
+        profile_id: profile_id.clone(),
+        persona_epoch,
+        preview_id,
+        operation_id: id,
+        output_directory: SensitivePath::new(service.directory.to_string_lossy()),
+        utc_offset: Some(480),
+        embedding_space: Some("synthetic-space".into()),
+    };
+    assert!(matches!(
+        service.client.send(start(operation_id)).await.unwrap(),
+        ControlPayload::LegacyCandidateStatus(_)
+    ));
+    let status = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let payload = service
+                .client
+                .send(ControlCommand::LegacyCandidateStatus {
+                    instance_id,
+                    operation_id,
+                })
+                .await
+                .unwrap();
+            let ControlPayload::LegacyCandidateStatus(status) = payload else {
+                panic!("candidate status expected")
+            };
+            if status.state != ai_ex_control::LegacyCandidateState::Running {
+                break status;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        status.state,
+        ai_ex_control::LegacyCandidateState::Written { .. }
+    ));
+    assert_eq!(status.profile_id.as_deref(), Some(profile_id.as_str()));
+    let output = status.output.unwrap();
+    let candidate = fs::read(output.as_str()).unwrap();
+    assert!(serde_json::from_slice::<serde_json::Value>(&candidate).is_ok());
+    assert!(service.client.send(start(Uuid::new_v4())).await.is_err());
+    assert!(
+        matches!(service.client.send(start(operation_id)).await.unwrap(),
+        ControlPayload::LegacyCandidateStatus(status)
+            if matches!(status.state, ai_ex_control::LegacyCandidateState::Written { .. }))
+    );
+    assert_eq!(fs::read(output.as_str()).unwrap(), candidate);
+    fs::remove_file(output.as_str()).unwrap();
     assert_eq!(fs::read(&legacy_path).unwrap(), legacy_original);
     fs::remove_file(legacy_path).unwrap();
     assert_eq!(fs::read_to_string(&path).unwrap(), original);

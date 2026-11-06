@@ -4,4 +4,4 @@
 mod native;
 
 #[cfg(feature = "native-capture")]
-pub use native::{CaptureSettings, NativeAudioSource};
+pub use native::{CaptureSettings, InputDeviceChoice, NativeAudioSource, list_input_devices};

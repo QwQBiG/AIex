@@ -932,6 +932,7 @@ pub(crate) async fn run_commands(
     let (native_commands, native_rx) = tokio::sync::mpsc::channel(16);
     let (native_status, native_status_rx) = tokio::sync::mpsc::channel(16);
     let (native_urgent, native_urgent_rx) = tokio::sync::mpsc::channel(2);
+    let (native_devices, native_devices_rx) = tokio::sync::mpsc::channel(1);
     let (desktop_commands, desktop_rx) = tokio::sync::mpsc::channel(32);
     let (speech_commands, speech_rx) = tokio::sync::mpsc::channel(4);
     let (inspection_commands, inspection_rx) = tokio::sync::mpsc::channel(1);
@@ -999,7 +1000,12 @@ pub(crate) async fn run_commands(
                     if !native::route(
                         request_id,
                         request,
-                        [&native_commands, &native_status, &native_urgent],
+                        [
+                            &native_commands,
+                            &native_status,
+                            &native_urgent,
+                            &native_devices,
+                        ],
                         events,
                         &native_epoch,
                     ) {
@@ -1096,6 +1102,7 @@ pub(crate) async fn run_commands(
                 native::execute(client, native_rx, events, &native_epoch),
                 native::execute(client, native_status_rx, events, &native_epoch),
                 native::execute(client, native_urgent_rx, events, &native_epoch),
+                native::execute(client, native_devices_rx, events, &native_epoch),
             );
         } => {},
     }

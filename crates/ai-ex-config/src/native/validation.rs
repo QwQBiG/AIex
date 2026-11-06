@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use ai_ex_domain::AppError;
 
 use super::{
-    ModelSelection, NATIVE_SCHEMA_VERSION, NativeBackend, NativeConfig, VoicePreset, VoiceSource,
+    ModelSelection, NATIVE_SCHEMA_VERSION, NativeBackend, NativeConfig, NativeMicrophoneInput,
+    VoicePreset, VoiceSource,
 };
 
 impl NativeConfig {
@@ -15,6 +16,14 @@ impl NativeConfig {
             ));
         }
         self.storage.validate()?;
+        if let Some(NativeMicrophoneInput::Named { name }) = &self.microphone_input
+            && (name.trim().is_empty()
+                || name.chars().count() > 256
+                || name.len() > 1024
+                || name.chars().any(char::is_control))
+        {
+            return Err(AppError::configuration("invalid microphone device name"));
+        }
         for (selection, expected) in [
             (&self.dialogue, NativeBackend::Ollama),
             (&self.transcription, NativeBackend::SherpaWhisper),

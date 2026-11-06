@@ -35,6 +35,7 @@ impl DesktopApp {
             || self.character_files.is_loading()
             || self.appearance.is_loading()
             || self.memory.has_unsaved()
+            || self.backup_inspection.candidate_unresolved()
             || self.native.has_unsaved()
             || self.speech_split.has_unsaved()
     }
@@ -55,6 +56,11 @@ impl DesktopApp {
                 if self.memory.backup_unresolved() {
                     ui.label(
                         "有记忆备份尚未确认。关闭本应用的服务可能中断备份；请检查原保存目录。",
+                    );
+                }
+                if self.backup_inspection.candidate_unresolved() {
+                    ui.label(
+                        "候选文件操作尚未确认，退出可能丢失操作编号；请先查询并核对目标文件。",
                     );
                 }
                 if self.owned_service.is_some() {
@@ -101,6 +107,9 @@ impl DesktopApp {
                 ui.label("当前还有消息草稿、角色修改或正在处理的操作。退出后，部分草稿或操作状态可能无法恢复。");
                 if self.memory.backup_unresolved() {
                     ui.label("关闭应用会丢失本次备份编号；如果本应用管理服务，备份也可能中断。请检查原保存目录。");
+                }
+                if self.backup_inspection.candidate_unresolved() {
+                    ui.label("候选文件操作尚未确认，退出可能丢失操作编号；请先查询并核对目标文件。");
                 }
                 ui.horizontal(|ui| {
                     stay = ui.button("返回继续编辑").clicked();

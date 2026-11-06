@@ -23,7 +23,8 @@ mod playback;
 mod stage_telemetry;
 mod voice_input;
 pub use native_control::{
-    NATIVE_MAX_DOCUMENT_BYTES, NATIVE_MAX_ERROR_BYTES, NATIVE_MAX_PACKAGES, NativeLicense,
+    NATIVE_MAX_DOCUMENT_BYTES, NATIVE_MAX_ERROR_BYTES, NATIVE_MAX_INPUT_DEVICES,
+    NATIVE_MAX_INPUT_NAME_BYTES, NATIVE_MAX_PACKAGES, NativeInputDevice, NativeLicense,
     NativeOperation, NativeOperationPhase, NativePackage, NativePackageKind, NativePackageState,
     NativeReply, NativeRequest, NativeState,
 };

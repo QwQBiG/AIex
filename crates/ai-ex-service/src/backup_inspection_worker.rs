@@ -1,4 +1,5 @@
-//! One-shot private worker; input is received over stdin, never command arguments.
+//! One-shot private worker for inspection and explicit candidate generation.
+//! Input is received over stdin, never command arguments.
 //!
 //! The selected path may refer to a network location. Checks reject an observed
 //! final link, but do not prevent a non-cooperating process from changing a path
@@ -24,6 +25,17 @@ pub(super) struct Request {
     pub comparison_space: Option<String>,
     #[serde(default)]
     pub legacy: bool,
+    #[serde(default)]
+    pub candidate: Option<CandidateWrite>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CandidateWrite {
+    pub digest: [u8; 32],
+    pub output: String,
+    pub utc_offset: Option<i16>,
+    pub embedding_space: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -34,7 +46,13 @@ pub(super) enum Reply {
     },
     LegacyReady {
         summary: LegacyMemoryBackupInspection,
+        digest: [u8; 32],
     },
+    CandidateWritten {
+        temporary_retained: bool,
+    },
+    CandidateRejected,
+    CandidateUncertain,
     Invalid,
 }
 
@@ -85,11 +103,40 @@ fn inspect_with(request: Request, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -
     {
         return None;
     }
+    if request.candidate.is_some() && !request.legacy {
+        return None;
+    }
     let path = Path::new(&request.path);
     if !path.is_absolute() {
         return None;
     }
     let bytes = read(path)?;
+    if let Some(candidate) = request.candidate {
+        if ai_ex_migrate::legacy_memory::backup_digest(&bytes) != candidate.digest {
+            return Some(Reply::CandidateRejected);
+        }
+        let output_path = Path::new(&candidate.output);
+        if !output_path.is_absolute()
+            || candidate.output.chars().count() > 1024
+            || candidate.output.chars().any(char::is_control)
+        {
+            return Some(Reply::CandidateRejected);
+        }
+        let Ok(converted) = ai_ex_migrate::legacy_memory::import_backup_bytes(
+            &bytes,
+            &request.profile,
+            candidate.utc_offset,
+            candidate.embedding_space.as_deref(),
+        ) else {
+            return Some(Reply::CandidateRejected);
+        };
+        return Some(
+            match ai_ex_migrate::write_new_atomic_existing_dir(output_path, &converted) {
+                Ok(temporary_retained) => Reply::CandidateWritten { temporary_retained },
+                Err(_) => Reply::CandidateUncertain,
+            },
+        );
+    }
     if request.legacy {
         let summary = ai_ex_migrate::legacy_memory::inspect_backup_bytes(&bytes).ok()?;
         Some(Reply::LegacyReady {
@@ -101,6 +148,7 @@ fn inspect_with(request: Request, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -
                 unclassified_embedding_records: summary.unclassified_embedding_records,
                 legacy_metadata_fields_present: summary.legacy_metadata_fields_present,
             },
+            digest: ai_ex_migrate::legacy_memory::backup_digest(&bytes),
         })
     } else {
         let summary = inspect_profile_backup(

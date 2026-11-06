@@ -126,6 +126,7 @@ async fn speech_split_control_checks_instance_and_reports_actual_state() {
         backup_inspector: crate::backup_inspection_coordinator::BackupInspector::new(
             std::env::current_exe().unwrap(),
         ),
+        legacy_candidates: Arc::default(),
         stage: ai_ex_core::StageJournal::new(8),
         automation: host.clone(),
         native: None,
@@ -198,6 +199,7 @@ async fn backup_inspection_rejects_results_after_persona_changes_back() {
         backup_inspector: crate::backup_inspection_coordinator::BackupInspector::new(
             std::env::current_exe().unwrap(),
         ),
+        legacy_candidates: Arc::default(),
         stage: ai_ex_core::StageJournal::new(8),
         automation: host.clone(),
         native: None,
@@ -380,6 +382,7 @@ async fn superseded_preview_cannot_interrupt_a_newer_conversation() {
         backup_inspector: crate::backup_inspection_coordinator::BackupInspector::new(
             std::env::current_exe().unwrap(),
         ),
+        legacy_candidates: Arc::default(),
         stage: ai_ex_core::StageJournal::new(8),
         automation: host.clone(),
         native: Some(native.clone()),

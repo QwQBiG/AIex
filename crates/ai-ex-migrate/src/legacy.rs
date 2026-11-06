@@ -31,6 +31,8 @@ pub struct LegacyConfig {
     #[serde(default, deserialize_with = "default_if_null")]
     performance: LegacyPerformance,
     #[serde(default, deserialize_with = "default_if_null")]
+    ux: LegacyUx,
+    #[serde(default, deserialize_with = "default_if_null")]
     agent: LegacyAgent,
 }
 
@@ -66,6 +68,8 @@ struct NestedLegacyInput {
     #[serde(default, deserialize_with = "default_if_null")]
     performance: LegacyPerformance,
     #[serde(default, deserialize_with = "default_if_null")]
+    ux: LegacyUx,
+    #[serde(default, deserialize_with = "default_if_null")]
     agent: LegacyAgent,
 }
 
@@ -93,6 +97,14 @@ fn legacy_vts_port() -> u16 {
 #[serde(default)]
 struct LegacyPerformance {
     max_queue_size: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LegacyUx {
+    remove_emoji: Option<bool>,
+    remove_markdown: Option<bool>,
+    remove_parenthetical: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -142,6 +154,7 @@ pub fn unmapped_fields(value: &serde_json::Value) -> Vec<String> {
         "sovits_prompt_lang",
         "enable_memory_features",
         "performance",
+        "ux",
         "agent",
     ];
     fn collect(value: &serde_json::Value, prefix: &str, known: &[&str], out: &mut Vec<String>) {
@@ -196,6 +209,12 @@ pub fn unmapped_fields(value: &serde_json::Value) -> Vec<String> {
         &["max_queue_size"],
         &mut fields,
     );
+    collect(
+        &value["ux"],
+        "ux.",
+        &["remove_emoji", "remove_markdown", "remove_parenthetical"],
+        &mut fields,
+    );
     let agent = &value["agent"];
     collect(
         agent,
@@ -235,6 +254,7 @@ impl LegacyConfig {
             sovits_prompt_text: nested.sovits_prompt_text,
             sovits_prompt_lang: nested.sovits_prompt_lang,
             performance: nested.performance,
+            ux: nested.ux,
             agent: nested.agent,
             ..Self::default()
         })
@@ -336,6 +356,15 @@ impl LegacyConfig {
                 _ => warnings.push("legacy performance.max_queue_size was invalid".to_owned()),
             }
         }
+        if let Some(value) = self.ux.remove_emoji {
+            config.audio.cleanup.remove_emoji = value;
+        }
+        if let Some(value) = self.ux.remove_markdown {
+            config.audio.cleanup.remove_markdown = value;
+        }
+        if let Some(value) = self.ux.remove_parenthetical {
+            config.audio.cleanup.remove_parenthetical = value;
+        }
         assign_nonempty(&mut config.tts.base_url, self.sovits_url);
         assign_nonempty(&mut config.tts.text_lang, self.sovits_language);
         assign_nonempty(&mut config.tts.ref_audio_path, self.sovits_ref_audio_path);
@@ -400,6 +429,37 @@ fn assign_positive_usize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_speech_cleanup_migrates_in_flat_and_nested_configs() {
+        for text in [
+            r#"{"ux":{"remove_emoji":false,"remove_parenthetical":false,"other":7}}"#,
+            r#"{"ollama":{},"ux":{"remove_emoji":false,"remove_parenthetical":false,"other":7}}"#,
+        ] {
+            let source: serde_json::Value = serde_json::from_str(text).unwrap();
+            let mut legacy = if source.get("ollama").is_some() {
+                LegacyConfig::parse_nested(text.as_bytes()).unwrap()
+            } else {
+                serde_json::from_str(text).unwrap()
+            };
+            legacy.apply_nested_format(&source).unwrap();
+            let config = legacy.migrate().config;
+            assert!(!config.audio.cleanup.remove_emoji);
+            assert!(config.audio.cleanup.remove_markdown);
+            assert!(!config.audio.cleanup.remove_parenthetical);
+            assert_eq!(unmapped_fields(&source), ["ux.other"]);
+            let restored = AppConfig::parse(&config.to_toml().unwrap()).unwrap();
+            assert_eq!(restored.audio.cleanup, config.audio.cleanup);
+        }
+        let defaults: LegacyConfig = serde_json::from_str(r#"{"ux":null}"#).unwrap();
+        assert_eq!(
+            defaults.migrate().config.audio.cleanup,
+            ai_ex_config::SpeechCleanupConfig::default()
+        );
+        assert!(
+            serde_json::from_str::<LegacyConfig>(r#"{"ux":{"remove_emoji":"false"}}"#).is_err()
+        );
+    }
 
     #[test]
     fn flat_legacy_defaults_and_explicit_values_survive_migration() {
