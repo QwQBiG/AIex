@@ -162,7 +162,7 @@ impl BackupInspectionPanel {
                     instance_id,
                     profile_id: context.profile.clone(),
                     persona_epoch,
-                    path: SensitivePath::new(self.path.clone()),
+                    path: SensitivePath::new(selected_path(&self.path)),
                 };
                 self.feedback = Some("正在检查备份…");
                 self.next_request(command, |id| Pending::Inspection {
@@ -210,6 +210,8 @@ impl BackupInspectionPanel {
             .id_salt("inspect_memory_backup")
             .show(ui, |ui| {
                 ui.weak("手动输入服务所在电脑上的备份文件绝对路径，仅支持新版 JSONL。只有点击检查才会读取文件。");
+                #[cfg(windows)]
+                ui.weak("支持粘贴 Windows“复制为路径”的结果，包括外层双引号。");
                 ui.weak("如果输入 UNC 或其他网络路径，检查会访问相应网络位置。");
                 ui.weak("仅核对角色标签和统计记录，不会恢复或合并记忆，也无法证明文件来源或完整性。旧版压缩备份请使用迁移工具检查。");
                 ui.weak("等待中的检查会在发送前核对；已开始发送的检查可能继续。");
@@ -227,6 +229,19 @@ impl BackupInspectionPanel {
                 }
             });
         command
+    }
+}
+
+fn selected_path(path: &str) -> &str {
+    #[cfg(windows)]
+    {
+        path.strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .unwrap_or(path)
+    }
+    #[cfg(not(windows))]
+    {
+        path
     }
 }
 

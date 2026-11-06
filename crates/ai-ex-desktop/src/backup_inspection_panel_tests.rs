@@ -42,6 +42,52 @@ fn request_id(command: WorkerCommand) -> (u64, ControlCommand) {
 }
 
 #[test]
+fn inspection_accepts_windows_copy_path_without_mutating_the_draft() {
+    let (mut panel, id) = ready();
+    panel.path = "\"C:\\synthetic folder\\memory.jsonl\"".into();
+    panel.path_edited();
+    let generation = panel.path_generation;
+    let (query, _) = request_id(panel.start().unwrap());
+    let (_, command) = request_id(
+        panel
+            .receive(query, Ok(context(id, "synthetic", 1)))
+            .unwrap(),
+    );
+    let ControlCommand::InspectMemoryBackup { path, .. } = command else {
+        panic!("inspection command")
+    };
+    let expected = if cfg!(windows) {
+        "C:\\synthetic folder\\memory.jsonl"
+    } else {
+        "\"C:\\synthetic folder\\memory.jsonl\""
+    };
+    assert_eq!(path.as_str(), expected);
+    assert_eq!(panel.path, "\"C:\\synthetic folder\\memory.jsonl\"");
+    assert_eq!(panel.path_generation, generation);
+}
+
+#[test]
+fn selected_path_preserves_unquoted_mismatched_and_surrounding_whitespace() {
+    for value in [
+        "C:\\synthetic\\memory.jsonl",
+        "\"C:\\synthetic\\memory.jsonl",
+        "C:\\synthetic\\memory.jsonl\"",
+        " \"C:\\synthetic\\memory.jsonl\" ",
+    ] {
+        assert_eq!(selected_path(value), value);
+    }
+    let unc = "\"\\\\server\\share\\backup.jsonl\"";
+    assert_eq!(
+        selected_path(unc),
+        if cfg!(windows) {
+            "\\\\server\\share\\backup.jsonl"
+        } else {
+            unc
+        }
+    );
+}
+
+#[test]
 fn inspection_requires_user_start_and_matches_context_and_summary() {
     let (mut panel, id) = ready();
     assert!(panel.pending.is_none());

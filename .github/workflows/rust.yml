@@ -10,6 +10,8 @@ permissions:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_BUILD_JOBS: "2"
+  # Hosted runners have intermittently failed while multiplexing registry requests.
+  CARGO_HTTP_MULTIPLEXING: "false"
 
 jobs:
   core:
