@@ -39,6 +39,21 @@ impl DesktopApp {
                     .stroke(egui::Stroke::new(1.0, super::theme::BORDER)),
             )
             .show(ui, |ui| self.show_header(ui));
+        if self.page != Page::Memory {
+            self.backup_inspection.cancel_drop();
+        } else {
+            self.synchronize_desktop_controls();
+            if self.backup_inspection.waiting_for_drop() {
+                egui::Panel::top("memory_drop_banner")
+                    .frame(
+                        egui::Frame::new()
+                            .fill(super::theme::ACCENT_SOFT)
+                            .inner_margin(12),
+                    )
+                    .show(ui, |ui| self.backup_inspection.show_drop_banner(ui));
+                self.backup_inspection.receive_drop(ui);
+            }
+        }
         if self.page != Page::Native {
             self.native.cancel_drop();
             self.native.close_download_confirmation();

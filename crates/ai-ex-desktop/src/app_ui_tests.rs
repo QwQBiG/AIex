@@ -342,6 +342,38 @@ fn navigation_keeps_drafts_and_requires_confirmation_before_leaving_the_window()
 }
 
 #[test]
+fn backup_drop_waiting_is_cleared_when_leaving_memory_page() {
+    let (mut app, _events, _sent) = app();
+    app.page = layout::Page::Memory;
+    app.state.runtime.instance_id = Some(uuid::Uuid::new_v4());
+    let context = egui::Context::default();
+    app.synchronize_desktop_controls();
+    app.backup_inspection.arm_drop();
+    assert!(app.backup_inspection.waiting_for_drop());
+    app.page = layout::Page::Conversation;
+    let mut remaining = 0;
+    let _ = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 720.0),
+            )),
+            dropped_files: vec![egui::DroppedFile {
+                path: Some("C:\\synthetic\\backup.jsonl".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        |ui| {
+            app.show_contents(ui);
+            remaining = ui.input(|input| input.raw.dropped_files.len());
+        },
+    );
+    assert!(!app.backup_inspection.waiting_for_drop());
+    assert_eq!(remaining, 1);
+}
+
+#[test]
 fn voice_input_indicator_uses_confirmed_fresh_activity_without_changing_dialogue() {
     let (mut app, events, _sent) = app();
     let instance = uuid::Uuid::new_v4();

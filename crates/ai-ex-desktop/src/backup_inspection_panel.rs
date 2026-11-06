@@ -40,6 +40,8 @@ pub struct BackupInspectionPanel {
     ready: bool,
     path: String,
     path_generation: u64,
+    waiting_for_drop: bool,
+    drop_message: Option<&'static str>,
     guard: Arc<AtomicU64>,
     next_id: u64,
     pending: Option<Pending>,
@@ -59,6 +61,8 @@ impl BackupInspectionPanel {
         let persona_changed = self.persona_revision != persona_revision;
         let ready = ready && instance.is_some();
         if identity_changed || persona_changed || (self.ready && !ready) {
+            self.cancel_drop();
+            self.drop_message = None;
             self.revoke_queued();
             self.pending = None;
             self.result = None;
@@ -74,11 +78,69 @@ impl BackupInspectionPanel {
     }
 
     fn path_edited(&mut self) {
+        self.cancel_drop();
+        self.drop_message = None;
         self.revoke_queued();
         self.pending = None;
         self.result = None;
         self.feedback = None;
         self.path_generation = self.path_generation.saturating_add(1);
+    }
+
+    pub fn cancel_drop(&mut self) {
+        self.waiting_for_drop = false;
+    }
+
+    pub fn arm_drop(&mut self) {
+        if self.ready {
+            self.revoke_queued();
+            self.pending = None;
+            self.result = None;
+            self.feedback = None;
+            self.waiting_for_drop = true;
+            self.drop_message = None;
+        }
+    }
+
+    pub fn waiting_for_drop(&self) -> bool {
+        self.waiting_for_drop
+    }
+
+    pub fn show_drop_banner(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.strong("等待拖入记忆备份");
+            ui.label("拖入一个文件，仅填写路径；检查需另外点击。");
+            if ui.button("取消拖入").clicked() {
+                self.cancel_drop();
+            }
+        });
+    }
+
+    pub fn receive_drop(&mut self, ui: &mut egui::Ui) {
+        if !self.ready || !self.waiting_for_drop {
+            return;
+        }
+        let files = ui.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
+        if files.is_empty() {
+            return;
+        }
+        self.cancel_drop();
+        let path = (files.len() == 1)
+            .then(|| files[0].path.as_ref())
+            .flatten()
+            .and_then(|path| path.to_str())
+            .filter(|path| {
+                !path.is_empty()
+                    && path.chars().count() <= 1024
+                    && !path.chars().any(char::is_control)
+            });
+        if let Some(path) = path {
+            self.path = path.to_owned();
+            self.path_edited();
+            self.drop_message = Some("已填入路径，请核对后点击“检查备份”。");
+        } else {
+            self.drop_message = Some("请拖入一个带可用路径的文件，或手动填写路径。");
+        }
     }
 
     fn revoke_queued(&self) {
@@ -108,6 +170,7 @@ impl BackupInspectionPanel {
     fn start(&mut self) -> Option<WorkerCommand> {
         if !self.ready
             || self.pending.is_some()
+            || self.waiting_for_drop
             || self.path.trim().is_empty()
             || self.path_generation == u64::MAX
             || self.guard.load(Ordering::Acquire) == u64::MAX
@@ -218,9 +281,8 @@ impl BackupInspectionPanel {
                 if ui.add(egui::TextEdit::singleline(&mut self.path).hint_text("备份文件绝对路径").desired_width(360.0).char_limit(1024)).changed() {
                     self.path_edited();
                 }
-                if ui.add_enabled(self.ready && self.pending.is_none() && !self.path.trim().is_empty(), egui::Button::new("检查备份")).clicked() {
-                    command = self.start();
-                }
+                command = self.show_actions(ui);
+                if let Some(message) = self.drop_message { ui.weak(message); }
                 if let Some(feedback) = self.feedback { ui.label(feedback); }
                 if let Some(result) = &self.result {
                     ui.label(format!("记忆记录：{} · 实体候选：{}", result.memory_records, result.entity_candidates));
@@ -229,6 +291,31 @@ impl BackupInspectionPanel {
                 }
             });
         command
+    }
+
+    fn show_actions(&mut self, ui: &mut egui::Ui) -> Option<WorkerCommand> {
+        if ui
+            .add_enabled(
+                self.ready && !self.waiting_for_drop,
+                egui::Button::new("准备拖入备份"),
+            )
+            .clicked()
+        {
+            self.arm_drop();
+        }
+        if ui
+            .add_enabled(
+                self.ready
+                    && !self.waiting_for_drop
+                    && self.pending.is_none()
+                    && !self.path.trim().is_empty(),
+                egui::Button::new("检查备份"),
+            )
+            .clicked()
+        {
+            return self.start();
+        }
+        None
     }
 }
 

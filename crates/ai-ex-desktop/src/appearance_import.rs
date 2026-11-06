@@ -6,6 +6,10 @@ use eframe::egui;
 
 use crate::image_appearance::{DecodedAppearance, ImageAppearance};
 
+#[cfg(test)]
+#[path = "appearance_import_tests.rs"]
+mod tests;
+
 #[derive(Default)]
 pub struct AppearanceImport {
     pub current: Option<ImageAppearance>,
@@ -14,6 +18,7 @@ pub struct AppearanceImport {
     source: String,
     restore: bool,
     activate: bool,
+    drop_notice: bool,
     pending: Option<Receiver<Result<DecodedAppearance, AppError>>>,
 }
 
@@ -67,6 +72,7 @@ impl AppearanceImport {
                 self.pending = Some(receiver);
                 self.activate = true;
                 self.error = None;
+                self.drop_notice = false;
             }
             Err(error) => self.error = Some(format!("无法开始导入：{error}")),
         }
@@ -107,8 +113,12 @@ impl AppearanceImport {
     pub fn controls(&mut self, ui: &mut egui::Ui) {
         let dropped = ui.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
         if let Some(path) = dropped.into_iter().find_map(|file| file.path) {
-            self.input = path.to_string_lossy().into_owned();
-            self.begin(ui.ctx(), path);
+            if self.is_loading() {
+                self.drop_notice = true;
+            } else {
+                self.input = path.to_string_lossy().into_owned();
+                self.begin(ui.ctx(), path);
+            }
         }
         ui.collapsing("导入图片外形包", |ui| {
             ui.weak("拖入外形文件夹或 appearance.toml，也可在下方填写路径。");
@@ -130,6 +140,13 @@ impl AppearanceImport {
         });
         if self.pending.is_some() {
             ui.label("正在读取外形……");
+        }
+        if self.drop_notice {
+            ui.label(if self.is_loading() {
+                "正在读取外形，请完成后重新拖入其他文件。"
+            } else {
+                "上次拖入的文件未导入，请重新拖入。"
+            });
         }
         if let Some(pack) = &self.current {
             ui.weak(format!(

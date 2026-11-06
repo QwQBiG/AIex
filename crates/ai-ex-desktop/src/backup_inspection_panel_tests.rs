@@ -41,6 +41,150 @@ fn request_id(command: WorkerCommand) -> (u64, ControlCommand) {
     (request_id, command)
 }
 
+fn drop_files(panel: &mut BackupInspectionPanel, paths: Vec<Option<&str>>) -> usize {
+    let context = egui::Context::default();
+    let mut remaining = usize::MAX;
+    let _ = context.run_ui(
+        egui::RawInput {
+            dropped_files: paths
+                .into_iter()
+                .map(|path| egui::DroppedFile {
+                    path: path.map(std::path::PathBuf::from),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        },
+        |ui| {
+            panel.receive_drop(ui);
+            remaining = ui.input(|input| input.raw.dropped_files.len());
+        },
+    );
+    remaining
+}
+
+#[test]
+fn explicit_backup_drop_only_fills_path_and_invalidates_older_request() {
+    let (mut panel, id) = ready();
+    let before = panel.path.clone();
+    assert_eq!(
+        drop_files(&mut panel, vec![Some("C:\\synthetic\\other.jsonl")]),
+        1
+    );
+    assert_eq!(panel.path, before);
+    let (old_query, _) = request_id(panel.start().unwrap());
+    let generation = panel.path_generation;
+    panel.arm_drop();
+    assert!(
+        panel
+            .receive(old_query, Ok(context(id, "synthetic", 1)))
+            .is_none()
+    );
+    assert_eq!(
+        drop_files(&mut panel, vec![Some("C:\\synthetic\\memory.jsonl")]),
+        0
+    );
+    assert!(!panel.waiting_for_drop);
+    assert!(panel.pending.is_none());
+    assert!(panel.path_generation > generation);
+    assert!(panel.result.is_none());
+    assert!(panel.drop_message.unwrap().contains("点击“检查备份”"));
+}
+
+#[test]
+fn backup_drop_invalid_or_cancelled_preserves_path_and_disconnect_disarms() {
+    let (mut panel, id) = ready();
+    let before = panel.path.clone();
+    for files in [
+        vec![None],
+        vec![Some("C:\\synthetic\\one"), Some("C:\\synthetic\\two")],
+    ] {
+        panel.waiting_for_drop = true;
+        assert_eq!(drop_files(&mut panel, files), 0);
+        assert!(!panel.waiting_for_drop);
+        assert_eq!(panel.path, before);
+        assert!(panel.drop_message.is_some());
+    }
+    panel.waiting_for_drop = true;
+    panel.cancel_drop();
+    assert_eq!(
+        drop_files(&mut panel, vec![Some("C:\\synthetic\\other")]),
+        1
+    );
+    panel.waiting_for_drop = true;
+    panel.synchronize(Some(id), "synthetic", 1, false);
+    assert!(!panel.waiting_for_drop);
+    assert_eq!(panel.path, before);
+}
+
+#[test]
+fn backup_drop_waiting_disables_check_button_for_previous_path() {
+    let (mut panel, _) = ready();
+    let context = egui::Context::default();
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        context.style_mut_of(theme, |style| style.animation_time = 0.0);
+    }
+    let draw = |panel: &mut BackupInspectionPanel, events| {
+        let mut command = None;
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 720.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| command = panel.show_actions(ui),
+        );
+        (output, command)
+    };
+    let position = |output: &egui::FullOutput, label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                panic!("missing {label}: {labels:?}")
+            })
+    };
+    draw(&mut panel, vec![]);
+    panel.arm_drop();
+    assert!(panel.start().is_none());
+    let (output, _) = draw(&mut panel, vec![]);
+    let button = position(&output, "检查备份");
+    for pressed in [true, false] {
+        let (_, command) = draw(
+            &mut panel,
+            vec![
+                egui::Event::PointerMoved(button),
+                egui::Event::PointerButton {
+                    pos: button,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!(command.is_none());
+    }
+    assert!(panel.pending.is_none());
+    assert!(panel.waiting_for_drop());
+}
+
 #[test]
 fn inspection_accepts_windows_copy_path_without_mutating_the_draft() {
     let (mut panel, id) = ready();
